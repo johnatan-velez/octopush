@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { ipc } from "../lib/ipc";
 import type { ToolExecution } from "../stores/chatStore";
 
@@ -6,13 +6,6 @@ interface Props {
   tool: ToolExecution;
   workspacePath?: string;
 }
-
-const TOOL_ICONS: Record<string, string> = {
-  run_command: ">_",
-  read_file: "[]",
-  write_file: "[+]",
-  list_files: "dir",
-};
 
 const TOOL_LABELS: Record<string, string> = {
   run_command: "Ran command",
@@ -28,174 +21,179 @@ const TOOL_COLORS: Record<string, string> = {
   list_files: "#a1a1aa",
 };
 
-/**
- * Tool call card using INLINE STYLES exclusively.
- * Tailwind classes were being affected by ReactMarkdown's CSS output
- * in sibling elements, causing cards to become invisible.
- */
+const TOOL_ICONS: Record<string, string> = {
+  run_command: "▸_",
+  read_file: "◫",
+  write_file: "◫+",
+  list_files: "⊟",
+};
+
+// All styles defined as constants to prevent any Tailwind/cascade interference.
+const cardStyle: CSSProperties = {
+  display: "block",
+  width: "100%",
+  maxWidth: "85%",
+  margin: "4px auto",
+  borderRadius: 8,
+  border: "1px solid rgba(255,255,255,0.1)",
+  background: "rgba(24,24,27,0.4)",
+  fontSize: 13,
+  fontFamily: "system-ui, -apple-system, sans-serif",
+  color: "#d4d4d8",
+  lineHeight: "1.4",
+  boxSizing: "border-box" as const,
+};
+
+const headerStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  width: "100%",
+  padding: "10px 14px",
+  gap: 10,
+  cursor: "pointer",
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  fontSize: "inherit",
+  fontFamily: "inherit",
+  lineHeight: "inherit",
+  textAlign: "left" as const,
+  boxSizing: "border-box" as const,
+};
+
 export function ToolCallCard({ tool, workspacePath }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const label = TOOL_LABELS[tool.toolName] ?? tool.toolName;
-  const icon = TOOL_ICONS[tool.toolName] ?? "?";
   const color = TOOL_COLORS[tool.toolName] ?? "#a1a1aa";
+  const icon = TOOL_ICONS[tool.toolName] ?? "•";
   const summary = buildSummary(tool);
   const filePath = getFilePath(tool);
   const isWebFile = filePath ? /\.(html?|htm)$/i.test(filePath) : false;
 
-  function handleCopy() {
-    navigator.clipboard.writeText(tool.result);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
-  function handleOpen() {
-    if (filePath && workspacePath) {
-      ipc.openFileInSystem(`${workspacePath}/${filePath}`);
-    }
-  }
-
   return (
-    <div
-      style={{
-        width: "100%",
-        maxWidth: "85%",
-        margin: "0 auto",
-        borderRadius: 8,
-        border: "1px solid rgba(255,255,255,0.08)",
-        background: expanded ? "rgba(24,24,27,0.6)" : "rgba(24,24,27,0.3)",
-        overflow: "hidden",
-      }}
-    >
-      {/* Header */}
+    <div style={cardStyle}>
       <div style={{ display: "flex", alignItems: "center" }}>
-        <button
+        <div
+          role="button"
+          tabIndex={0}
           onClick={() => setExpanded((v) => !v)}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "10px 14px",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            textAlign: "left",
-          }}
+          onKeyDown={(e) => e.key === "Enter" && setExpanded((v) => !v)}
+          style={headerStyle}
         >
-          <span
-            style={{
-              fontSize: 10,
-              color: "#71717a",
-              transition: "transform 150ms",
-              transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
-              flexShrink: 0,
-            }}
-          >
+          <span style={{
+            fontSize: 11,
+            color: "#52525b",
+            transform: expanded ? "rotate(90deg)" : "none",
+            transition: "transform 150ms",
+            flexShrink: 0,
+          }}>
             ▸
           </span>
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 20,
-              height: 20,
-              borderRadius: 4,
-              background: `${color}15`,
-              color: color,
-              fontSize: 10,
-              fontWeight: 600,
-              flexShrink: 0,
-              fontFamily: "monospace",
-            }}
-          >
+          <span style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 22,
+            height: 22,
+            borderRadius: 4,
+            background: `${color}20`,
+            color: color,
+            fontSize: 11,
+            fontFamily: "monospace",
+            fontWeight: 600,
+            flexShrink: 0,
+          }}>
             {icon}
           </span>
-          <span style={{ fontSize: 11, color: "#a1a1aa", flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: "#71717a", flexShrink: 0 }}>
             {label}
           </span>
-          <span
-            style={{
-              fontSize: 12,
-              fontFamily: "monospace",
-              color: color,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              minWidth: 0,
-            }}
-          >
+          <span style={{
+            fontSize: 12,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            color: color,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            minWidth: 0,
+            flex: 1,
+          }}>
             {summary}
           </span>
-        </button>
+        </div>
 
-        {/* Action buttons for write_file */}
-        {filePath && tool.toolName === "write_file" && (
-          <div style={{ display: "flex", gap: 4, paddingRight: 12, flexShrink: 0 }}>
-            {isWebFile && (
-              <button
-                onClick={handleOpen}
-                style={{
-                  fontSize: 10,
-                  fontWeight: 500,
-                  color: "#a78bfa",
-                  background: "rgba(167,139,250,0.1)",
-                  border: "none",
-                  borderRadius: 4,
-                  padding: "4px 8px",
-                  cursor: "pointer",
-                }}
-              >
-                Open
-              </button>
-            )}
+        {/* Open button for HTML files */}
+        {filePath && tool.toolName === "write_file" && isWebFile && (
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              if (workspacePath) ipc.openFileInSystem(`${workspacePath}/${filePath}`);
+            }}
+            onKeyDown={() => {}}
+            style={{
+              fontSize: 11,
+              fontWeight: 500,
+              color: "#a78bfa",
+              background: "rgba(167,139,250,0.15)",
+              border: "none",
+              borderRadius: 4,
+              padding: "4px 10px",
+              cursor: "pointer",
+              marginRight: 12,
+              flexShrink: 0,
+              fontFamily: "system-ui, sans-serif",
+            }}
+          >
+            Open
           </div>
         )}
       </div>
 
       {/* Expanded content */}
       {expanded && (
-        <div
-          style={{
-            borderTop: "1px solid rgba(255,255,255,0.06)",
-            padding: "8px 14px 12px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
-            <button
-              onClick={handleCopy}
+        <div style={{
+          borderTop: "1px solid rgba(255,255,255,0.06)",
+          padding: "8px 14px 12px",
+        }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                navigator.clipboard.writeText(tool.result);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }}
+              onKeyDown={() => {}}
               style={{
                 fontSize: 10,
-                color: "#71717a",
-                background: "none",
-                border: "none",
+                color: copied ? "#34d399" : "#52525b",
                 cursor: "pointer",
                 padding: "2px 6px",
-                borderRadius: 4,
+                fontFamily: "system-ui, sans-serif",
               }}
             >
-              {copied ? "Copied" : "Copy"}
-            </button>
+              {copied ? "✓ Copied" : "Copy"}
+            </span>
           </div>
-          <pre
-            style={{
-              maxHeight: 256,
-              overflow: "auto",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              borderRadius: 6,
-              background: "rgba(9,9,11,0.8)",
-              padding: "8px 12px",
-              fontFamily: "monospace",
-              fontSize: 11,
-              lineHeight: 1.6,
-              color: "#a1a1aa",
-              margin: 0,
-            }}
-          >
+          <pre style={{
+            maxHeight: 256,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            borderRadius: 6,
+            background: "rgba(0,0,0,0.4)",
+            padding: "8px 12px",
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            fontSize: 11,
+            lineHeight: 1.6,
+            color: "#a1a1aa",
+            margin: 0,
+            boxSizing: "border-box" as const,
+          }}>
             {tool.result}
           </pre>
         </div>
@@ -210,11 +208,9 @@ function buildSummary(tool: ToolExecution): string {
       const cmd = String(tool.toolInput?.command ?? "");
       return `$ ${cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd}`;
     }
+    case "write_file":
     case "read_file":
-    case "write_file": {
-      const path = String(tool.toolInput?.path ?? "");
-      return path;
-    }
+      return String(tool.toolInput?.path ?? "");
     case "list_files":
       return String(tool.toolInput?.path ?? ".");
     default:
