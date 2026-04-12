@@ -382,7 +382,15 @@ impl ChatEngine {
                 }
             }
 
-            // Emit text as a stream delta (all at once since we're not streaming).
+            tracing::info!(
+                iteration = iteration,
+                stop_reason = stop_reason,
+                text_len = text_parts.len(),
+                tool_count = tool_uses.len(),
+                "agentic loop iteration"
+            );
+
+            // Emit text as a stream delta.
             if !text_parts.is_empty() {
                 let _ = app.emit("chat://stream", &ChatStreamEvent {
                     workspace_id: request.workspace_id.clone(),
@@ -395,7 +403,10 @@ impl ChatEngine {
 
             // If no tool use, we're done — this was the final response.
             if stop_reason != "tool_use" || tool_uses.is_empty() {
-                // Emit done.
+                let final_text = text_parts.trim().to_string();
+
+                // Emit done — include the final text so the frontend can
+                // decide whether to show a message bubble.
                 let _ = app.emit("chat://stream", &ChatStreamEvent {
                     workspace_id: request.workspace_id.clone(),
                     delta: String::new(),
@@ -404,13 +415,11 @@ impl ChatEngine {
                     output_tokens: Some(total_output),
                 });
 
-                // Persist assistant message only if there's actual text content.
-                // Empty messages (all output was via tools) shouldn't show as
-                // blank bubbles in the conversation.
-                if !text_parts.trim().is_empty() {
+                // Only persist if there's actual text.
+                if !final_text.is_empty() {
                     let cost = token_engine::compute_cost(&request.model, total_input, total_output, 0, 0);
                     self.db.lock().insert_chat_message(
-                        &request.workspace_id, "assistant", &text_parts,
+                        &request.workspace_id, "assistant", &final_text,
                         Some(&request.model), Some(total_input as i64),
                         Some(total_output as i64), Some(cost),
                     )?;

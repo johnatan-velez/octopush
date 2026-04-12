@@ -51,22 +51,28 @@ export const useChatStore = create<ChatState>((set, get) => {
   listen<ChatStreamEvent>("chat://stream", (ev) => {
     const payload = ev.payload;
     if (payload.done) {
+      const buffer = get().streamBuffer;
+      // Only create an assistant message if there's actual text content.
+      // When Claude's response was entirely tool_use blocks, the buffer
+      // is empty and the tool cards already tell the story.
+      const newMessages = buffer.trim()
+        ? [
+            {
+              id: Date.now(),
+              workspaceId: payload.workspaceId,
+              role: "assistant" as const,
+              content: buffer,
+              model: get().model,
+              inputTokens: payload.inputTokens,
+              outputTokens: payload.outputTokens,
+              costUsd: null,
+              createdAt: new Date().toISOString(),
+            },
+          ]
+        : [];
       set((s) => ({
         streaming: false,
-        messages: [
-          ...s.messages,
-          {
-            id: Date.now(),
-            workspaceId: payload.workspaceId,
-            role: "assistant" as const,
-            content: s.streamBuffer,
-            model: get().model,
-            inputTokens: payload.inputTokens,
-            outputTokens: payload.outputTokens,
-            costUsd: null,
-            createdAt: new Date().toISOString(),
-          },
-        ],
+        messages: [...s.messages, ...newMessages],
         streamBuffer: "",
         liveTools: [],
       }));
