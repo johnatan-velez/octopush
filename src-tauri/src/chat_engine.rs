@@ -200,20 +200,10 @@ impl ChatEngine {
             Some(cost),
         )?;
 
-        // 8. Record a TokenEvent for the dashboard.
-        let token_event = token_engine::TokenEvent {
-            id: None,
-            session_id: request.workspace_id.clone(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            input_tokens: inp,
-            output_tokens: out,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            model: request.model.clone(),
-            cost_usd: cost,
-        };
-        let engine = token_engine::TokenEngine::new(Arc::clone(&self.db));
-        engine.record(token_event)?;
+        // Token tracking: chat_messages already stores tokens + cost per
+        // message, so we don't need a separate token_events record (which
+        // would fail anyway — token_events.session_id FK references
+        // sessions, not workspaces).
 
         Ok(())
     }
