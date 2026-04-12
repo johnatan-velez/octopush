@@ -39,10 +39,25 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
     loadHistory(workspaceId);
   }, [workspaceId, loadHistory]);
 
-  // Auto-scroll to bottom when messages or stream buffer change
+  // Track whether user is near the bottom of the scroll area.
+  const isNearBottomRef = useRef(true);
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) {
+    if (!el) return;
+    const onScroll = () => {
+      const threshold = 100;
+      isNearBottomRef.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Auto-scroll only if user was already near the bottom.
+  // This prevents tool cards from being yanked out of view.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && isNearBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     }
   }, [messages, streamBuffer]);
@@ -78,14 +93,14 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
   const activeName = AGENT_NAMES[model] ?? model;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Agent bar */}
       <AgentBar activeModel={model} onSelectModel={setModel} />
 
       {/* Message list */}
       <div
         ref={scrollRef}
-        className="flex flex-1 flex-col gap-4 overflow-y-auto px-6 py-4"
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-4"
       >
         {messages.length === 0 && !streaming ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
