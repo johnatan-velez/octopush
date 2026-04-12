@@ -327,7 +327,7 @@ impl ChatEngine {
         for iteration in 0..MAX_TOOL_ITERATIONS {
             let body = serde_json::json!({
                 "model": &request.model,
-                "max_tokens": request.max_tokens,
+                "max_tokens": 16384_u32.max(request.max_tokens),
                 "system": &system_prompt,
                 "tools": tool_definitions(),
                 "messages": &messages,
@@ -337,6 +337,7 @@ impl ChatEngine {
                 .post("https://api.anthropic.com/v1/messages")
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01")
+                .header("anthropic-beta", "output-128k-2025-02-19")
                 .header("content-type", "application/json")
                 .json(&body)
                 .send()
@@ -399,6 +400,21 @@ impl ChatEngine {
                     input_tokens: None,
                     output_tokens: None,
                 });
+            }
+
+            // Handle max_tokens truncation during tool use.
+            if stop_reason == "max_tokens" && !tool_uses.is_empty() {
+                tracing::warn!("Response truncated at max_tokens during tool_use — tool input may be incomplete");
+                // The tool_use JSON was likely cut off. Ask Claude to retry with smaller output.
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": content,
+                }));
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": "Your previous response was truncated because it exceeded the output limit. Please break your work into smaller steps — write one file at a time, keeping each file under 300 lines. Continue from where you left off.",
+                }));
+                continue;
             }
 
             // If no tool use, we're done — this was the final response.
