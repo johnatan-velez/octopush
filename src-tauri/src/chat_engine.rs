@@ -256,9 +256,12 @@ impl ChatEngine {
         )?;
 
         // Build conversation history from DB.
+        // Filter out role="tool" messages — those are for our UI only.
+        // The Anthropic API only accepts "user" and "assistant" roles.
         let history = self.db.lock().list_chat_messages(&request.workspace_id)?;
         let mut messages: Vec<serde_json::Value> = history
             .iter()
+            .filter(|m| m.role == "user" || m.role == "assistant")
             .map(|m| {
                 serde_json::json!({
                     "role": m.role,
