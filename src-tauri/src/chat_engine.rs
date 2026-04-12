@@ -256,19 +256,59 @@ impl ChatEngine {
         )?;
 
         // Build conversation history from DB.
-        // Filter out role="tool" messages — those are for our UI only.
-        // The Anthropic API only accepts "user" and "assistant" roles.
+        // We include user + assistant messages for the API, and inject tool
+        // summaries into assistant messages so Claude remembers what it did.
         let history = self.db.lock().list_chat_messages(&request.workspace_id)?;
-        let mut messages: Vec<serde_json::Value> = history
-            .iter()
-            .filter(|m| m.role == "user" || m.role == "assistant")
-            .map(|m| {
-                serde_json::json!({
-                    "role": m.role,
-                    "content": m.content,
-                })
-            })
-            .collect();
+        let mut messages: Vec<serde_json::Value> = Vec::new();
+        let mut pending_tool_summary = Vec::new();
+
+        for msg in &history {
+            if msg.role == "tool" {
+                // Accumulate tool summaries to inject into the next assistant message.
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    let name = parsed.get("toolName").and_then(|n| n.as_str()).unwrap_or("tool");
+                    let empty_obj = serde_json::json!({});
+                    let input = parsed.get("toolInput").unwrap_or(&empty_obj);
+                    let result = parsed.get("result").and_then(|r| r.as_str()).unwrap_or("");
+                    // Truncate long results for context efficiency.
+                    let short_result = if result.len() > 500 {
+                        format!("{}...(truncated)", &result[..500])
+                    } else {
+                        result.to_string()
+                    };
+                    pending_tool_summary.push(format!(
+                        "[Tool: {} | Input: {} | Result: {}]",
+                        name,
+                        serde_json::to_string(input).unwrap_or_default(),
+                        short_result,
+                    ));
+                }
+            } else if msg.role == "assistant" {
+                // Prepend any accumulated tool summaries to the assistant message
+                // so Claude knows what actions it took.
+                let mut content = String::new();
+                if !pending_tool_summary.is_empty() {
+                    content.push_str(&pending_tool_summary.join("\n"));
+                    content.push_str("\n\n");
+                    pending_tool_summary.clear();
+                }
+                content.push_str(&msg.content);
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": content,
+                }));
+            } else if msg.role == "user" {
+                // Flush any orphaned tool summaries as a user context note.
+                if !pending_tool_summary.is_empty() {
+                    // This shouldn't happen normally, but safety net.
+                    pending_tool_summary.clear();
+                }
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": msg.content,
+                }));
+            }
+        }
 
         let system_prompt = request.system.unwrap_or_else(|| {
             format!(
@@ -364,13 +404,17 @@ impl ChatEngine {
                     output_tokens: Some(total_output),
                 });
 
-                // Persist assistant message.
-                let cost = token_engine::compute_cost(&request.model, total_input, total_output, 0, 0);
-                self.db.lock().insert_chat_message(
-                    &request.workspace_id, "assistant", &text_parts,
-                    Some(&request.model), Some(total_input as i64),
-                    Some(total_output as i64), Some(cost),
-                )?;
+                // Persist assistant message only if there's actual text content.
+                // Empty messages (all output was via tools) shouldn't show as
+                // blank bubbles in the conversation.
+                if !text_parts.trim().is_empty() {
+                    let cost = token_engine::compute_cost(&request.model, total_input, total_output, 0, 0);
+                    self.db.lock().insert_chat_message(
+                        &request.workspace_id, "assistant", &text_parts,
+                        Some(&request.model), Some(total_input as i64),
+                        Some(total_output as i64), Some(cost),
+                    )?;
+                }
 
                 return Ok(());
             }
