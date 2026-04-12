@@ -51,12 +51,35 @@ export const useChatStore = create<ChatState>((set, get) => {
   listen<ChatStreamEvent>("chat://stream", (ev) => {
     const payload = ev.payload;
     if (payload.done) {
-      // When the agentic loop finishes, reload the full conversation
-      // from DB. This is the authoritative source.
-      set({ streaming: false, streamBuffer: "", liveTools: [] });
-      ipc.listChatMessages(payload.workspaceId).then((msgs) => {
-        set({ messages: msgs as ChatMessage[] });
-      });
+      // When the agentic loop finishes, add the final assistant message
+      // (if any) to the existing local state. DO NOT reload from DB here
+      // — that would replace local messages (including tool cards from
+      // live events) with DB content that may have different IDs, causing
+      // React to re-render and the scroll to jump. The local state
+      // already has: user msg + tool msgs (from events) + now the
+      // assistant msg. DB is used only for initial workspace load.
+      const buffer = get().streamBuffer;
+      const assistantMsg = buffer.trim()
+        ? [
+            {
+              id: Date.now(),
+              workspaceId: payload.workspaceId,
+              role: "assistant" as const,
+              content: buffer,
+              model: get().model,
+              inputTokens: payload.inputTokens,
+              outputTokens: payload.outputTokens,
+              costUsd: null,
+              createdAt: new Date().toISOString(),
+            },
+          ]
+        : [];
+      set((s) => ({
+        streaming: false,
+        messages: [...s.messages, ...assistantMsg],
+        streamBuffer: "",
+        liveTools: [],
+      }));
     } else {
       set((s) => ({ streamBuffer: s.streamBuffer + payload.delta }));
     }
