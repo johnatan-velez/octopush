@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Terminal, MessageSquare, Globe, ExternalLink, Search } from "lucide-react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { useProjectStore } from "../stores/projectStore";
 
 interface Props {
   onOpenTerminal: () => void;
@@ -15,8 +17,11 @@ interface Action {
 }
 
 export function WorkspaceHub({ onOpenTerminal, onOpenChat }: Props) {
-  const { workspaces, activeId } = useWorkspaceStore();
+  const { workspaces, activeId, remove } = useWorkspaceStore();
+  const project = useProjectStore((s) => s.current);
   const workspace = workspaces.find((ws) => ws.id === activeId) ?? null;
+  const [confirm, setConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const actions: Action[] = [
     {
@@ -93,11 +98,48 @@ export function WorkspaceHub({ onOpenTerminal, onOpenChat }: Props) {
         </div>
 
         {/* Delete workspace link */}
-        {workspace && (
+        {workspace && !confirm && (
           <div className="mt-6 text-center">
-            <button className="text-xs text-zinc-600 transition hover:text-octo-danger">
+            <button
+              onClick={() => setConfirm(true)}
+              className="text-xs text-zinc-600 transition hover:text-octo-danger"
+            >
               Delete workspace
             </button>
+          </div>
+        )}
+        {workspace && confirm && (
+          <div className="mt-6 rounded-md border border-red-900/40 bg-red-950/30 p-3 text-center">
+            <p className="text-xs text-zinc-300">
+              Delete <strong>{workspace.name}</strong> ({workspace.branch})?
+            </p>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              This will delete the branch and worktree. Cannot be undone.
+            </p>
+            <div className="mt-2 flex items-center justify-center gap-2">
+              <button
+                disabled={deleting}
+                onClick={async () => {
+                  if (!project) return;
+                  setDeleting(true);
+                  try {
+                    await remove(workspace.id, project.path, workspace.branch, workspace.worktreePath ?? null);
+                    setConfirm(false);
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+                className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white transition hover:bg-red-500 disabled:opacity-50"
+              >
+                {deleting ? "Deleting..." : "Confirm Delete"}
+              </button>
+              <button
+                onClick={() => setConfirm(false)}
+                className="rounded bg-zinc-800 px-3 py-1 text-xs text-zinc-300 transition hover:bg-zinc-700"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
       </div>

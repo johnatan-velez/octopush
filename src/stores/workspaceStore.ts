@@ -6,17 +6,22 @@ interface WorkspaceState {
   workspaces: Workspace[];
   activeId: string | null;
   loading: boolean;
+  notifications: Record<string, number>;
 
   load: (projectId: string) => Promise<void>;
   create: (projectId: string, projectPath: string, name: string, task: string,
            branch: string, fromBranch: string, setupScript: string) => Promise<Workspace>;
   select: (id: string | null) => void;
+  remove: (workspaceId: string, projectPath: string, branch: string, worktreePath: string | null) => Promise<void>;
+  notify: (workspaceId: string) => void;
+  clearNotification: (workspaceId: string) => void;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   activeId: null,
   loading: false,
+  notifications: {},
 
   load: async (projectId) => {
     set({ loading: true });
@@ -37,4 +42,25 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   select: (id) => set({ activeId: id }),
+
+  remove: async (workspaceId, projectPath, branch, worktreePath) => {
+    await ipc.deleteWorkspace(workspaceId, projectPath, branch, worktreePath);
+    set((s) => ({
+      workspaces: s.workspaces.filter((w) => w.id !== workspaceId),
+      activeId: s.activeId === workspaceId ? null : s.activeId,
+    }));
+  },
+
+  notify: (workspaceId) =>
+    set((s) => ({
+      notifications: {
+        ...s.notifications,
+        [workspaceId]: (s.notifications[workspaceId] ?? 0) + 1,
+      },
+    })),
+
+  clearNotification: (workspaceId) =>
+    set((s) => ({
+      notifications: { ...s.notifications, [workspaceId]: 0 },
+    })),
 }));

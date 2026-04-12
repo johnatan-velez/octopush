@@ -468,6 +468,32 @@ pub async fn get_git_diff(path: String) -> AppResult<String> {
     crate::git_ops::get_diff_text(std::path::Path::new(&path))
 }
 
+// ─── Delete workspace ────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn delete_workspace(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    project_path: String,
+    branch: String,
+    worktree_path: Option<String>,
+) -> AppResult<()> {
+    let project_path = expand_tilde(&project_path);
+    // Remove worktree directory
+    if let Some(wt) = &worktree_path {
+        let wt_path = std::path::Path::new(wt);
+        if wt_path.exists() {
+            let _ = std::fs::remove_dir_all(wt_path);
+        }
+    }
+    // Prune worktree ref and delete branch
+    let _ = crate::git_ops::delete_worktree(std::path::Path::new(&project_path), &branch);
+    let _ = crate::git_ops::delete_branch(std::path::Path::new(&project_path), &branch);
+    // Remove from DB
+    state.db.lock().delete_workspace(&workspace_id)?;
+    Ok(())
+}
+
 // ─── Chat commands ────────────────────────────────────────────────
 
 #[tauri::command]

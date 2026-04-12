@@ -511,6 +511,11 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn delete_workspace(&self, id: &str) -> AppResult<()> {
+        self.conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     // ─── Chat messages ────────────────────────────────────────────
 
     pub fn insert_chat_message(

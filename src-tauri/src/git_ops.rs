@@ -138,6 +138,25 @@ pub fn create_worktree(repo_path: &Path, branch: &str, worktree_path: &Path) -> 
     Ok(())
 }
 
+pub fn delete_worktree(repo_path: &Path, worktree_name: &str) -> AppResult<()> {
+    let repo = open_repo(repo_path)?;
+    if let Ok(wt) = repo.find_worktree(worktree_name) {
+        let mut opts = git2::WorktreePruneOptions::new();
+        opts.valid(true);
+        opts.working_tree(true);
+        let _ = wt.prune(Some(&mut opts));
+    }
+    Ok(())
+}
+
+pub fn delete_branch(path: &Path, branch_name: &str) -> AppResult<()> {
+    let repo = open_repo(path)?;
+    if let Ok(mut branch) = repo.find_branch(branch_name, git2::BranchType::Local) {
+        branch.delete().map_err(|e| AppError::Other(format!("delete branch: {e}")))?;
+    }
+    Ok(())
+}
+
 pub fn get_diff_text(path: &Path) -> AppResult<String> {
     let repo = open_repo(path)?;
     let diff = repo.diff_index_to_workdir(None, None)

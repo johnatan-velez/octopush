@@ -124,6 +124,35 @@ export function ToolCallCard({ tool, workspacePath }: Props) {
           </span>
         </div>
 
+        {/* Reveal in Finder button for all write_file cards */}
+        {filePath && tool.toolName === "write_file" && (
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              if (workspacePath) ipc.revealInFinder(`${workspacePath}/${filePath}`);
+            }}
+            onKeyDown={() => {}}
+            title="Reveal in Finder"
+            style={{
+              fontSize: 13,
+              fontWeight: 500,
+              color: "#71717a",
+              background: "rgba(113,113,122,0.12)",
+              border: "none",
+              borderRadius: 4,
+              padding: "3px 7px",
+              cursor: "pointer",
+              marginRight: 4,
+              flexShrink: 0,
+              fontFamily: "system-ui, sans-serif",
+              lineHeight: 1,
+            }}
+          >
+            ⊙
+          </div>
+        )}
+
         {/* Open button for HTML files */}
         {filePath && tool.toolName === "write_file" && isWebFile && (
           <div

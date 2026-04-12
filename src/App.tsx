@@ -23,8 +23,18 @@ function App() {
   const loadTheme = useThemeStore((s) => s.load);
   const { workspaces, activeId: activeWorkspaceId, load: loadWorkspaces } = useWorkspaceStore();
 
-  const [view, setView] = useState<AppView>("welcome");
+  const [view, _setView] = useState<AppView>("welcome");
+  const [viewPerWorkspace, setViewPerWorkspace] = useState<Record<string, string>>({});
   const [showSidebar, setShowSidebar] = useState(true);
+
+  // Wrapper that tracks per-workspace view
+  const setView = useCallback((v: AppView) => {
+    _setView(v);
+    const wsId = useWorkspaceStore.getState().activeId;
+    if (wsId && v !== "welcome" && v !== "new-project") {
+      setViewPerWorkspace((prev) => ({ ...prev, [wsId]: v }));
+    }
+  }, []);
   const [showTokens, setShowTokens] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showCreator, setShowCreator] = useState(false);
@@ -59,15 +69,16 @@ function App() {
     }
   }, [project, loadWorkspaces]);
 
-  // When active workspace changes (sidebar click), reset to hub
+  // When active workspace changes (sidebar click), restore last view or default to hub
   const prevWorkspaceRef = useRef(activeWorkspaceId);
   useEffect(() => {
     if (activeWorkspaceId && activeWorkspaceId !== prevWorkspaceRef.current) {
-      setView("hub");
+      const lastView = viewPerWorkspace[activeWorkspaceId];
+      _setView((lastView as AppView) || "hub");
       setShowCreator(false);
     }
     prevWorkspaceRef.current = activeWorkspaceId;
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, viewPerWorkspace]);
 
   // Create terminal session for a workspace if needed
   const ensureTerminalSession = useCallback(async (workspaceId: string) => {

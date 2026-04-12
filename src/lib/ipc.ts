@@ -106,6 +106,8 @@ export const ipc = {
                     branch: string, fromBranch: string, setupScript: string) =>
     invoke<Workspace>("create_workspace", { projectId, projectPath, name, task, branch, fromBranch, setupScript }),
   listWorkspaces: (projectId: string) => invoke<Workspace[]>("list_workspaces", { projectId }),
+  deleteWorkspace: (workspaceId: string, projectPath: string, branch: string, worktreePath: string | null) =>
+    invoke<void>("delete_workspace", { workspaceId, projectPath, branch, worktreePath }),
 
   // ─── Chat ───────────────────────────────────────────────────────
   sendChatMessage: (request: {

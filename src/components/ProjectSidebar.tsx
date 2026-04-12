@@ -11,7 +11,7 @@ interface Props {
 export function ProjectSidebar({ onNewWorkspace }: Props) {
   const project = useProjectStore((s) => s.current);
   const close = useProjectStore((s) => s.close);
-  const { workspaces, activeId, select } = useWorkspaceStore();
+  const { workspaces, activeId, select, notifications, clearNotification } = useWorkspaceStore();
 
   return (
     <aside className="flex h-full w-64 flex-col border-r border-octo-border bg-octo-panel">
@@ -55,7 +55,11 @@ export function ProjectSidebar({ onNewWorkspace }: Props) {
               key={ws.id}
               workspace={ws}
               active={ws.id === activeId}
-              onSelect={() => select(ws.id)}
+              hasNotification={(notifications[ws.id] ?? 0) > 0}
+              onSelect={() => {
+                select(ws.id);
+                clearNotification(ws.id);
+              }}
             />
           ))
         )}
@@ -74,10 +78,12 @@ export function ProjectSidebar({ onNewWorkspace }: Props) {
 function WorkspaceRow({
   workspace,
   active,
+  hasNotification,
   onSelect,
 }: {
   workspace: Workspace;
   active: boolean;
+  hasNotification: boolean;
   onSelect: () => void;
 }) {
   const isActive = workspace.status === "active";
@@ -102,6 +108,19 @@ function WorkspaceRow({
         <span className="flex-1 truncate text-sm font-medium">
           {workspace.name}
         </span>
+        {hasNotification && (
+          <span
+            style={{
+              display: "inline-block",
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: "#a78bfa",
+              flexShrink: 0,
+              animation: "pulse 1.5s ease-in-out infinite",
+            }}
+          />
+        )}
       </div>
       <div className="mt-1 flex items-center gap-1.5 pl-4 text-[11px] text-zinc-500">
         <GitBranch size={10} className="shrink-0 text-zinc-600" />

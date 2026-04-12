@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
 import { ipc } from "../lib/ipc";
 import type { ChatMessage, ChatStreamEvent } from "../lib/types";
+import { useWorkspaceStore } from "./workspaceStore";
 
 export interface ToolExecution {
   toolName: string;
@@ -80,6 +81,11 @@ export const useChatStore = create<ChatState>((set, get) => {
         streamBuffer: "",
         liveTools: [],
       }));
+      // Notify workspace if it's not the currently active one
+      const wsStore = useWorkspaceStore.getState();
+      if (payload.workspaceId && payload.workspaceId !== wsStore.activeId) {
+        wsStore.notify(payload.workspaceId);
+      }
     } else {
       set((s) => ({ streamBuffer: s.streamBuffer + payload.delta }));
     }
