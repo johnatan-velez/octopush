@@ -111,6 +111,65 @@ export interface BudgetStatus {
 
 // ─── Templates ────────────────────────────────────────────────────
 
+// ─── Projects ─────────────────────────────────────────────────────
+
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  path: string;
+}
+
+// ─── Workspaces ───────────────────────────────────────────────────
+
+export interface Workspace {
+  id: string;
+  projectId: string;
+  name: string;
+  task: string;
+  branch: string;
+  worktreePath: string | null;
+  setupScript: string;
+  status: string;
+  createdAt: string;
+  lastActive: string;
+}
+
+// ─── Chat ─────────────────────────────────────────────────────────
+
+export interface ChatMessage {
+  id: number;
+  workspaceId: string;
+  role: "user" | "assistant";
+  content: string;
+  model: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  createdAt: string;
+}
+
+export interface ChatStreamEvent {
+  workspaceId: string;
+  delta: string;
+  done: boolean;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+// ─── Git ──────────────────────────────────────────────────────────
+
+export interface GitStatus {
+  branch: string | null;
+  changedFiles: FileChange[];
+  ahead: number;
+  behind: number;
+}
+
+export interface FileChange {
+  path: string;
+  status: "new" | "modified" | "deleted" | "renamed" | "unknown";
+}
+
 // ─── Theme ────────────────────────────────────────────────────────
 
 export interface ThemeConfig {

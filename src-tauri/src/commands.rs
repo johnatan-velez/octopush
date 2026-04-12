@@ -368,6 +368,117 @@ pub async fn export_session_csv(
     Ok(csv)
 }
 
+// ─── Project commands ─────────────────────────────────────────────
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectInfo {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+}
+
+#[tauri::command]
+pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult<ProjectInfo> {
+    let path = expand_tilde(&path);
+    if !crate::git_ops::is_git_repo(std::path::Path::new(&path)) {
+        return Err(AppError::Other(format!("'{}' is not a git repository", path)));
+    }
+    let db = state.db.lock();
+    if let Some((id, name, p)) = db.get_project_by_path(&path)? {
+        db.touch_project(&id)?;
+        Ok(ProjectInfo { id, name, path: p })
+    } else {
+        let id = uuid::Uuid::new_v4().to_string();
+        let name = std::path::Path::new(&path).file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone());
+        db.insert_project(&id, &name, &path)?;
+        Ok(ProjectInfo { id, name, path })
+    }
+}
+
+#[tauri::command]
+pub async fn list_recent_projects(state: State<'_, AppState>) -> AppResult<Vec<ProjectInfo>> {
+    let rows = state.db.lock().list_projects()?;
+    Ok(rows.into_iter().map(|(id, name, path, _)| ProjectInfo { id, name, path }).collect())
+}
+
+#[tauri::command]
+pub async fn create_project(state: State<'_, AppState>, path: String, name: String) -> AppResult<ProjectInfo> {
+    let path = expand_tilde(&path);
+    let full_path = std::path::Path::new(&path).join(&name);
+    std::fs::create_dir_all(&full_path)?;
+    crate::git_ops::init_repo(&full_path)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    state.db.lock().insert_project(&id, &name, &full_path.to_string_lossy())?;
+    Ok(ProjectInfo { id, name, path: full_path.to_string_lossy().to_string() })
+}
+
+// ─── Workspace commands ───────────────────────────────────────────
+
+#[tauri::command]
+pub async fn create_workspace(
+    state: State<'_, AppState>,
+    project_id: String,
+    project_path: String,
+    name: String,
+    task: String,
+    branch: String,
+    from_branch: String,
+    setup_script: String,
+) -> AppResult<crate::db::WorkspaceRow> {
+    let project_path_expanded = expand_tilde(&project_path);
+    let project_path = std::path::Path::new(&project_path_expanded);
+    crate::git_ops::create_branch(project_path, &branch, &from_branch)?;
+    let wt_path = project_path.parent().unwrap_or(project_path)
+        .join(format!(".octopus-worktrees/{}", &branch));
+    crate::git_ops::create_worktree(project_path, &branch, &wt_path)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    state.db.lock().insert_workspace(
+        &id, &project_id, &name, &task, &branch,
+        Some(&wt_path.to_string_lossy()), &setup_script,
+    )?;
+    let workspaces = state.db.lock().list_workspaces(&project_id)?;
+    Ok(workspaces.into_iter().find(|w| w.id == id).unwrap())
+}
+
+#[tauri::command]
+pub async fn list_workspaces(state: State<'_, AppState>, project_id: String) -> AppResult<Vec<crate::db::WorkspaceRow>> {
+    state.db.lock().list_workspaces(&project_id)
+}
+
+#[tauri::command]
+pub async fn get_git_status(path: String) -> AppResult<crate::git_ops::GitStatus> {
+    let path = expand_tilde(&path);
+    crate::git_ops::get_status(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+pub async fn get_git_diff(path: String) -> AppResult<String> {
+    let path = expand_tilde(&path);
+    crate::git_ops::get_diff_text(std::path::Path::new(&path))
+}
+
+// ─── Chat commands ────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn send_chat_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: crate::chat_engine::ChatRequest,
+) -> AppResult<()> {
+    state.chat.send_streaming(app, request).await
+}
+
+#[tauri::command]
+pub async fn list_chat_messages(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> AppResult<Vec<crate::db::ChatMessageRow>> {
+    state.db.lock().list_chat_messages(&workspace_id)
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────
 
 /// Expand `~/...` to the user's home directory.

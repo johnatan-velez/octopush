@@ -1,265 +1,299 @@
-import { useEffect, useRef, useState } from "react";
-import { SessionSidebar } from "./components/SessionSidebar";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { WelcomeScreen } from "./components/WelcomeScreen";
+import { NewProjectFlow } from "./components/NewProjectFlow";
+import { ProjectSidebar } from "./components/ProjectSidebar";
+import { WorkspaceHub } from "./components/WorkspaceHub";
+import { WorkspaceCreator } from "./components/WorkspaceCreator";
+import { ChatView } from "./components/ChatView";
+import { ChangesPanel } from "./components/ChangesPanel";
 import { TerminalPane } from "./components/TerminalPane";
 import { TokenDashboard } from "./components/TokenDashboard";
-import { NewSessionDialog } from "./components/NewSessionDialog";
-import { ModelSwitcher, ModelSwitcherButton } from "./components/ModelSwitcher";
 import { CommandPalette } from "./components/CommandPalette";
 import { ToastContainer } from "./components/Toasts";
-import { useSessionStore } from "./stores/sessionStore";
+import { useProjectStore } from "./stores/projectStore";
+import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useThemeStore } from "./stores/themeStore";
+import { ipc } from "./lib/ipc";
+
+type AppView = "welcome" | "new-project" | "hub" | "terminal" | "chat" | "changes";
 
 function App() {
-  const { sessions, activeId, refresh } = useSessionStore();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [showTokens, setShowTokens] = useState(false);
-  const [showModelSwitcher, setShowModelSwitcher] = useState(false);
-  const [showPalette, setShowPalette] = useState(false);
+  const project = useProjectStore((s) => s.current);
+  const loadTheme = useThemeStore((s) => s.load);
+  const { workspaces, activeId: activeWorkspaceId, load: loadWorkspaces } = useWorkspaceStore();
+
+  const [view, setView] = useState<AppView>("welcome");
   const [showSidebar, setShowSidebar] = useState(true);
-  /** ID of the second session shown in split view (null = no split). */
-  const [splitId, setSplitId] = useState<string | null>(null);
-  /** Increments on any layout change that affects terminal container size. */
+  const [showTokens, setShowTokens] = useState(false);
+  const [showPalette, setShowPalette] = useState(false);
+  const [showCreator, setShowCreator] = useState(false);
+
+  // Map of workspaceId -> sessionId for terminal sessions
+  const [terminalSessions, setTerminalSessions] = useState<Record<string, string>>({});
+  const creatingSessionRef = useRef<Set<string>>(new Set());
+
   const layoutVersionRef = useRef(0);
   const [layoutVersion, setLayoutVersion] = useState(0);
 
-  const bumpLayout = () => {
+  const bumpLayout = useCallback(() => {
     layoutVersionRef.current += 1;
     setLayoutVersion(layoutVersionRef.current);
-  };
+  }, []);
 
-  const loadTheme = useThemeStore((s) => s.load);
-
+  // Load theme on startup
   useEffect(() => {
-    refresh();
     loadTheme();
-  }, [refresh, loadTheme]);
+  }, [loadTheme]);
 
-  // Global shortcuts
+  // When project becomes non-null, switch to hub and load workspaces
+  useEffect(() => {
+    if (project) {
+      setView("hub");
+      setShowCreator(false);
+      loadWorkspaces(project.id);
+    } else {
+      setView("welcome");
+      setShowCreator(false);
+    }
+  }, [project, loadWorkspaces]);
+
+  // When active workspace changes (sidebar click), reset to hub
+  const prevWorkspaceRef = useRef(activeWorkspaceId);
+  useEffect(() => {
+    if (activeWorkspaceId && activeWorkspaceId !== prevWorkspaceRef.current) {
+      setView("hub");
+      setShowCreator(false);
+    }
+    prevWorkspaceRef.current = activeWorkspaceId;
+  }, [activeWorkspaceId]);
+
+  // Create terminal session for a workspace if needed
+  const ensureTerminalSession = useCallback(async (workspaceId: string) => {
+    if (terminalSessions[workspaceId]) return;
+    if (creatingSessionRef.current.has(workspaceId)) return;
+
+    creatingSessionRef.current.add(workspaceId);
+    try {
+      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === workspaceId);
+      const proj = useProjectStore.getState().current;
+      if (!ws || !proj) return;
+
+      const session = await ipc.createSession({
+        name: ws.name,
+        projectRoot: ws.worktreePath || proj.path,
+      });
+      setTerminalSessions((prev) => ({ ...prev, [workspaceId]: session.id }));
+    } finally {
+      creatingSessionRef.current.delete(workspaceId);
+    }
+  }, [terminalSessions]);
+
+  // Handle switching to terminal view
+  const openTerminal = useCallback(() => {
+    if (!activeWorkspaceId) return;
+    setView("terminal");
+    setShowCreator(false);
+    ensureTerminalSession(activeWorkspaceId);
+  }, [activeWorkspaceId, ensureTerminalSession]);
+
+  const openChat = useCallback(() => {
+    if (!activeWorkspaceId) return;
+    setView("chat");
+    setShowCreator(false);
+  }, [activeWorkspaceId]);
+
+  const openChanges = useCallback(() => {
+    setView("changes");
+    setShowCreator(false);
+  }, []);
+
+  // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
+
+      // Command+T → open terminal (if in project)
       if (mod && !e.shiftKey && e.key === "t") {
         e.preventDefault();
-        setDialogOpen(true);
+        if (project && activeWorkspaceId) {
+          openTerminal();
+        }
       }
-      if (mod && e.shiftKey && (e.key === "T" || e.key === "t")) {
+
+      // Command+Shift+C → open chat
+      if (mod && e.shiftKey && (e.key === "C" || e.key === "c")) {
         e.preventDefault();
-        setShowTokens((v) => !v);
-        bumpLayout();
+        if (project && activeWorkspaceId) {
+          openChat();
+        }
       }
-      if (mod && e.shiftKey && (e.key === "M" || e.key === "m")) {
+
+      // Command+Shift+G → open changes
+      if (mod && e.shiftKey && (e.key === "G" || e.key === "g")) {
         e.preventDefault();
-        setShowModelSwitcher((v) => !v);
+        if (project) {
+          openChanges();
+        }
       }
+
+      // Command+N → show workspace creator
+      if (mod && !e.shiftKey && e.key === "n") {
+        e.preventDefault();
+        if (project) {
+          setShowCreator(true);
+        }
+      }
+
+      // Command+K → command palette
       if (mod && !e.shiftKey && e.key === "k") {
         e.preventDefault();
         setShowPalette((v) => !v);
       }
-      if (mod && !e.shiftKey && e.key === "d") {
-        e.preventDefault();
-        bumpLayout();
-        setSplitId((prev) => {
-          if (prev) return null; // toggle off
-          const { sessions: ss, activeId: aid } = useSessionStore.getState();
-          const others = ss.filter(
-            (s) =>
-              s.id !== aid &&
-              (s.status === "active" || s.status === "idle"),
-          );
-          return others.length > 0 ? others[0].id : null;
-        });
-      }
-      // ⌘W — close/kill active session
-      if (mod && !e.shiftKey && e.key === "w") {
-        e.preventDefault();
-        const { activeId: aid, kill: killFn, sessions: ss, select: selFn } =
-          useSessionStore.getState();
-        if (aid) {
-          killFn(aid).then(() => {
-            const remaining = ss.filter((s) => s.id !== aid);
-            selFn(remaining.length > 0 ? remaining[0].id : null);
-          });
-        }
-      }
-      // ⌘1-9 — switch to session by index
-      if (mod && !e.shiftKey && e.key >= "1" && e.key <= "9") {
-        e.preventDefault();
-        const idx = parseInt(e.key, 10) - 1;
-        const { sessions: ss, select: selFn } = useSessionStore.getState();
-        if (idx < ss.length) {
-          selFn(ss[idx].id);
-        }
-      }
-      // ⌘\ — toggle sidebar
+
+      // Command+\ → toggle sidebar
       if (mod && e.key === "\\") {
         e.preventDefault();
         setShowSidebar((v) => !v);
         bumpLayout();
       }
-      // Ctrl+Tab — next session
-      if (e.ctrlKey && e.key === "Tab") {
+
+      // Command+Shift+T → toggle token dashboard
+      if (mod && e.shiftKey && (e.key === "T" || e.key === "t")) {
         e.preventDefault();
-        const { sessions: ss, activeId: aid, select: selFn } =
-          useSessionStore.getState();
-        if (ss.length > 1 && aid) {
-          const idx = ss.findIndex((s) => s.id === aid);
-          const next = (idx + 1) % ss.length;
-          selFn(ss[next].id);
-        }
+        setShowTokens((v) => !v);
+        bumpLayout();
       }
     };
+
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [project, activeWorkspaceId, openTerminal, openChat, openChanges, bumpLayout]);
 
-  const active = sessions.find((s) => s.id === activeId) ?? null;
+  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
 
-  const aliveSessions = sessions.filter(
-    (s) => s.status === "active" || s.status === "idle",
-  );
+  // Full-screen views (no sidebar)
+  if (!project) {
+    if (view === "new-project") {
+      return (
+        <div className="flex h-screen w-screen bg-octo-bg text-zinc-100">
+          <NewProjectFlow onBack={() => setView("welcome")} />
+          <ToastContainer />
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex h-screen w-screen bg-octo-bg text-zinc-100">
+        <WelcomeScreen onNewProject={() => setView("new-project")} />
+        <ToastContainer />
+      </div>
+    );
+  }
+
+  // Project is open — sidebar + main content layout
+  function renderMainContent() {
+    if (showCreator && project) {
+      return (
+        <WorkspaceCreator
+          projectId={project.id}
+          projectPath={project.path}
+          onCreated={() => {
+            setShowCreator(false);
+            setView("hub");
+          }}
+          onCancel={() => setShowCreator(false)}
+        />
+      );
+    }
+
+    switch (view) {
+      case "terminal":
+        if (activeWorkspaceId && terminalSessions[activeWorkspaceId]) {
+          return (
+            <TerminalPane
+              sessionId={terminalSessions[activeWorkspaceId]}
+              visible
+              layoutVersion={layoutVersion}
+            />
+          );
+        }
+        // Session still being created — show loading
+        return (
+          <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+            Starting terminal...
+          </div>
+        );
+
+      case "chat":
+        if (activeWorkspaceId) {
+          return <ChatView workspaceId={activeWorkspaceId} />;
+        }
+        return (
+          <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+            Select a workspace to start chatting
+          </div>
+        );
+
+      case "changes":
+        if (project) {
+          return <ChangesPanel projectPath={project.path} />;
+        }
+        return null;
+
+      case "hub":
+      default:
+        if (!activeWorkspace) {
+          // No workspaces yet — prompt to create one
+          return (
+            <WorkspaceCreator
+              projectId={project!.id}
+              projectPath={project!.path}
+              onCreated={() => {
+                setShowCreator(false);
+                setView("hub");
+              }}
+              onCancel={() => setView("hub")}
+            />
+          );
+        }
+        return (
+          <WorkspaceHub
+            onOpenTerminal={openTerminal}
+            onOpenChat={openChat}
+          />
+        );
+    }
+  }
 
   return (
     <div className="flex h-screen w-screen bg-octo-bg text-zinc-100">
       {showSidebar && (
-        <SessionSidebar onNewSession={() => setDialogOpen(true)} />
+        <ProjectSidebar
+          onNewWorkspace={() => setShowCreator(true)}
+        />
       )}
 
       <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-        {active ? (
-          <Titlebar
-            name={active.name}
-            model={active.agent.model}
-            showTokens={showTokens}
-            onToggleTokens={() => setShowTokens((v) => !v)}
-            onToggleModel={() => setShowModelSwitcher((v) => !v)}
-          />
-        ) : null}
-
         <div className="relative flex min-w-0 flex-1 overflow-hidden">
-          {aliveSessions.length === 0 && !active ? (
-            <div className="min-w-0 flex-1">
-              <EmptyMain onNewSession={() => setDialogOpen(true)} />
-            </div>
-          ) : (
-            <div className="flex min-w-0 flex-1">
-              {/* Primary pane */}
-              <div className="min-w-0 flex-1 overflow-hidden">
-                {aliveSessions.map((s) => (
-                  <TerminalPane
-                    key={s.id}
-                    sessionId={s.id}
-                    visible={s.id === activeId}
-                    layoutVersion={layoutVersion}
-                  />
-                ))}
-              </div>
+          <div className="min-w-0 flex-1 overflow-hidden">
+            {renderMainContent()}
+          </div>
 
-              {/* Split pane — visible when ⌘D active */}
-              {splitId && (
-                <>
-                  <div className="w-px shrink-0 bg-octo-border" />
-                  <div className="min-w-0 flex-1 overflow-hidden">
-                    <TerminalPane
-                      key={`split-${splitId}`}
-                      sessionId={splitId}
-                      visible
-                      layoutVersion={layoutVersion}
-                    />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Token dashboard — fixed width, shrinks the terminal area */}
           {showTokens && <TokenDashboard />}
         </div>
-
-        {/* Model switcher dropdown */}
-        <ModelSwitcher
-          open={showModelSwitcher}
-          onClose={() => setShowModelSwitcher(false)}
-        />
       </main>
-
-      <NewSessionDialog
-        open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
-      />
 
       <CommandPalette
         open={showPalette}
         onClose={() => setShowPalette(false)}
         onNewSession={() => {
           setShowPalette(false);
-          setDialogOpen(true);
+          setShowCreator(true);
         }}
         onToggleTokens={() => setShowTokens((v) => !v)}
       />
 
       <ToastContainer />
-    </div>
-  );
-}
-
-function Titlebar({
-  name,
-  model,
-  showTokens,
-  onToggleTokens,
-  onToggleModel,
-}: {
-  name: string;
-  model: string;
-  showTokens: boolean;
-  onToggleTokens: () => void;
-  onToggleModel: () => void;
-}) {
-  return (
-    <header
-      data-tauri-drag-region
-      className="flex h-10 shrink-0 items-center justify-between border-b border-octo-border bg-octo-panel/80 px-4 pl-20"
-    >
-      <div className="flex items-center gap-2 text-sm">
-        <span className="font-mono font-medium">{name}</span>
-        <span className="text-zinc-600">•</span>
-        <ModelSwitcherButton model={model} onClick={onToggleModel} />
-      </div>
-      <button
-        onClick={onToggleTokens}
-        className={`rounded-md px-2 py-1 text-[10px] uppercase tracking-wider transition ${
-          showTokens
-            ? "bg-octo-accent/20 text-octo-accent"
-            : "text-zinc-500 hover:text-zinc-300"
-        }`}
-        title="Toggle token dashboard (⌘⇧T)"
-      >
-        Tokens
-      </button>
-    </header>
-  );
-}
-
-function EmptyMain({ onNewSession }: { onNewSession: () => void }) {
-  return (
-    <div
-      data-tauri-drag-region
-      className="flex h-full flex-col items-center justify-center gap-4 text-center"
-    >
-      <div className="text-6xl">🐙</div>
-      <div className="text-xl font-semibold tracking-tight">Octopus sh</div>
-      <div className="max-w-md text-sm text-zinc-400">
-        Eight arms. Zero wasted tokens.
-        <br />
-        Create a session to spin up an isolated PTY with its own model and
-        context.
-      </div>
-      <button
-        onClick={onNewSession}
-        className="mt-2 rounded-md border border-octo-accent/40 bg-octo-accent/10 px-4 py-2 text-sm font-medium text-octo-accent transition hover:bg-octo-accent/20"
-      >
-        + New session  <span className="ml-2 text-[10px] text-zinc-500">⌘T</span>
-      </button>
     </div>
   );
 }

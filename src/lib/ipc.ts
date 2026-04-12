@@ -4,9 +4,12 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AdapterInfo,
   BudgetStatus,
+  ChatMessage,
   CreateSessionArgs,
+  GitStatus,
   ModelSuggestion,
   ModelWithProvider,
+  ProjectInfo,
   Session,
   SessionRecap,
   SessionTemplate,
@@ -14,6 +17,7 @@ import type {
   ThemeConfig,
   TokenEvent,
   TokenReport,
+  Workspace,
 } from "./types";
 
 export const ipc = {
@@ -91,4 +95,24 @@ export const ipc = {
   getTheme: () => invoke<ThemeConfig>("get_theme"),
   setTheme: (theme: ThemeConfig) => invoke<void>("set_theme", { theme }),
   listThemes: () => invoke<ThemeConfig[]>("list_themes"),
+
+  // ─── Projects ───────────────────────────────────────────────────
+  openProject: (path: string) => invoke<ProjectInfo>("open_project", { path }),
+  listRecentProjects: () => invoke<ProjectInfo[]>("list_recent_projects"),
+  createProject: (path: string, name: string) => invoke<ProjectInfo>("create_project", { path, name }),
+
+  // ─── Workspaces ─────────────────────────────────────────────────
+  createWorkspace: (projectId: string, projectPath: string, name: string, task: string,
+                    branch: string, fromBranch: string, setupScript: string) =>
+    invoke<Workspace>("create_workspace", { projectId, projectPath, name, task, branch, fromBranch, setupScript }),
+  listWorkspaces: (projectId: string) => invoke<Workspace[]>("list_workspaces", { projectId }),
+
+  // ─── Chat ───────────────────────────────────────────────────────
+  sendChatMessage: (request: { workspaceId: string; model: string; messages: { role: string; content: string }[]; system?: string; maxTokens: number }) =>
+    invoke<void>("send_chat_message", { request }),
+  listChatMessages: (workspaceId: string) => invoke<ChatMessage[]>("list_chat_messages", { workspaceId }),
+
+  // ─── Git ────────────────────────────────────────────────────────
+  getGitStatus: (path: string) => invoke<GitStatus>("get_git_status", { path }),
+  getGitDiff: (path: string) => invoke<string>("get_git_diff", { path }),
 };

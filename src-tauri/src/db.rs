@@ -70,6 +70,44 @@ impl Db {
 
             CREATE INDEX IF NOT EXISTS idx_token_events_session
                 ON token_events(session_id, timestamp DESC);
+
+            CREATE TABLE IF NOT EXISTS projects (
+                id              TEXT PRIMARY KEY,
+                name            TEXT NOT NULL,
+                path            TEXT NOT NULL UNIQUE,
+                created_at      TEXT NOT NULL,
+                last_opened     TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_projects_last_opened ON projects(last_opened DESC);
+
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id              TEXT PRIMARY KEY,
+                project_id      TEXT NOT NULL,
+                name            TEXT NOT NULL,
+                task            TEXT NOT NULL DEFAULT '',
+                branch          TEXT NOT NULL,
+                worktree_path   TEXT,
+                setup_script    TEXT NOT NULL DEFAULT '',
+                status          TEXT NOT NULL DEFAULT 'active',
+                created_at      TEXT NOT NULL,
+                last_active     TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_workspaces_project ON workspaces(project_id, last_active DESC);
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id    TEXT NOT NULL,
+                role            TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                model           TEXT,
+                input_tokens    INTEGER,
+                output_tokens   INTEGER,
+                cost_usd        REAL,
+                created_at      TEXT NOT NULL,
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_workspace ON chat_messages(workspace_id, created_at);
             "#,
         )?;
         Ok(())
@@ -390,6 +428,159 @@ impl Db {
             projected_daily_cost: projected,
         })
     }
+
+    // ─── Projects ─────────────────────────────────────────────────
+
+    pub fn insert_project(&self, id: &str, name: &str, path: &str) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO projects (id, name, path, created_at, last_opened) VALUES (?1,?2,?3,?4,?5)",
+            params![id, name, path, now, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_projects(&self) -> AppResult<Vec<(String, String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, path, last_opened FROM projects ORDER BY last_opened DESC LIMIT 20",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn touch_project(&self, id: &str) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE projects SET last_opened = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_project_by_path(&self, path: &str) -> AppResult<Option<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, path FROM projects WHERE path = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![path], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?;
+        Ok(row)
+    }
+
+    // ─── Workspaces ───────────────────────────────────────────────
+
+    pub fn insert_workspace(
+        &self,
+        id: &str,
+        project_id: &str,
+        name: &str,
+        task: &str,
+        branch: &str,
+        worktree_path: Option<&str>,
+        setup_script: &str,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO workspaces (id, project_id, name, task, branch, worktree_path, setup_script, created_at, last_active)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![id, project_id, name, task, branch, worktree_path, setup_script, now, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_workspaces(&self, project_id: &str) -> AppResult<Vec<WorkspaceRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, name, task, branch, worktree_path, setup_script, status, created_at, last_active
+             FROM workspaces WHERE project_id = ?1 ORDER BY last_active DESC",
+        )?;
+        let rows = stmt.query_map(params![project_id], |r| {
+            Ok(WorkspaceRow {
+                id: r.get(0)?,
+                project_id: r.get(1)?,
+                name: r.get(2)?,
+                task: r.get(3)?,
+                branch: r.get(4)?,
+                worktree_path: r.get(5)?,
+                setup_script: r.get(6)?,
+                status: r.get(7)?,
+                created_at: r.get(8)?,
+                last_active: r.get(9)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    // ─── Chat messages ────────────────────────────────────────────
+
+    pub fn insert_chat_message(
+        &self,
+        workspace_id: &str,
+        role: &str,
+        content: &str,
+        model: Option<&str>,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
+        cost: Option<f64>,
+    ) -> AppResult<i64> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO chat_messages (workspace_id, role, content, model, input_tokens, output_tokens, cost_usd, created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![workspace_id, role, content, model, input_tokens, output_tokens, cost, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn list_chat_messages(&self, workspace_id: &str) -> AppResult<Vec<ChatMessageRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, role, content, model, input_tokens, output_tokens, cost_usd, created_at
+             FROM chat_messages WHERE workspace_id = ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map(params![workspace_id], |r| {
+            Ok(ChatMessageRow {
+                id: r.get(0)?,
+                workspace_id: r.get(1)?,
+                role: r.get(2)?,
+                content: r.get(3)?,
+                model: r.get(4)?,
+                input_tokens: r.get(5)?,
+                output_tokens: r.get(6)?,
+                cost_usd: r.get(7)?,
+                created_at: r.get(8)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRow {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub task: String,
+    pub branch: String,
+    pub worktree_path: Option<String>,
+    pub setup_script: String,
+    pub status: String,
+    pub created_at: String,
+    pub last_active: String,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessageRow {
+    pub id: i64,
+    pub workspace_id: String,
+    pub role: String,
+    pub content: String,
+    pub model: Option<String>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cost_usd: Option<f64>,
+    pub created_at: String,
 }
 
 fn row_to_session(row: &rusqlite::Row) -> AppResult<Session> {

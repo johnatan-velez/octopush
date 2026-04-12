@@ -1,10 +1,12 @@
 //! Octopus sh — native core.
 
 pub mod agent_adapter;
+pub mod chat_engine;
 mod commands;
 pub mod context_guard;
 mod db;
 mod error;
+pub mod git_ops;
 pub mod provider_router;
 mod pty_manager;
 mod session;
@@ -66,6 +68,18 @@ pub fn run() {
             commands::get_theme,
             commands::set_theme,
             commands::list_themes,
+            // Projects
+            commands::open_project,
+            commands::list_recent_projects,
+            commands::create_project,
+            // Workspaces
+            commands::create_workspace,
+            commands::list_workspaces,
+            commands::get_git_status,
+            commands::get_git_diff,
+            // Chat
+            commands::send_chat_message,
+            commands::list_chat_messages,
         ])
         .setup(|app| {
             // Restore sessions that were active when the app last closed.
