@@ -4,6 +4,8 @@ import { TerminalPane } from "./components/TerminalPane";
 import { TokenDashboard } from "./components/TokenDashboard";
 import { NewSessionDialog } from "./components/NewSessionDialog";
 import { ModelSwitcher, ModelSwitcherButton } from "./components/ModelSwitcher";
+import { CommandPalette } from "./components/CommandPalette";
+import { ToastContainer } from "./components/Toasts";
 import { useSessionStore } from "./stores/sessionStore";
 
 function App() {
@@ -11,6 +13,9 @@ function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [showTokens, setShowTokens] = useState(false);
   const [showModelSwitcher, setShowModelSwitcher] = useState(false);
+  const [showPalette, setShowPalette] = useState(false);
+  /** ID of the second session shown in split view (null = no split). */
+  const [splitId, setSplitId] = useState<string | null>(null);
 
   useEffect(() => {
     refresh();
@@ -31,6 +36,23 @@ function App() {
       if (mod && e.shiftKey && (e.key === "M" || e.key === "m")) {
         e.preventDefault();
         setShowModelSwitcher((v) => !v);
+      }
+      if (mod && !e.shiftKey && e.key === "k") {
+        e.preventDefault();
+        setShowPalette((v) => !v);
+      }
+      if (mod && !e.shiftKey && e.key === "d") {
+        e.preventDefault();
+        setSplitId((prev) => {
+          if (prev) return null; // toggle off
+          const { sessions: ss, activeId: aid } = useSessionStore.getState();
+          const others = ss.filter(
+            (s) =>
+              s.id !== aid &&
+              (s.status === "active" || s.status === "idle"),
+          );
+          return others.length > 0 ? others[0].id : null;
+        });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -59,19 +81,38 @@ function App() {
         ) : null}
 
         <div className="relative flex flex-1 overflow-hidden">
-          <div className="flex-1 overflow-hidden">
-            {aliveSessions.length === 0 && !active ? (
+          {aliveSessions.length === 0 && !active ? (
+            <div className="flex-1">
               <EmptyMain onNewSession={() => setDialogOpen(true)} />
-            ) : (
-              aliveSessions.map((s) => (
-                <TerminalPane
-                  key={s.id}
-                  sessionId={s.id}
-                  visible={s.id === activeId}
-                />
-              ))
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="flex flex-1">
+              {/* Primary pane — always visible */}
+              <div className="flex-1 overflow-hidden">
+                {aliveSessions.map((s) => (
+                  <TerminalPane
+                    key={s.id}
+                    sessionId={s.id}
+                    visible={s.id === activeId}
+                  />
+                ))}
+              </div>
+
+              {/* Split pane — visible when ⌘D active */}
+              {splitId && (
+                <>
+                  <div className="w-px shrink-0 bg-octo-border" />
+                  <div className="flex-1 overflow-hidden">
+                    <TerminalPane
+                      key={`split-${splitId}`}
+                      sessionId={splitId}
+                      visible
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           {showTokens && <TokenDashboard />}
         </div>
@@ -87,6 +128,18 @@ function App() {
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
       />
+
+      <CommandPalette
+        open={showPalette}
+        onClose={() => setShowPalette(false)}
+        onNewSession={() => {
+          setShowPalette(false);
+          setDialogOpen(true);
+        }}
+        onToggleTokens={() => setShowTokens((v) => !v)}
+      />
+
+      <ToastContainer />
     </div>
   );
 }

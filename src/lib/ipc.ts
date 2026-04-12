@@ -8,6 +8,7 @@ import type {
   ModelSuggestion,
   ModelWithProvider,
   Session,
+  SessionRecap,
   SessionTemplate,
   TaskType,
   TokenEvent,
@@ -71,4 +72,8 @@ export const ipc = {
 
   switchAgent: (sessionId: string, newModel: string) =>
     invoke<Session>("switch_agent", { sessionId, newModel }),
+
+  // ─── Recap ────────────────────────────────────────────────────
+  getSessionRecap: (sessionId: string) =>
+    invoke<SessionRecap>("get_session_recap", { sessionId }),
 };

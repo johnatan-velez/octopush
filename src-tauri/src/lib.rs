@@ -8,6 +8,7 @@ mod error;
 pub mod provider_router;
 mod pty_manager;
 mod session;
+pub mod session_recap;
 mod state;
 pub mod template;
 pub mod token_engine;
@@ -55,6 +56,8 @@ pub fn run() {
             commands::suggest_model,
             commands::list_adapters,
             commands::switch_agent,
+            // Recap
+            commands::get_session_recap,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

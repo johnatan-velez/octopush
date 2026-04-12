@@ -234,6 +234,16 @@ pub async fn switch_agent(
     Ok(session)
 }
 
+// ─── Session Recap ────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_session_recap(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<crate::session_recap::SessionRecap> {
+    crate::session_recap::generate_recap(&state.db, &session_id)
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────
 
 /// Expand `~/...` to the user's home directory.

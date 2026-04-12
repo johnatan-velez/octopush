@@ -111,6 +111,22 @@ export interface BudgetStatus {
 
 // ─── Templates ────────────────────────────────────────────────────
 
+// ─── Session Recap ────────────────────────────────────────────────
+
+export interface SessionRecap {
+  sessionId: string;
+  sessionName: string;
+  tokensInput: number;
+  tokensOutput: number;
+  tokensTotal: number;
+  costUsd: number;
+  durationSecs: number;
+  model: string;
+  projectRoot: string;
+  createdAt: string;
+  endedAt: string;
+}
+
 // ─── Providers / Models ───────────────────────────────────────────
 
 export interface ModelInfo {
