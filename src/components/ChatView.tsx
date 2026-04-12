@@ -30,6 +30,12 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
   const { messages, streaming, streamBuffer, model, error, loadHistory, send, setModel, clearError, getTimeline } =
     useChatStore();
 
+  // Debug: log timeline contents
+  const timeline = getTimeline();
+  const toolCount = timeline.filter((i) => i.kind === "tool").length;
+  const msgCount = timeline.filter((i) => i.kind === "message").length;
+  console.log(`[ChatView] messages=${messages.length} timeline=${timeline.length} tools=${toolCount} msgs=${msgCount}`);
+
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -113,7 +119,7 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
         ) : (
           <>
             {/* Render the timeline: messages + tool cards interleaved */}
-            {getTimeline().map((item) =>
+            {timeline.map((item) =>
               item.kind === "tool" ? (
                 <ToolCallCard key={`tool-${item.id}`} tool={item.tool} workspacePath={workspacePath} />
               ) : (

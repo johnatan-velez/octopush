@@ -102,9 +102,11 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     getTimeline: () => {
       const items: ConversationItem[] = [];
-      for (const msg of get().messages) {
+      const msgs = get().messages;
+      for (const msg of msgs) {
         // Detect tool messages (role="tool" with JSON content).
-        if ((msg.role as string) === "tool") {
+        const role = msg.role as string;
+        if (role === "tool") {
           try {
             const tool: ToolExecution = JSON.parse(msg.content);
             items.push({ kind: "tool", tool, id: msg.id });
