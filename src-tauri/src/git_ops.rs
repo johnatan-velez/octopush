@@ -91,6 +91,10 @@ pub fn get_status(path: &Path) -> AppResult<GitStatus> {
 
 pub fn create_branch(path: &Path, branch_name: &str, from: &str) -> AppResult<()> {
     let repo = open_repo(path)?;
+    // If branch already exists, skip (idempotent).
+    if repo.find_reference(&format!("refs/heads/{branch_name}")).is_ok() {
+        return Ok(());
+    }
     let from_ref = repo.find_reference(&format!("refs/heads/{from}"))
         .map_err(|e| AppError::Other(format!("branch '{from}' not found: {e}")))?;
     let commit = from_ref.peel_to_commit()
@@ -101,7 +105,17 @@ pub fn create_branch(path: &Path, branch_name: &str, from: &str) -> AppResult<()
 }
 
 pub fn create_worktree(repo_path: &Path, branch: &str, worktree_path: &Path) -> AppResult<()> {
+    // If worktree path already exists (leftover from a failed attempt), clean up.
+    if worktree_path.exists() {
+        let _ = std::fs::remove_dir_all(worktree_path);
+    }
+    // If a worktree ref for this branch is dangling, prune it.
     let repo = open_repo(repo_path)?;
+    if let Ok(wt) = repo.find_worktree(branch) {
+        if !wt.validate().is_ok() {
+            let _ = wt.prune(None);
+        }
+    }
     std::fs::create_dir_all(worktree_path)?;
     repo.worktree(branch, worktree_path, None)
         .map_err(|e| AppError::Other(format!("create worktree: {e}")))?;
