@@ -3,6 +3,12 @@ import { listen } from "@tauri-apps/api/event";
 import { ipc } from "../lib/ipc";
 import type { ChatMessage, ChatStreamEvent } from "../lib/types";
 
+export interface ToolExecution {
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  result: string;
+}
+
 export interface ToolUseEvent {
   workspaceId: string;
   toolName: string;
@@ -10,14 +16,23 @@ export interface ToolUseEvent {
   result: string;
 }
 
+/** A display item in the conversation — either a regular message or a tool execution. */
+export type ConversationItem =
+  | { kind: "message"; message: ChatMessage }
+  | { kind: "tool"; tool: ToolExecution; id: number };
+
 interface ChatState {
+  /** The raw messages from DB. */
   messages: ChatMessage[];
   streaming: boolean;
   streamBuffer: string;
   model: string;
   error: string | null;
-  /** Tool executions shown inline during the current response. */
-  pendingTools: ToolUseEvent[];
+  /** Tool executions accumulated during the current agentic turn. */
+  liveTools: ToolExecution[];
+
+  /** Compute the conversation timeline (messages + tool cards interleaved). */
+  getTimeline: () => ConversationItem[];
 
   loadHistory: (workspaceId: string) => Promise<void>;
   send: (
@@ -53,17 +68,37 @@ export const useChatStore = create<ChatState>((set, get) => {
           },
         ],
         streamBuffer: "",
-        pendingTools: [],
+        liveTools: [],
       }));
     } else {
       set((s) => ({ streamBuffer: s.streamBuffer + payload.delta }));
     }
   });
 
-  // Listen for tool use events.
+  // Listen for tool use events (live, during agentic loop).
   listen<ToolUseEvent>("chat://tool-use", (ev) => {
+    const tool: ToolExecution = {
+      toolName: ev.payload.toolName,
+      toolInput: ev.payload.toolInput,
+      result: ev.payload.result,
+    };
+    // Add to liveTools AND persist in messages array as role="tool".
     set((s) => ({
-      pendingTools: [...s.pendingTools, ev.payload],
+      liveTools: [...s.liveTools, tool],
+      messages: [
+        ...s.messages,
+        {
+          id: Date.now() + Math.random(),
+          workspaceId: ev.payload.workspaceId,
+          role: "tool" as "user" | "assistant", // We'll handle this in the timeline
+          content: JSON.stringify(tool),
+          model: null,
+          inputTokens: null,
+          outputTokens: null,
+          costUsd: null,
+          createdAt: new Date().toISOString(),
+        },
+      ],
     }));
   });
 
@@ -73,7 +108,26 @@ export const useChatStore = create<ChatState>((set, get) => {
     streamBuffer: "",
     model: "claude-sonnet-4-6",
     error: null,
-    pendingTools: [],
+    liveTools: [],
+
+    getTimeline: () => {
+      const items: ConversationItem[] = [];
+      for (const msg of get().messages) {
+        // Detect tool messages (role="tool" with JSON content).
+        if ((msg.role as string) === "tool") {
+          try {
+            const tool: ToolExecution = JSON.parse(msg.content);
+            items.push({ kind: "tool", tool, id: msg.id });
+          } catch {
+            // Fallback: show as regular message if JSON parse fails.
+            items.push({ kind: "message", message: msg });
+          }
+        } else {
+          items.push({ kind: "message", message: msg });
+        }
+      }
+      return items;
+    },
 
     loadHistory: async (workspaceId) => {
       const messages = await ipc.listChatMessages(workspaceId);
@@ -98,7 +152,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         streaming: true,
         streamBuffer: "",
         error: null,
-        pendingTools: [],
+        liveTools: [],
       }));
 
       try {
@@ -116,7 +170,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     setModel: (model) => set({ model }),
-    clear: () => set({ messages: [], streamBuffer: "", error: null, pendingTools: [] }),
+    clear: () => set({ messages: [], streamBuffer: "", error: null, liveTools: [] }),
     clearError: () => set({ error: null }),
   };
 });

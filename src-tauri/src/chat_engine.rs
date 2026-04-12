@@ -379,10 +379,23 @@ impl ChatEngine {
                 "content": content,
             }));
 
-            // Execute each tool and collect results.
+            // Execute each tool, persist to DB, and collect results.
             let mut tool_results: Vec<serde_json::Value> = Vec::new();
             for (tool_id, tool_name, tool_input) in &tool_uses {
                 let result = execute_tool(&workspace_path, tool_name, tool_input);
+
+                // Persist tool execution to DB as role="tool" message.
+                let tool_record = serde_json::json!({
+                    "toolName": tool_name,
+                    "toolInput": tool_input,
+                    "result": result,
+                });
+                let _ = self.db.lock().insert_chat_message(
+                    &request.workspace_id,
+                    "tool",
+                    &tool_record.to_string(),
+                    None, None, None, None,
+                );
 
                 // Emit tool use event for the frontend.
                 let _ = app.emit("chat://tool-use", &ToolUseEvent {

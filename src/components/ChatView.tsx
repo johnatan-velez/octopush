@@ -4,6 +4,7 @@ import { clsx } from "clsx";
 import { useChatStore } from "../stores/chatStore";
 import { AgentBar } from "./AgentBar";
 import { ChatMessage } from "./ChatMessage";
+import { ToolCallCard } from "./ToolCallCard";
 
 interface Props {
   workspaceId: string;
@@ -26,7 +27,7 @@ const AGENT_NAMES: Record<string, string> = {
 };
 
 export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) {
-  const { messages, streaming, streamBuffer, model, error, pendingTools, loadHistory, send, setModel, clearError } =
+  const { messages, streaming, streamBuffer, model, error, loadHistory, send, setModel, clearError, getTimeline } =
     useChatStore();
 
   const [input, setInput] = useState("");
@@ -96,51 +97,34 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
           </div>
         ) : (
           <>
-            {messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} />
-            ))}
-
-            {/* Tool executions (shown inline while agent works) */}
-            {pendingTools.map((tool, i) => (
-              <div
-                key={i}
-                className="mx-auto max-w-[80%] rounded-lg border border-octo-border bg-zinc-900/50 px-4 py-3"
-              >
-                <div className="mb-1 flex items-center gap-2 text-[11px] text-zinc-500">
-                  <span className="font-mono">{">"}_</span>
-                  <span>Ran command</span>
-                  <span className="font-semibold text-zinc-300">{tool.toolName}</span>
-                </div>
-                {tool.toolInput && "command" in tool.toolInput && (
-                  <div className="mb-2 rounded-md bg-zinc-950 px-3 py-1.5 font-mono text-xs text-octo-warning">
-                    $ {String(tool.toolInput.command)}
-                  </div>
-                )}
-                {tool.toolInput && "path" in tool.toolInput && (
-                  <div className="mb-2 text-xs text-zinc-400">
-                    {tool.toolName === "write_file" ? "Writing to: " : "Reading: "}
-                    <span className="font-mono text-zinc-300">{String(tool.toolInput.path)}</span>
-                  </div>
-                )}
-                <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-400">
-                  {tool.result.length > 2000
-                    ? tool.result.slice(0, 2000) + "\n... (truncated)"
-                    : tool.result}
-                </pre>
-              </div>
-            ))}
+            {/* Render the timeline: messages + tool cards interleaved */}
+            {getTimeline().map((item) =>
+              item.kind === "tool" ? (
+                <ToolCallCard key={`tool-${item.id}`} tool={item.tool} />
+              ) : (
+                <ChatMessage key={item.message.id} message={item.message} />
+              ),
+            )}
 
             {/* Streaming partial message */}
-            {streaming && (
+            {streaming && streamBuffer && (
               <ChatMessage
                 message={{
                   role: "assistant",
-                  content: streamBuffer || (pendingTools.length > 0 ? "" : "▊"),
+                  content: streamBuffer + "▊",
                   model: null,
                   inputTokens: null,
                   outputTokens: null,
                 }}
               />
+            )}
+
+            {/* Working indicator while tools are executing */}
+            {streaming && !streamBuffer && (
+              <div className="mx-auto flex items-center gap-2 rounded-full bg-zinc-900/50 px-4 py-2 text-[11px] text-zinc-500">
+                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-octo-accent" />
+                Working...
+              </div>
             )}
 
             {/* Error message */}
