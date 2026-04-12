@@ -143,7 +143,7 @@ export function ChatMessage({ message }: Props) {
 
   if (role === "user") {
     return (
-      <div className="flex justify-end">
+      <div className="flex justify-end" data-role="user">
         <div className="max-w-[80%] rounded-2xl rounded-br-md bg-octo-accent/20 px-4 py-2.5 text-sm leading-relaxed text-zinc-200">
           {content}
         </div>

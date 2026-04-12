@@ -52,10 +52,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     const payload = ev.payload;
     if (payload.done) {
       // When the agentic loop finishes, reload the full conversation
-      // from DB. This is the authoritative source — it includes all
-      // tool executions, user messages, and assistant responses that
-      // were persisted during the loop. Relying on event-based local
-      // state was fragile (timing issues caused cards to disappear).
+      // from DB. This is the authoritative source.
       set({ streaming: false, streamBuffer: "", liveTools: [] });
       ipc.listChatMessages(payload.workspaceId).then((msgs) => {
         set({ messages: msgs as ChatMessage[] });

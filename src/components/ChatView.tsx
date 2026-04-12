@@ -30,11 +30,7 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
   const { messages, streaming, streamBuffer, model, error, loadHistory, send, setModel, clearError, getTimeline } =
     useChatStore();
 
-  // Debug: log timeline contents
   const timeline = getTimeline();
-  const toolCount = timeline.filter((i) => i.kind === "tool").length;
-  const msgCount = timeline.filter((i) => i.kind === "message").length;
-  console.log(`[ChatView] messages=${messages.length} timeline=${timeline.length} tools=${toolCount} msgs=${msgCount}`);
 
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -45,28 +41,30 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
     loadHistory(workspaceId);
   }, [workspaceId, loadHistory]);
 
-  // Track whether user is near the bottom of the scroll area.
-  const isNearBottomRef = useRef(true);
+  // Auto-scroll ONLY during active streaming (while agent is working).
+  // When streaming ends and DB reloads messages, do NOT scroll —
+  // the tool cards would be yanked above the viewport.
+  const prevStreamingRef = useRef(false);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onScroll = () => {
-      const threshold = 100;
-      isNearBottomRef.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
 
-  // Auto-scroll only if user was already near the bottom.
-  // This prevents tool cards from being yanked out of view.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && isNearBottomRef.current) {
+    if (streaming) {
+      // During streaming: always scroll to bottom to follow progress.
       el.scrollTop = el.scrollHeight;
+    } else if (prevStreamingRef.current && !streaming) {
+      // Just stopped streaming: scroll to show the first tool card
+      // after the last user message, not the very bottom.
+      // Find the last user message bubble and scroll it into view.
+      const userBubbles = el.querySelectorAll("[data-role='user']");
+      if (userBubbles.length > 0) {
+        const lastUser = userBubbles[userBubbles.length - 1] as HTMLElement;
+        lastUser.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     }
-  }, [messages, streamBuffer]);
+
+    prevStreamingRef.current = streaming;
+  }, [streaming, messages, streamBuffer]);
 
   // Auto-grow textarea
   function handleInput(e: React.ChangeEvent<HTMLTextAreaElement>) {
