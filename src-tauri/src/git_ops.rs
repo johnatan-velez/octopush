@@ -1,7 +1,7 @@
 //! Git operations for project and workspace management.
 
 use crate::error::{AppError, AppResult};
-use git2::{Repository, StatusOptions};
+use git2::{Repository, StatusOptions, WorktreeAddOptions};
 use serde::Serialize;
 use std::path::Path;
 
@@ -105,24 +105,36 @@ pub fn create_branch(path: &Path, branch_name: &str, from: &str) -> AppResult<()
 }
 
 pub fn create_worktree(repo_path: &Path, branch: &str, worktree_path: &Path) -> AppResult<()> {
-    // If worktree path already exists (leftover from a failed attempt), clean up.
+    // Clean up any leftover from a failed previous attempt.
     if worktree_path.exists() {
         let _ = std::fs::remove_dir_all(worktree_path);
     }
-    // If a worktree ref for this branch is dangling, prune it.
+
     let repo = open_repo(repo_path)?;
+
+    // Prune any dangling worktree refs.
     if let Ok(wt) = repo.find_worktree(branch) {
-        if !wt.validate().is_ok() {
+        if wt.validate().is_err() {
             let _ = wt.prune(None);
         }
     }
-    std::fs::create_dir_all(worktree_path)?;
-    repo.worktree(branch, worktree_path, None)
+
+    std::fs::create_dir_all(
+        worktree_path.parent().unwrap_or(worktree_path),
+    )?;
+
+    // Use WorktreeAddOptions with the existing branch reference so
+    // git2 doesn't try to create a new refs/heads/<name> (which would
+    // conflict with the branch we already created in create_branch).
+    let branch_ref = repo.find_reference(&format!("refs/heads/{branch}"))
+        .map_err(|e| AppError::Other(format!("branch '{branch}' not found: {e}")))?;
+
+    let mut opts = WorktreeAddOptions::new();
+    opts.reference(Some(&branch_ref));
+
+    repo.worktree(branch, worktree_path, Some(&opts))
         .map_err(|e| AppError::Other(format!("create worktree: {e}")))?;
-    let wt_repo = Repository::open(worktree_path)
-        .map_err(|e| AppError::Other(format!("open worktree: {e}")))?;
-    wt_repo.set_head(&format!("refs/heads/{branch}"))
-        .map_err(|e| AppError::Other(format!("checkout: {e}")))?;
+
     Ok(())
 }
 
