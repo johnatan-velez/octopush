@@ -1,11 +1,13 @@
 //! Octopus sh — native core.
 
 mod commands;
+pub mod context_guard;
 mod db;
 mod error;
 mod pty_manager;
 mod session;
 mod state;
+pub mod template;
 pub mod token_engine;
 
 #[cfg(test)]
@@ -41,6 +43,10 @@ pub fn run() {
             commands::record_token_event,
             commands::get_budget_status,
             commands::set_token_budget,
+            // Templates
+            commands::list_templates,
+            commands::save_template,
+            commands::delete_template,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

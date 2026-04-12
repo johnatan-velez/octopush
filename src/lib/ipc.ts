@@ -5,6 +5,7 @@ import type {
   BudgetStatus,
   CreateSessionArgs,
   Session,
+  SessionTemplate,
   TokenEvent,
   TokenReport,
 } from "./types";
@@ -46,4 +47,13 @@ export const ipc = {
 
   setTokenBudget: (sessionId: string, budget: number | null) =>
     invoke<void>("set_token_budget", { sessionId, budget }),
+
+  // ─── Templates ────────────────────────────────────────────────
+  listTemplates: () => invoke<SessionTemplate[]>("list_templates"),
+
+  saveTemplate: (template: SessionTemplate) =>
+    invoke<void>("save_template", { template }),
+
+  deleteTemplate: (name: string) =>
+    invoke<void>("delete_template", { name }),
 };

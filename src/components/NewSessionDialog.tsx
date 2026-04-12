@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { useSessionStore } from "../stores/sessionStore";
+import { ipc } from "../lib/ipc";
+import type { SessionTemplate } from "../lib/types";
 
 interface Props {
   open: boolean;
@@ -29,17 +31,40 @@ export function NewSessionDialog({ open, onClose }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Templates
+  const [templates, setTemplates] = useState<SessionTemplate[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+
   useEffect(() => {
-    if (!open) {
-      setName("");
-      setProjectRoot(DEFAULT_ROOT);
-      setIcon(ICONS[0]);
-      setColor(COLORS[0]);
-      setTagsInput("");
-      setError(null);
-      setSubmitting(false);
+    if (open) {
+      setLoadingTemplates(true);
+      ipc
+        .listTemplates()
+        .then(setTemplates)
+        .catch(() => setTemplates([]))
+        .finally(() => setLoadingTemplates(false));
+    } else {
+      resetForm();
     }
   }, [open]);
+
+  function resetForm() {
+    setName("");
+    setProjectRoot(DEFAULT_ROOT);
+    setIcon(ICONS[0]);
+    setColor(COLORS[0]);
+    setTagsInput("");
+    setError(null);
+    setSubmitting(false);
+  }
+
+  function applyTemplate(t: SessionTemplate) {
+    setName(t.name);
+    setProjectRoot(t.projectRoot);
+    setIcon(t.icon ?? ICONS[0]);
+    setColor(t.color ?? COLORS[0]);
+    setTagsInput((t.tags ?? []).join(", "));
+  }
 
   if (!open) return null;
 
@@ -52,12 +77,9 @@ export function NewSessionDialog({ open, onClose }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      const expanded = projectRoot.startsWith("~/")
-        ? projectRoot // backend doesn't expand ~; leave as-is for Phase 1
-        : projectRoot;
       await create({
         name: name.trim(),
-        projectRoot: expanded,
+        projectRoot: projectRoot,
         icon,
         color,
         tags: tagsInput
@@ -80,11 +102,36 @@ export function NewSessionDialog({ open, onClose }: Props) {
       <form
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
-        className="w-[440px] rounded-xl border border-octo-border bg-octo-panel p-6 shadow-2xl"
+        className="w-[480px] rounded-xl border border-octo-border bg-octo-panel p-6 shadow-2xl"
       >
         <h2 className="mb-4 text-lg font-semibold tracking-tight">
           New session
         </h2>
+
+        {/* Template picker */}
+        {templates.length > 0 && (
+          <div className="mb-4">
+            <div className="mb-1 text-xs uppercase tracking-wider text-zinc-500">
+              From template
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {templates.map((t) => (
+                <button
+                  type="button"
+                  key={t.name}
+                  onClick={() => applyTemplate(t)}
+                  className="flex items-center gap-1.5 rounded-md border border-octo-border bg-octo-bg px-2.5 py-1.5 text-xs transition hover:border-octo-accent/50 hover:bg-octo-accent/5"
+                >
+                  <span>{t.icon ?? "🐙"}</span>
+                  <span>{t.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {loadingTemplates && (
+          <div className="mb-3 text-xs text-zinc-600">Loading templates…</div>
+        )}
 
         <label className="mb-3 block">
           <span className="mb-1 block text-xs uppercase tracking-wider text-zinc-500">

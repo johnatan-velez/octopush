@@ -108,3 +108,17 @@ export interface BudgetStatus {
   remaining: number | null;
   percentUsed: number | null;
 }
+
+// ─── Templates ────────────────────────────────────────────────────
+
+export interface SessionTemplate {
+  name: string;
+  projectRoot: string;
+  agent?: AgentConfig;
+  env?: Record<string, string>;
+  contextFiles?: string[];
+  tokenBudget?: number;
+  tags?: string[];
+  icon?: string;
+  color?: string;
+}

@@ -1,11 +1,13 @@
 //! Tauri IPC commands bridging the JS frontend to the Rust core.
 
+use crate::context_guard::ContextGuard;
 use crate::error::{AppError, AppResult};
 use crate::pty_manager::SpawnOptions;
 use crate::session::{CreateSessionArgs, Session, SessionStatus};
 use crate::state::AppState;
 use crate::token_engine::{BudgetStatus, TokenEvent, TokenReport};
 use std::collections::HashMap;
+use std::path::Path;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
@@ -23,6 +25,15 @@ pub async fn create_session(
     // Expand ~/... paths to absolute before spawning.
     session.project_root = expand_tilde(&session.project_root);
 
+    // Auto-configure context from project root.
+    let guard = ContextGuard::auto_configure(&id, Path::new(&session.project_root));
+    // Store detected context files in the session record.
+    session.context_files = guard
+        .context_files
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+
     // Persist first so the UI has a stable record even if spawn fails later.
     state.db.lock().upsert_session(&session)?;
 
@@ -37,6 +48,10 @@ pub async fn create_session(
         }
     });
 
+    // Merge guard env into PTY env (isolated HISTFILE, project type, git branch).
+    let mut env = HashMap::new();
+    guard.apply_env(&mut env);
+
     // Spawn PTY
     state.pty.lock().spawn(
         app,
@@ -44,7 +59,7 @@ pub async fn create_session(
             id: id.clone(),
             session_name: session.name.clone(),
             cwd: session.project_root.clone(),
-            env: HashMap::new(),
+            env,
             rows: 24,
             cols: 80,
             shell: None,
@@ -148,6 +163,25 @@ pub async fn set_token_budget(
     budget: Option<u64>,
 ) -> AppResult<()> {
     state.tokens.set_budget(&session_id, budget)
+}
+
+// ─── Template commands ────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn list_templates() -> AppResult<Vec<crate::template::SessionTemplate>> {
+    crate::template::list_templates()
+}
+
+#[tauri::command]
+pub async fn save_template(
+    template: crate::template::SessionTemplate,
+) -> AppResult<()> {
+    crate::template::save_template(&template)
+}
+
+#[tauri::command]
+pub async fn delete_template(name: String) -> AppResult<()> {
+    crate::template::delete_template(&name)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────
