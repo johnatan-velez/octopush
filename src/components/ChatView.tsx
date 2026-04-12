@@ -100,7 +100,7 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
             {/* Render the timeline: messages + tool cards interleaved */}
             {getTimeline().map((item) =>
               item.kind === "tool" ? (
-                <ToolCallCard key={`tool-${item.id}`} tool={item.tool} />
+                <ToolCallCard key={`tool-${item.id}`} tool={item.tool} workspacePath={workspacePath} />
               ) : (
                 <ChatMessage key={item.message.id} message={item.message} />
               ),

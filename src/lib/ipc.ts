@@ -122,6 +122,10 @@ export const ipc = {
   getGitStatus: (path: string) => invoke<GitStatus>("get_git_status", { path }),
   getGitDiff: (path: string) => invoke<string>("get_git_diff", { path }),
 
+  // ─── File operations ───────────────────────────────────────────
+  openFileInSystem: (path: string) => invoke<void>("open_file_in_system", { path }),
+  revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
+
   // ─── Settings ─────────────────────────────────────────────────
   getSettings: () =>
     invoke<{ anthropicApiKey: string | null; openaiApiKey: string | null }>("get_settings"),

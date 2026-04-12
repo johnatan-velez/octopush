@@ -81,6 +81,9 @@ pub fn run() {
             // Chat
             commands::send_chat_message,
             commands::list_chat_messages,
+            // File operations
+            commands::open_file_in_system,
+            commands::reveal_in_finder,
             // Settings
             commands::get_settings,
             commands::save_settings,

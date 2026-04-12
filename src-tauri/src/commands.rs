@@ -487,6 +487,42 @@ pub async fn list_chat_messages(
     state.db.lock().list_chat_messages(&workspace_id)
 }
 
+// ─── File operations ──────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn open_file_in_system(path: String) -> AppResult<()> {
+    let path = expand_tilde(&path);
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("Failed to open: {e}")))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("Failed to open: {e}")))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reveal_in_finder(path: String) -> AppResult<()> {
+    let path = expand_tilde(&path);
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("Failed to reveal: {e}")))?;
+    }
+    Ok(())
+}
+
 // ─── Settings ─────────────────────────────────────────────────────
 
 #[tauri::command]
