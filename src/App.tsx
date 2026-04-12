@@ -228,7 +228,13 @@ function App() {
 
       case "chat":
         if (activeWorkspaceId) {
-          return <ChatView workspaceId={activeWorkspaceId} onOpenSettings={() => setShowSettings(true)} />;
+          return (
+            <ChatView
+              workspaceId={activeWorkspaceId}
+              workspacePath={activeWorkspace?.worktreePath || project?.path || ""}
+              onOpenSettings={() => setShowSettings(true)}
+            />
+          );
         }
         return (
           <div className="flex h-full items-center justify-center text-sm text-zinc-500">

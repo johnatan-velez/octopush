@@ -108,8 +108,14 @@ export const ipc = {
   listWorkspaces: (projectId: string) => invoke<Workspace[]>("list_workspaces", { projectId }),
 
   // ─── Chat ───────────────────────────────────────────────────────
-  sendChatMessage: (request: { workspaceId: string; model: string; messages: { role: string; content: string }[]; system?: string; maxTokens: number }) =>
-    invoke<void>("send_chat_message", { request }),
+  sendChatMessage: (request: {
+    workspaceId: string;
+    workspacePath: string;
+    model: string;
+    userMessage: string;
+    system?: string;
+    maxTokens: number;
+  }) => invoke<void>("send_chat_message", { request }),
   listChatMessages: (workspaceId: string) => invoke<ChatMessage[]>("list_chat_messages", { workspaceId }),
 
   // ─── Git ────────────────────────────────────────────────────────

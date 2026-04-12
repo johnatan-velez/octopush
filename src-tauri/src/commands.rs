@@ -476,7 +476,7 @@ pub async fn send_chat_message(
     state: State<'_, AppState>,
     request: crate::chat_engine::ChatRequest,
 ) -> AppResult<()> {
-    state.chat.send_streaming(app, request).await
+    state.chat.send_agentic(app, request).await
 }
 
 #[tauri::command]

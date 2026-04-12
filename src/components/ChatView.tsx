@@ -7,6 +7,7 @@ import { ChatMessage } from "./ChatMessage";
 
 interface Props {
   workspaceId: string;
+  workspacePath: string;
   onOpenSettings?: () => void;
 }
 
@@ -24,8 +25,8 @@ const AGENT_NAMES: Record<string, string> = {
   "claude-haiku-4-5": "Haiku",
 };
 
-export function ChatView({ workspaceId, onOpenSettings }: Props) {
-  const { messages, streaming, streamBuffer, model, error, loadHistory, send, setModel, clearError } =
+export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) {
+  const { messages, streaming, streamBuffer, model, error, pendingTools, loadHistory, send, setModel, clearError } =
     useChatStore();
 
   const [input, setInput] = useState("");
@@ -62,7 +63,7 @@ export function ChatView({ workspaceId, onOpenSettings }: Props) {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-    send(workspaceId, trimmed);
+    send(workspaceId, workspacePath, trimmed);
   }, [input, streaming, send, workspaceId]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -99,12 +100,42 @@ export function ChatView({ workspaceId, onOpenSettings }: Props) {
               <ChatMessage key={msg.id} message={msg} />
             ))}
 
+            {/* Tool executions (shown inline while agent works) */}
+            {pendingTools.map((tool, i) => (
+              <div
+                key={i}
+                className="mx-auto max-w-[80%] rounded-lg border border-octo-border bg-zinc-900/50 px-4 py-3"
+              >
+                <div className="mb-1 flex items-center gap-2 text-[11px] text-zinc-500">
+                  <span className="font-mono">{">"}_</span>
+                  <span>Ran command</span>
+                  <span className="font-semibold text-zinc-300">{tool.toolName}</span>
+                </div>
+                {tool.toolInput && "command" in tool.toolInput && (
+                  <div className="mb-2 rounded-md bg-zinc-950 px-3 py-1.5 font-mono text-xs text-octo-warning">
+                    $ {String(tool.toolInput.command)}
+                  </div>
+                )}
+                {tool.toolInput && "path" in tool.toolInput && (
+                  <div className="mb-2 text-xs text-zinc-400">
+                    {tool.toolName === "write_file" ? "Writing to: " : "Reading: "}
+                    <span className="font-mono text-zinc-300">{String(tool.toolInput.path)}</span>
+                  </div>
+                )}
+                <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-400">
+                  {tool.result.length > 2000
+                    ? tool.result.slice(0, 2000) + "\n... (truncated)"
+                    : tool.result}
+                </pre>
+              </div>
+            ))}
+
             {/* Streaming partial message */}
             {streaming && (
               <ChatMessage
                 message={{
                   role: "assistant",
-                  content: streamBuffer + "▊",
+                  content: streamBuffer || (pendingTools.length > 0 ? "" : "▊"),
                   model: null,
                   inputTokens: null,
                   outputTokens: null,

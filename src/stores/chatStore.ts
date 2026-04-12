@@ -3,22 +3,36 @@ import { listen } from "@tauri-apps/api/event";
 import { ipc } from "../lib/ipc";
 import type { ChatMessage, ChatStreamEvent } from "../lib/types";
 
+export interface ToolUseEvent {
+  workspaceId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  result: string;
+}
+
 interface ChatState {
   messages: ChatMessage[];
   streaming: boolean;
   streamBuffer: string;
   model: string;
   error: string | null;
+  /** Tool executions shown inline during the current response. */
+  pendingTools: ToolUseEvent[];
 
   loadHistory: (workspaceId: string) => Promise<void>;
-  send: (workspaceId: string, content: string, systemPrompt?: string) => Promise<void>;
+  send: (
+    workspaceId: string,
+    workspacePath: string,
+    content: string,
+    systemPrompt?: string,
+  ) => Promise<void>;
   setModel: (model: string) => void;
   clear: () => void;
   clearError: () => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => {
-  // Listen for streaming events from the Rust backend.
+  // Listen for streaming text events.
   listen<ChatStreamEvent>("chat://stream", (ev) => {
     const payload = ev.payload;
     if (payload.done) {
@@ -39,10 +53,18 @@ export const useChatStore = create<ChatState>((set, get) => {
           },
         ],
         streamBuffer: "",
+        pendingTools: [],
       }));
     } else {
       set((s) => ({ streamBuffer: s.streamBuffer + payload.delta }));
     }
+  });
+
+  // Listen for tool use events.
+  listen<ToolUseEvent>("chat://tool-use", (ev) => {
+    set((s) => ({
+      pendingTools: [...s.pendingTools, ev.payload],
+    }));
   });
 
   return {
@@ -51,13 +73,14 @@ export const useChatStore = create<ChatState>((set, get) => {
     streamBuffer: "",
     model: "claude-sonnet-4-6",
     error: null,
+    pendingTools: [],
 
     loadHistory: async (workspaceId) => {
       const messages = await ipc.listChatMessages(workspaceId);
       set({ messages: messages as ChatMessage[] });
     },
 
-    send: async (workspaceId, content, systemPrompt) => {
+    send: async (workspaceId, workspacePath, content, systemPrompt) => {
       const userMsg: ChatMessage = {
         id: Date.now(),
         workspaceId,
@@ -70,14 +93,20 @@ export const useChatStore = create<ChatState>((set, get) => {
         createdAt: new Date().toISOString(),
       };
 
-      const allMessages = [...get().messages, userMsg];
-      set({ messages: allMessages, streaming: true, streamBuffer: "", error: null });
+      set((s) => ({
+        messages: [...s.messages, userMsg],
+        streaming: true,
+        streamBuffer: "",
+        error: null,
+        pendingTools: [],
+      }));
 
       try {
         await ipc.sendChatMessage({
           workspaceId,
+          workspacePath,
           model: get().model,
-          messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
+          userMessage: content,
           system: systemPrompt,
           maxTokens: 8192,
         });
@@ -87,7 +116,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     setModel: (model) => set({ model }),
-    clear: () => set({ messages: [], streamBuffer: "", error: null }),
+    clear: () => set({ messages: [], streamBuffer: "", error: null, pendingTools: [] }),
     clearError: () => set({ error: null }),
   };
 });
