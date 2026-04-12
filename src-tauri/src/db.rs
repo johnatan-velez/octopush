@@ -219,6 +219,28 @@ impl Db {
         Ok(())
     }
 
+    pub fn list_token_events(&self, session_id: &str) -> AppResult<Vec<TokenEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, timestamp, input_tokens, output_tokens,
+                    cache_read, cache_create, model, cost_usd
+             FROM token_events WHERE session_id = ?1 ORDER BY timestamp",
+        )?;
+        let rows = stmt.query_map(params![session_id], |r| {
+            Ok(TokenEvent {
+                id: None,
+                session_id: r.get(0)?,
+                timestamp: r.get(1)?,
+                input_tokens: r.get::<_, i64>(2)? as u64,
+                output_tokens: r.get::<_, i64>(3)? as u64,
+                cache_read_tokens: r.get::<_, i64>(4)? as u64,
+                cache_creation_tokens: r.get::<_, i64>(5)? as u64,
+                model: r.get(6)?,
+                cost_usd: r.get(7)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn token_report(&self, session_id: Option<&str>) -> AppResult<TokenReport> {
         let (where_clause, filter_val) = match session_id {
             Some(id) => ("WHERE session_id = ?1", id.to_string()),

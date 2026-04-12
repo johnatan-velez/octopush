@@ -7,6 +7,7 @@ import { ModelSwitcher, ModelSwitcherButton } from "./components/ModelSwitcher";
 import { CommandPalette } from "./components/CommandPalette";
 import { ToastContainer } from "./components/Toasts";
 import { useSessionStore } from "./stores/sessionStore";
+import { useThemeStore } from "./stores/themeStore";
 
 function App() {
   const { sessions, activeId, refresh } = useSessionStore();
@@ -14,12 +15,16 @@ function App() {
   const [showTokens, setShowTokens] = useState(false);
   const [showModelSwitcher, setShowModelSwitcher] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(true);
   /** ID of the second session shown in split view (null = no split). */
   const [splitId, setSplitId] = useState<string | null>(null);
 
+  const loadTheme = useThemeStore((s) => s.load);
+
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    loadTheme();
+  }, [refresh, loadTheme]);
 
   // Global shortcuts
   useEffect(() => {
@@ -54,6 +59,43 @@ function App() {
           return others.length > 0 ? others[0].id : null;
         });
       }
+      // ⌘W — close/kill active session
+      if (mod && !e.shiftKey && e.key === "w") {
+        e.preventDefault();
+        const { activeId: aid, kill: killFn, sessions: ss, select: selFn } =
+          useSessionStore.getState();
+        if (aid) {
+          killFn(aid).then(() => {
+            const remaining = ss.filter((s) => s.id !== aid);
+            selFn(remaining.length > 0 ? remaining[0].id : null);
+          });
+        }
+      }
+      // ⌘1-9 — switch to session by index
+      if (mod && !e.shiftKey && e.key >= "1" && e.key <= "9") {
+        e.preventDefault();
+        const idx = parseInt(e.key, 10) - 1;
+        const { sessions: ss, select: selFn } = useSessionStore.getState();
+        if (idx < ss.length) {
+          selFn(ss[idx].id);
+        }
+      }
+      // ⌘\ — toggle sidebar
+      if (mod && e.key === "\\") {
+        e.preventDefault();
+        setShowSidebar((v) => !v);
+      }
+      // Ctrl+Tab — next session
+      if (e.ctrlKey && e.key === "Tab") {
+        e.preventDefault();
+        const { sessions: ss, activeId: aid, select: selFn } =
+          useSessionStore.getState();
+        if (ss.length > 1 && aid) {
+          const idx = ss.findIndex((s) => s.id === aid);
+          const next = (idx + 1) % ss.length;
+          selFn(ss[next].id);
+        }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -67,7 +109,9 @@ function App() {
 
   return (
     <div className="flex h-screen w-screen bg-octo-bg text-zinc-100">
-      <SessionSidebar onNewSession={() => setDialogOpen(true)} />
+      {showSidebar && (
+        <SessionSidebar onNewSession={() => setDialogOpen(true)} />
+      )}
 
       <main className="relative flex flex-1 flex-col">
         {active ? (

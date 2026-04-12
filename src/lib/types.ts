@@ -111,6 +111,24 @@ export interface BudgetStatus {
 
 // ─── Templates ────────────────────────────────────────────────────
 
+// ─── Theme ────────────────────────────────────────────────────────
+
+export interface ThemeConfig {
+  name: string;
+  bg: string;
+  panel: string;
+  border: string;
+  accent: string;
+  accentDim: string;
+  success: string;
+  warning: string;
+  danger: string;
+  text: string;
+  textDim: string;
+  textMuted: string;
+  terminalBg: string;
+}
+
 // ─── Session Recap ────────────────────────────────────────────────
 
 export interface SessionRecap {

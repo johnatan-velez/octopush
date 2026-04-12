@@ -244,6 +244,66 @@ pub async fn get_session_recap(
     crate::session_recap::generate_recap(&state.db, &session_id)
 }
 
+// ─── Theme ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_theme() -> AppResult<crate::theme::ThemeConfig> {
+    crate::theme::load_theme()
+}
+
+#[tauri::command]
+pub async fn set_theme(theme: crate::theme::ThemeConfig) -> AppResult<()> {
+    crate::theme::save_theme(&theme)
+}
+
+#[tauri::command]
+pub async fn list_themes() -> AppResult<Vec<crate::theme::ThemeConfig>> {
+    Ok(crate::theme::builtin_themes())
+}
+
+// ─── Export ───────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportData {
+    pub session: crate::session::Session,
+    pub events: Vec<crate::token_engine::TokenEvent>,
+    pub recap: crate::session_recap::SessionRecap,
+}
+
+#[tauri::command]
+pub async fn export_session_json(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<String> {
+    let session = state
+        .db
+        .lock()
+        .get_session(&session_id)?
+        .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
+    let events = state.db.lock().list_token_events(&session_id)?;
+    let recap = crate::session_recap::generate_recap(&state.db, &session_id)?;
+    let data = ExportData { session, events, recap };
+    Ok(serde_json::to_string_pretty(&data)?)
+}
+
+#[tauri::command]
+pub async fn export_session_csv(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<String> {
+    let events = state.db.lock().list_token_events(&session_id)?;
+    let mut csv = String::from("timestamp,model,input_tokens,output_tokens,cache_read,cache_create,cost_usd\n");
+    for e in &events {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{:.6}\n",
+            e.timestamp, e.model, e.input_tokens, e.output_tokens,
+            e.cache_read_tokens, e.cache_creation_tokens, e.cost_usd,
+        ));
+    }
+    Ok(csv)
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────
 
 /// Expand `~/...` to the user's home directory.

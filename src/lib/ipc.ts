@@ -11,6 +11,7 @@ import type {
   SessionRecap,
   SessionTemplate,
   TaskType,
+  ThemeConfig,
   TokenEvent,
   TokenReport,
 } from "./types";
@@ -73,7 +74,18 @@ export const ipc = {
   switchAgent: (sessionId: string, newModel: string) =>
     invoke<Session>("switch_agent", { sessionId, newModel }),
 
-  // ─── Recap ────────────────────────────────────────────────────
+  // ─── Recap / Export ────────────────────────────────────────────
   getSessionRecap: (sessionId: string) =>
     invoke<SessionRecap>("get_session_recap", { sessionId }),
+
+  exportSessionJson: (sessionId: string) =>
+    invoke<string>("export_session_json", { sessionId }),
+
+  exportSessionCsv: (sessionId: string) =>
+    invoke<string>("export_session_csv", { sessionId }),
+
+  // ─── Theme ────────────────────────────────────────────────────
+  getTheme: () => invoke<ThemeConfig>("get_theme"),
+  setTheme: (theme: ThemeConfig) => invoke<void>("set_theme", { theme }),
+  listThemes: () => invoke<ThemeConfig[]>("list_themes"),
 };

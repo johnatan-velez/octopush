@@ -7,11 +7,14 @@ import {
   XCircle,
   FileText,
   Coins,
+  Download,
   LayoutTemplate,
+  Palette,
 } from "lucide-react";
 import { useSessionStore } from "../stores/sessionStore";
 import { ipc } from "../lib/ipc";
 import type { ModelWithProvider, SessionTemplate } from "../lib/types";
+import { useThemeStore } from "../stores/themeStore";
 
 interface Props {
   open: boolean;
@@ -30,6 +33,7 @@ export function CommandPalette({
   const refresh = useSessionStore((s) => s.refresh);
   const [models, setModels] = useState<ModelWithProvider[]>([]);
   const [templates, setTemplates] = useState<SessionTemplate[]>([]);
+  const { themes, apply: applyTheme } = useThemeStore();
 
   useEffect(() => {
     if (open) {
@@ -189,12 +193,63 @@ export function CommandPalette({
                   })
                 }
               />
+              {activeSession && (
+                <>
+                  <PaletteItem
+                    icon={<Download size={14} />}
+                    label="Export session (JSON)"
+                    onSelect={() =>
+                      run(async () => {
+                        const json = await ipc.exportSessionJson(activeSession.id);
+                        downloadFile(`${activeSession.name}.json`, json, "application/json");
+                      })
+                    }
+                  />
+                  <PaletteItem
+                    icon={<Download size={14} />}
+                    label="Export session (CSV)"
+                    onSelect={() =>
+                      run(async () => {
+                        const csv = await ipc.exportSessionCsv(activeSession.id);
+                        downloadFile(`${activeSession.name}.csv`, csv, "text/csv");
+                      })
+                    }
+                  />
+                </>
+              )}
             </Command.Group>
+
+            {/* Theme picker */}
+            {themes.length > 0 && (
+              <Command.Group
+                heading="Themes"
+                className="mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
+              >
+                {themes.map((t) => (
+                  <PaletteItem
+                    key={t.name}
+                    icon={<Palette size={14} />}
+                    label={`Theme: ${t.name}`}
+                    onSelect={() => run(() => applyTheme(t))}
+                  />
+                ))}
+              </Command.Group>
+            )}
           </Command.List>
         </Command>
       </div>
     </div>
   );
+}
+
+function downloadFile(name: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function PaletteItem({
