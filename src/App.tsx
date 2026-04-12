@@ -10,6 +10,7 @@ import { TerminalPane } from "./components/TerminalPane";
 import { TokenDashboard } from "./components/TokenDashboard";
 import { CommandPalette } from "./components/CommandPalette";
 import { ToastContainer } from "./components/Toasts";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { useProjectStore } from "./stores/projectStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useThemeStore } from "./stores/themeStore";
@@ -27,6 +28,7 @@ function App() {
   const [showTokens, setShowTokens] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showCreator, setShowCreator] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Map of workspaceId -> sessionId for terminal sessions
   const [terminalSessions, setTerminalSessions] = useState<Record<string, string>>({});
@@ -226,7 +228,7 @@ function App() {
 
       case "chat":
         if (activeWorkspaceId) {
-          return <ChatView workspaceId={activeWorkspaceId} />;
+          return <ChatView workspaceId={activeWorkspaceId} onOpenSettings={() => setShowSettings(true)} />;
         }
         return (
           <div className="flex h-full items-center justify-center text-sm text-zinc-500">
@@ -291,6 +293,11 @@ function App() {
           setShowCreator(true);
         }}
         onToggleTokens={() => setShowTokens((v) => !v)}
+      />
+
+      <SettingsDialog
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
       />
 
       <ToastContainer />

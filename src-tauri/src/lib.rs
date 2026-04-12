@@ -11,6 +11,7 @@ pub mod provider_router;
 mod pty_manager;
 mod session;
 pub mod session_recap;
+pub mod settings;
 mod state;
 pub mod template;
 pub mod theme;
@@ -80,6 +81,9 @@ pub fn run() {
             // Chat
             commands::send_chat_message,
             commands::list_chat_messages,
+            // Settings
+            commands::get_settings,
+            commands::save_settings,
         ])
         .setup(|app| {
             // Restore sessions that were active when the app last closed.

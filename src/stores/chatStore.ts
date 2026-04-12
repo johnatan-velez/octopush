@@ -8,11 +8,13 @@ interface ChatState {
   streaming: boolean;
   streamBuffer: string;
   model: string;
+  error: string | null;
 
   loadHistory: (workspaceId: string) => Promise<void>;
   send: (workspaceId: string, content: string, systemPrompt?: string) => Promise<void>;
   setModel: (model: string) => void;
   clear: () => void;
+  clearError: () => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => {
@@ -48,6 +50,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     streaming: false,
     streamBuffer: "",
     model: "claude-sonnet-4-6",
+    error: null,
 
     loadHistory: async (workspaceId) => {
       const messages = await ipc.listChatMessages(workspaceId);
@@ -68,18 +71,23 @@ export const useChatStore = create<ChatState>((set, get) => {
       };
 
       const allMessages = [...get().messages, userMsg];
-      set({ messages: allMessages, streaming: true, streamBuffer: "" });
+      set({ messages: allMessages, streaming: true, streamBuffer: "", error: null });
 
-      await ipc.sendChatMessage({
-        workspaceId,
-        model: get().model,
-        messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
-        system: systemPrompt,
-        maxTokens: 8192,
-      });
+      try {
+        await ipc.sendChatMessage({
+          workspaceId,
+          model: get().model,
+          messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
+          system: systemPrompt,
+          maxTokens: 8192,
+        });
+      } catch (e) {
+        set({ streaming: false, streamBuffer: "", error: String(e) });
+      }
     },
 
     setModel: (model) => set({ model }),
-    clear: () => set({ messages: [], streamBuffer: "" }),
+    clear: () => set({ messages: [], streamBuffer: "", error: null }),
+    clearError: () => set({ error: null }),
   };
 });

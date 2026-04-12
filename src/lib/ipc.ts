@@ -115,4 +115,10 @@ export const ipc = {
   // ─── Git ────────────────────────────────────────────────────────
   getGitStatus: (path: string) => invoke<GitStatus>("get_git_status", { path }),
   getGitDiff: (path: string) => invoke<string>("get_git_diff", { path }),
+
+  // ─── Settings ─────────────────────────────────────────────────
+  getSettings: () =>
+    invoke<{ anthropicApiKey: string | null; openaiApiKey: string | null }>("get_settings"),
+  saveSettings: (settings: { anthropicApiKey: string | null; openaiApiKey: string | null }) =>
+    invoke<void>("save_settings", { settings }),
 };

@@ -487,6 +487,18 @@ pub async fn list_chat_messages(
     state.db.lock().list_chat_messages(&workspace_id)
 }
 
+// ─── Settings ─────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_settings() -> AppResult<crate::settings::AppSettings> {
+    crate::settings::load_settings()
+}
+
+#[tauri::command]
+pub async fn save_settings(settings: crate::settings::AppSettings) -> AppResult<()> {
+    crate::settings::save_settings(&settings)
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────
 
 /// Expand `~/...` to the user's home directory.

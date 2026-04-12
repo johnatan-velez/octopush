@@ -170,6 +170,13 @@ export interface FileChange {
   status: "new" | "modified" | "deleted" | "renamed" | "unknown";
 }
 
+// ─── Settings ─────────────────────────────────────────────────────
+
+export interface AppSettings {
+  anthropicApiKey: string | null;
+  openaiApiKey: string | null;
+}
+
 // ─── Theme ────────────────────────────────────────────────────────
 
 export interface ThemeConfig {

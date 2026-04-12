@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { MessageSquare, ArrowUp } from "lucide-react";
+import { MessageSquare, ArrowUp, AlertTriangle, Settings } from "lucide-react";
 import { clsx } from "clsx";
 import { useChatStore } from "../stores/chatStore";
 import { AgentBar } from "./AgentBar";
@@ -7,6 +7,7 @@ import { ChatMessage } from "./ChatMessage";
 
 interface Props {
   workspaceId: string;
+  onOpenSettings?: () => void;
 }
 
 const AGENT_COLORS: Record<string, string> = {
@@ -23,8 +24,8 @@ const AGENT_NAMES: Record<string, string> = {
   "claude-haiku-4-5": "Haiku",
 };
 
-export function ChatView({ workspaceId }: Props) {
-  const { messages, streaming, streamBuffer, model, loadHistory, send, setModel } =
+export function ChatView({ workspaceId, onOpenSettings }: Props) {
+  const { messages, streaming, streamBuffer, model, error, loadHistory, send, setModel, clearError } =
     useChatStore();
 
   const [input, setInput] = useState("");
@@ -109,6 +110,28 @@ export function ChatView({ workspaceId }: Props) {
                   outputTokens: null,
                 }}
               />
+            )}
+
+            {/* Error message */}
+            {error && (
+              <div className="mx-auto max-w-lg rounded-lg border border-octo-danger/40 bg-octo-danger/10 px-4 py-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle size={16} className="mt-0.5 shrink-0 text-octo-danger" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-octo-danger">Chat error</div>
+                    <div className="mt-0.5 text-xs text-zinc-400">{error}</div>
+                    {error.includes("API key") && onOpenSettings && (
+                      <button
+                        onClick={() => { clearError(); onOpenSettings(); }}
+                        className="mt-2 flex items-center gap-1.5 rounded-md border border-octo-border bg-octo-panel px-3 py-1.5 text-xs text-zinc-300 transition hover:border-octo-accent/50"
+                      >
+                        <Settings size={12} />
+                        Configure API Key
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
             )}
           </>
         )}

@@ -62,11 +62,10 @@ impl ChatEngine {
         app: AppHandle,
         request: ChatRequest,
     ) -> AppResult<()> {
-        // 1. Read API key from env.
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+        // 1. Read API key from settings file, then env var fallback.
+        let api_key = crate::settings::get_anthropic_key().ok_or_else(|| {
             AppError::Other(
-                "ANTHROPIC_API_KEY not set. Export it in your shell before launching Octopus sh."
-                    .to_string(),
+                "Anthropic API key not configured. Go to Settings to add your key.".to_string(),
             )
         })?;
 
