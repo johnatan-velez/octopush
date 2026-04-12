@@ -62,3 +62,49 @@ export interface PtyExitEvent {
   sessionId: string;
   code: number | null;
 }
+
+// ─── Token types ──────────────────────────────────────────────────
+
+export interface TokenEvent {
+  id: number | null;
+  sessionId: string;
+  timestamp: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  model: string;
+  costUsd: number;
+}
+
+export interface CostEntry {
+  label: string;
+  costUsd: number;
+  tokens: number;
+}
+
+export interface TrendPoint {
+  hour: string;
+  tokens: number;
+  costUsd: number;
+}
+
+export interface TokenReport {
+  totalInput: number;
+  totalOutput: number;
+  totalCached: number;
+  totalCostUsd: number;
+  costBySession: CostEntry[];
+  costByModel: CostEntry[];
+  hourlyTrend: TrendPoint[];
+  budgetRemaining: number | null;
+  projectedDailyCost: number;
+}
+
+export interface BudgetStatus {
+  sessionId: string;
+  budget: number | null;
+  used: number;
+  remaining: number | null;
+  percentUsed: number | null;
+}

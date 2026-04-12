@@ -3,19 +3,24 @@
 use crate::db::Db;
 use crate::error::AppResult;
 use crate::pty_manager::PtyManager;
+use crate::token_engine::TokenEngine;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
 pub struct AppState {
-    pub db: Mutex<Db>,
+    pub db: Arc<Mutex<Db>>,
     pub pty: Mutex<PtyManager>,
+    pub tokens: TokenEngine,
 }
 
 impl AppState {
     pub fn init() -> AppResult<Self> {
-        let db = Db::open(&Db::default_path())?;
+        let db = Arc::new(Mutex::new(Db::open(&Db::default_path())?));
+        let tokens = TokenEngine::new(Arc::clone(&db));
         Ok(Self {
-            db: Mutex::new(db),
+            db,
             pty: Mutex::new(PtyManager::new()),
+            tokens,
         })
     }
 }

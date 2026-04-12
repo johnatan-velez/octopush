@@ -16,6 +16,22 @@ export default defineConfig(async () => ({
     },
   },
 
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-react": ["react", "react-dom"],
+          "vendor-xterm": [
+            "@xterm/xterm",
+            "@xterm/addon-fit",
+            "@xterm/addon-web-links",
+          ],
+          "vendor-charts": ["recharts"],
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development
   clearScreen: false,
   server: {

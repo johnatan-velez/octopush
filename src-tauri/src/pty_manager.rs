@@ -47,6 +47,9 @@ pub struct PtyManager {
     instances: HashMap<String, PtyInstance>,
 }
 
+/// Optional callback invoked on each PTY read chunk (for token scanning).
+pub type OutputHook = Box<dyn Fn(&str, &[u8]) + Send + 'static>;
+
 pub struct SpawnOptions {
     pub id: String,
     pub session_name: String,
@@ -55,6 +58,8 @@ pub struct SpawnOptions {
     pub rows: u16,
     pub cols: u16,
     pub shell: Option<String>,
+    /// If set, called with `(session_id, bytes)` on each PTY read.
+    pub on_output: Option<OutputHook>,
 }
 
 impl PtyManager {
@@ -128,9 +133,11 @@ impl PtyManager {
         };
 
         // Reader thread: blocking reads from the PTY master and emits
-        // `pty://data` events until EOF.
+        // `pty://data` events until EOF. Also invokes the output hook
+        // (used for token scanning) on each chunk.
         let reader_id = opts.id.clone();
         let reader_app = app.clone();
+        let on_output = opts.on_output;
         std::thread::Builder::new()
             .name(format!("pty-reader-{}", opts.id))
             .spawn(move || {
@@ -139,13 +146,17 @@ impl PtyManager {
                     match reader.read(&mut buf) {
                         Ok(0) => break, // EOF
                         Ok(n) => {
+                            let chunk = &buf[..n];
                             let _ = reader_app.emit(
                                 "pty://data",
                                 PtyDataEvent {
                                     session_id: reader_id.clone(),
-                                    bytes: buf[..n].to_vec(),
+                                    bytes: chunk.to_vec(),
                                 },
                             );
+                            if let Some(ref hook) = on_output {
+                                hook(&reader_id, chunk);
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(session_id = %reader_id, error = %e, "pty read error");

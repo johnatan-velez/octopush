@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -8,18 +8,36 @@ import type { PtyDataEvent, PtyExitEvent } from "../lib/types";
 
 interface Props {
   sessionId: string;
+  /** When false the terminal stays alive in the DOM but hidden via CSS. */
+  visible: boolean;
 }
 
 /**
- * A single xterm.js instance bound to the given session's PTY.
+ * Persistent xterm.js instance bound to a PTY session.
  *
- * The effect is keyed by `sessionId`, so switching sessions tears down the
- * old terminal and constructs a fresh one pinned to the new PTY. Phase 2
- * will revisit this to keep terminals alive in the background.
+ * The terminal is created once on mount and kept alive across tab switches.
+ * Only the `visible` prop toggles CSS visibility — no teardown/rebuild.
+ * The component unmounts only when the session is deleted.
  */
-export function TerminalPane({ sessionId }: Props) {
+export function TerminalPane({ sessionId, visible }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const termRef = useRef<Terminal | null>(null);
 
+  // Refit + focus when becoming visible or when the container resizes.
+  const doFit = useCallback(() => {
+    const fit = fitRef.current;
+    const term = termRef.current;
+    if (!fit || !term) return;
+    try {
+      fit.fit();
+      ipc.resizeSession(sessionId, term.rows, term.cols).catch(() => {});
+    } catch {
+      /* container not measured yet */
+    }
+  }, [sessionId]);
+
+  // Create terminal once.
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -60,19 +78,18 @@ export function TerminalPane({ sessionId }: Props) {
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon());
     term.open(containerRef.current);
+    termRef.current = term;
+    fitRef.current = fit;
 
-    // Initial fit and resize sync with the PTY.
-    const doFit = () => {
-      try {
-        fit.fit();
-        ipc.resizeSession(sessionId, term.rows, term.cols).catch(() => {});
-      } catch {
-        /* container not measured yet */
+    // ResizeObserver for auto-fit.
+    const ro = new ResizeObserver(() => {
+      if (containerRef.current?.offsetParent !== null) {
+        try {
+          fit.fit();
+          ipc.resizeSession(sessionId, term.rows, term.cols).catch(() => {});
+        } catch { /* */ }
       }
-    };
-    doFit();
-
-    const ro = new ResizeObserver(() => doFit());
+    });
     ro.observe(containerRef.current);
 
     // PTY → term: stream bytes from backend event bus.
@@ -100,12 +117,9 @@ export function TerminalPane({ sessionId }: Props) {
       });
     });
 
-    // Keep the remote PTY size in sync when xterm internally resizes.
     const resizeDisp = term.onResize(({ rows, cols }) => {
       ipc.resizeSession(sessionId, rows, cols).catch(() => {});
     });
-
-    term.focus();
 
     return () => {
       dataDisp.dispose();
@@ -114,8 +128,28 @@ export function TerminalPane({ sessionId }: Props) {
       unlistenData?.();
       unlistenExit?.();
       term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
     };
   }, [sessionId]);
 
-  return <div ref={containerRef} className="xterm-container h-full w-full" />;
+  // Refit + focus when becoming visible.
+  useEffect(() => {
+    if (visible) {
+      // Delay slightly so the container has layout dimensions.
+      const id = requestAnimationFrame(() => {
+        doFit();
+        termRef.current?.focus();
+      });
+      return () => cancelAnimationFrame(id);
+    }
+  }, [visible, doFit]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="xterm-container h-full w-full"
+      style={{ display: visible ? "block" : "none" }}
+    />
+  );
 }

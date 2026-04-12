@@ -1,9 +1,16 @@
 // Thin typed wrappers around Tauri's `invoke` for the Octopus core.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { CreateSessionArgs, Session } from "./types";
+import type {
+  BudgetStatus,
+  CreateSessionArgs,
+  Session,
+  TokenEvent,
+  TokenReport,
+} from "./types";
 
 export const ipc = {
+  // ─── Sessions ─────────────────────────────────────────────────
   createSession: (args: CreateSessionArgs) =>
     invoke<Session>("create_session", { args }),
 
@@ -26,4 +33,17 @@ export const ipc = {
 
   deleteSession: (sessionId: string) =>
     invoke<void>("delete_session", { sessionId }),
+
+  // ─── Tokens ───────────────────────────────────────────────────
+  getTokenReport: (sessionId?: string) =>
+    invoke<TokenReport>("get_token_report", { sessionId: sessionId ?? null }),
+
+  recordTokenEvent: (event: TokenEvent) =>
+    invoke<void>("record_token_event", { event }),
+
+  getBudgetStatus: (sessionId: string) =>
+    invoke<BudgetStatus>("get_budget_status", { sessionId }),
+
+  setTokenBudget: (sessionId: string, budget: number | null) =>
+    invoke<void>("set_token_budget", { sessionId, budget }),
 };

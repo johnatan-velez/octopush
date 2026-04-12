@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { TerminalPane } from "./components/TerminalPane";
+import { TokenDashboard } from "./components/TokenDashboard";
 import { NewSessionDialog } from "./components/NewSessionDialog";
 import { useSessionStore } from "./stores/sessionStore";
 
 function App() {
   const { sessions, activeId, refresh } = useSessionStore();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [showTokens, setShowTokens] = useState(false);
 
   useEffect(() => {
     refresh();
@@ -15,9 +17,14 @@ function App() {
   // Global shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "t") {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.shiftKey && e.key === "t") {
         e.preventDefault();
         setDialogOpen(true);
+      }
+      if (mod && e.shiftKey && (e.key === "T" || e.key === "t")) {
+        e.preventDefault();
+        setShowTokens((v) => !v);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -26,21 +33,41 @@ function App() {
 
   const active = sessions.find((s) => s.id === activeId) ?? null;
 
+  const aliveSessions = sessions.filter(
+    (s) => s.status === "active" || s.status === "idle",
+  );
+
   return (
     <div className="flex h-screen w-screen bg-octo-bg text-zinc-100">
       <SessionSidebar onNewSession={() => setDialogOpen(true)} />
 
       <main className="flex flex-1 flex-col">
         {active ? (
-          <>
-            <Titlebar name={active.name} model={active.agent.model} />
-            <div className="flex-1 overflow-hidden">
-              <TerminalPane key={active.id} sessionId={active.id} />
-            </div>
-          </>
-        ) : (
-          <EmptyMain onNewSession={() => setDialogOpen(true)} />
-        )}
+          <Titlebar
+            name={active.name}
+            model={active.agent.model}
+            showTokens={showTokens}
+            onToggleTokens={() => setShowTokens((v) => !v)}
+          />
+        ) : null}
+
+        <div className="relative flex flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden">
+            {aliveSessions.length === 0 && !active ? (
+              <EmptyMain onNewSession={() => setDialogOpen(true)} />
+            ) : (
+              aliveSessions.map((s) => (
+                <TerminalPane
+                  key={s.id}
+                  sessionId={s.id}
+                  visible={s.id === activeId}
+                />
+              ))
+            )}
+          </div>
+
+          {showTokens && <TokenDashboard />}
+        </div>
       </main>
 
       <NewSessionDialog
@@ -51,7 +78,17 @@ function App() {
   );
 }
 
-function Titlebar({ name, model }: { name: string; model: string }) {
+function Titlebar({
+  name,
+  model,
+  showTokens,
+  onToggleTokens,
+}: {
+  name: string;
+  model: string;
+  showTokens: boolean;
+  onToggleTokens: () => void;
+}) {
   return (
     <header
       data-tauri-drag-region
@@ -62,9 +99,17 @@ function Titlebar({ name, model }: { name: string; model: string }) {
         <span className="text-zinc-600">•</span>
         <span className="text-xs text-zinc-500">{model}</span>
       </div>
-      <div className="text-[10px] uppercase tracking-wider text-zinc-600">
-        Phase 1 — Foundation
-      </div>
+      <button
+        onClick={onToggleTokens}
+        className={`rounded-md px-2 py-1 text-[10px] uppercase tracking-wider transition ${
+          showTokens
+            ? "bg-octo-accent/20 text-octo-accent"
+            : "text-zinc-500 hover:text-zinc-300"
+        }`}
+        title="Toggle token dashboard (⌘⇧T)"
+      >
+        Tokens
+      </button>
     </header>
   );
 }
