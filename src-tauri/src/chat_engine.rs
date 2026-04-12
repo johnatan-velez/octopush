@@ -391,8 +391,13 @@ impl ChatEngine {
                 "agentic loop iteration"
             );
 
-            // Emit text as a stream delta.
-            if !text_parts.is_empty() {
+            // Only emit text as a stream delta for the FINAL response
+            // (when Claude is done with tools). Intermediate text (said
+            // before tool calls) would concatenate with the final text
+            // in the frontend's streamBuffer, creating a garbled message.
+            // Tool cards already show what Claude is doing.
+            let is_final = stop_reason != "tool_use" || tool_uses.is_empty();
+            if is_final && !text_parts.is_empty() {
                 let _ = app.emit("chat://stream", &ChatStreamEvent {
                     workspace_id: request.workspace_id.clone(),
                     delta: text_parts.clone(),
