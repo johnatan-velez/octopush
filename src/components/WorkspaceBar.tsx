@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { MessageSquare, Terminal, GitBranch, MoreHorizontal, Trash2, Plus, X } from "lucide-react";
 
 export interface WorkspaceTab {
@@ -17,6 +17,7 @@ interface Props {
   onAddChat: () => void;
   onAddTerminal: () => void;
   onCloseTab: (tabId: string) => void;
+  onRenameTab: (tabId: string, newLabel: string) => void;
   onViewChange: (view: "chat" | "terminal" | "changes") => void;
   onDeleteWorkspace: () => void;
   workspaceName: string;
@@ -31,6 +32,7 @@ export function WorkspaceBar({
   onAddChat,
   onAddTerminal,
   onCloseTab,
+  onRenameTab,
   onViewChange,
   onDeleteWorkspace,
 }: Props) {
@@ -106,40 +108,27 @@ export function WorkspaceBar({
         </div>
       </div>
 
-      {/* Level 2: Subtabs — only for Chat and Terminal when they have content */}
+      {/* Level 2: Subtabs — only for Chat and Terminal */}
       {(activeView === "chat" || activeView === "terminal") && (
-        <div className="flex h-7 items-center gap-0 border-b border-octo-border/50 bg-octo-bg px-3">
-          {activeTabs.map((tab) => {
-            const isActive = tab.id === activeTabId;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => onSelectTab(tab.id)}
-                className={`group flex items-center gap-1 rounded-t px-2.5 py-1 text-[10px] transition ${
-                  isActive
-                    ? "bg-octo-panel/60 text-zinc-200"
-                    : "text-zinc-500 hover:text-zinc-300"
-                }`}
-              >
-                <span>{tab.label}</span>
-                {canClose && (
-                  <span
-                    onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
-                    className="ml-0.5 hidden cursor-pointer text-zinc-600 hover:text-zinc-300 group-hover:inline"
-                  >
-                    <X size={9} />
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        <div className="flex h-8 items-center gap-0.5 border-b border-octo-border/50 bg-octo-bg px-3">
+          {activeTabs.map((tab) => (
+            <SubTab
+              key={tab.id}
+              tab={tab}
+              isActive={tab.id === activeTabId}
+              canClose={canClose}
+              onSelect={() => onSelectTab(tab.id)}
+              onClose={() => onCloseTab(tab.id)}
+              onRename={(newLabel) => onRenameTab(tab.id, newLabel)}
+            />
+          ))}
           {onAdd && (
             <button
               onClick={onAdd}
-              className="ml-1 rounded p-0.5 text-zinc-600 transition hover:bg-zinc-800 hover:text-zinc-400"
+              className="ml-1.5 rounded p-1 text-zinc-600 transition hover:bg-zinc-800 hover:text-zinc-400"
               title={activeView === "chat" ? "New chat" : "New terminal"}
             >
-              <Plus size={11} />
+              <Plus size={12} />
             </button>
           )}
         </div>
@@ -173,6 +162,81 @@ function CategoryTab({
     >
       {icon}
       <span>{label}</span>
+    </button>
+  );
+}
+
+/** Subtab with double-click to rename */
+function SubTab({
+  tab,
+  isActive,
+  canClose,
+  onSelect,
+  onClose,
+  onRename,
+}: {
+  tab: WorkspaceTab;
+  isActive: boolean;
+  canClose: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+  onRename: (newLabel: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(tab.label);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const commitRename = useCallback(() => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== tab.label) {
+      onRename(trimmed);
+    }
+    setEditing(false);
+  }, [draft, tab.label, onRename]);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commitRename}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commitRename();
+          if (e.key === "Escape") { setDraft(tab.label); setEditing(false); }
+        }}
+        className="rounded border border-octo-accent/50 bg-octo-panel px-2 py-1 text-xs text-zinc-200 outline-none"
+        style={{ width: Math.max(60, draft.length * 7 + 20) }}
+      />
+    );
+  }
+
+  return (
+    <button
+      onClick={onSelect}
+      onDoubleClick={() => { setDraft(tab.label); setEditing(true); }}
+      className={`group flex items-center gap-1.5 rounded px-3 py-1.5 text-xs transition ${
+        isActive
+          ? "bg-octo-panel/70 text-zinc-200 shadow-sm"
+          : "text-zinc-500 hover:bg-octo-panel/30 hover:text-zinc-300"
+      }`}
+    >
+      <span>{tab.label}</span>
+      {canClose && (
+        <span
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          className="ml-0.5 hidden cursor-pointer text-zinc-600 hover:text-zinc-300 group-hover:inline"
+        >
+          <X size={10} />
+        </span>
+      )}
     </button>
   );
 }

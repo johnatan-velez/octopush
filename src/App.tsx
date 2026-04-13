@@ -185,6 +185,16 @@ function App() {
     }
   }, [activeWorkspaceId, tabsPerWorkspace, activeTabId]);
 
+  const renameTab = useCallback((tabId: string, newLabel: string) => {
+    if (!activeWorkspaceId) return;
+    setTabsPerWorkspace((prev) => ({
+      ...prev,
+      [activeWorkspaceId]: (prev[activeWorkspaceId] || []).map((t) =>
+        t.id === tabId ? { ...t, label: newLabel } : t,
+      ),
+    }));
+  }, [activeWorkspaceId]);
+
   const selectTab = useCallback((tabId: string) => {
     const tabs = tabsPerWorkspace[activeWorkspaceId || ""] || [];
     const tab = tabs.find((t) => t.id === tabId);
@@ -429,6 +439,7 @@ function App() {
             onAddChat={addChatTab}
             onAddTerminal={addTerminalTab}
             onCloseTab={closeTab}
+            onRenameTab={renameTab}
             onViewChange={(v) => {
               setView(v);
               setShowCreator(false);
