@@ -7,6 +7,17 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 
+/// Idempotently add a SQLite column. SQLite has no `ADD COLUMN IF NOT EXISTS`,
+/// so we run the ALTER and ignore the specific "duplicate column name" error.
+/// Any other error (corrupted DB, locked file, disk full) is propagated.
+fn add_column_if_missing(conn: &rusqlite::Connection, alter_sql: &str) -> rusqlite::Result<()> {
+    match conn.execute(alter_sql, []) {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_string().contains("duplicate column name") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 pub struct Db {
     conn: Connection,
 }
@@ -113,14 +124,8 @@ impl Db {
         // Phase 2 — workspace customization columns (glyph + tint).
         // SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we swallow the
         // duplicate-column error if the migration has already run.
-        let _ = self.conn.execute(
-            "ALTER TABLE workspaces ADD COLUMN glyph TEXT",
-            [],
-        );
-        let _ = self.conn.execute(
-            "ALTER TABLE workspaces ADD COLUMN tint TEXT",
-            [],
-        );
+        add_column_if_missing(&self.conn, "ALTER TABLE workspaces ADD COLUMN glyph TEXT")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE workspaces ADD COLUMN tint TEXT")?;
         Ok(())
     }
 

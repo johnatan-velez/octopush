@@ -15,6 +15,7 @@ import type {
   SessionTemplate,
   TaskType,
   ThemeConfig,
+  TintName,
   TokenEvent,
   TokenReport,
   Workspace,
@@ -111,7 +112,7 @@ export const ipc = {
   updateWorkspaceCustomization: (
     workspaceId: string,
     glyph: string | null,
-    tint: string | null,
+    tint: TintName | null,
   ) =>
     invoke<void>("update_workspace_customization", { workspaceId, glyph, tint }),
 
