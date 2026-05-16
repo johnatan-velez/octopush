@@ -2,16 +2,49 @@
 @import "@xterm/xterm/css/xterm.css";
 
 @theme {
+  /* ── Fonts ───────────────────────────────────────────────────── */
+  --font-serif: "Spectral", "Iowan Old Style", "Times New Roman", serif;
+  --font-sans: -apple-system, "Helvetica Neue", sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
 
-  --color-octo-bg: #0a0a0b;
-  --color-octo-panel: #101013;
-  --color-octo-border: #1f1f25;
-  --color-octo-accent: #a78bfa;
-  --color-octo-accent-dim: #7c6dd8;
-  --color-octo-success: #34d399;
-  --color-octo-warning: #fbbf24;
-  --color-octo-danger: #f87171;
+  /* ── Color tokens — canonical Onyx & Brass ───────────────────── */
+  --color-octo-onyx:      #0c0a08;
+  --color-octo-panel:     #14110d;
+  --color-octo-panel-2:   #1a160f;
+  --color-octo-hairline:  #2a2419;
+
+  --color-octo-brass:     #d4a574;
+  --color-octo-brass-hi:  #e8c39a;
+
+  --color-octo-ivory:     #f4ecdb;
+  --color-octo-sage:      #95897a;
+  --color-octo-mute:      #6d6354;
+
+  --color-octo-verdigris: #8fc9a8;
+  --color-octo-rouge:     #d18b8b;
+
+  /* ── Legacy aliases — used by components until Phase 7 retires them.
+     Same hex as their canonical counterpart so nothing visibly breaks. ── */
+  --color-octo-bg:         #0c0a08;
+  --color-octo-border:     #2a2419;
+  --color-octo-accent:     #d4a574;
+  --color-octo-accent-dim: #e8c39a;
+  --color-octo-success:    #8fc9a8;
+  --color-octo-warning:    #d4a574;
+  --color-octo-danger:     #d18b8b;
+}
+
+/* ── Brass alpha utilities — not Tailwind-class-generated, used directly ── */
+:root {
+  --brass-dim:   rgba(212, 165, 116, 0.4);
+  --brass-ghost: rgba(212, 165, 116, 0.08);
+
+  /* Motion */
+  --ease-octo:    cubic-bezier(0.2, 0.8, 0.3, 1);
+  --dur-quick:    220ms;
+  --dur-standard: 280ms;
+  --dur-slow:     320ms;
+  --dur-reveal:   600ms;
 }
 
 html,
