@@ -149,6 +149,53 @@ mod db_tests {
 }
 
 #[cfg(test)]
+mod workspace_tests {
+    use crate::db::Db;
+    use tempfile::NamedTempFile;
+
+    fn test_db() -> Db {
+        let tmp = NamedTempFile::new().unwrap();
+        Db::open(tmp.path()).unwrap()
+    }
+
+    fn setup_workspace(db: &Db, project_id: &str, workspace_id: &str) {
+        db.insert_project(project_id, "Test Project", &format!("/tmp/{}", project_id))
+            .unwrap();
+        db.insert_workspace(workspace_id, project_id, "ws", "", "main", None, "")
+            .unwrap();
+    }
+
+    #[test]
+    fn update_workspace_customization_persists_glyph_and_tint() {
+        let db = test_db();
+        setup_workspace(&db, "proj-1", "ws-1");
+
+        db.update_workspace_customization("ws-1", Some("§"), Some("verdigris"))
+            .unwrap();
+
+        let workspaces = db.list_workspaces("proj-1").unwrap();
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].glyph.as_deref(), Some("§"));
+        assert_eq!(workspaces[0].tint.as_deref(), Some("verdigris"));
+    }
+
+    #[test]
+    fn update_workspace_customization_clears_with_none() {
+        let db = test_db();
+        setup_workspace(&db, "proj-1", "ws-1");
+
+        db.update_workspace_customization("ws-1", Some("X"), Some("brass"))
+            .unwrap();
+        db.update_workspace_customization("ws-1", None, None)
+            .unwrap();
+
+        let workspaces = db.list_workspaces("proj-1").unwrap();
+        assert_eq!(workspaces[0].glyph, None);
+        assert_eq!(workspaces[0].tint, None);
+    }
+}
+
+#[cfg(test)]
 mod scanner_tests {
     use crate::token_engine::scan_pty_output;
 

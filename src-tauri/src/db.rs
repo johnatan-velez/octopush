@@ -110,6 +110,17 @@ impl Db {
             CREATE INDEX IF NOT EXISTS idx_chat_messages_workspace ON chat_messages(workspace_id, created_at);
             "#,
         )?;
+        // Phase 2 — workspace customization columns (glyph + tint).
+        // SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we swallow the
+        // duplicate-column error if the migration has already run.
+        let _ = self.conn.execute(
+            "ALTER TABLE workspaces ADD COLUMN glyph TEXT",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE workspaces ADD COLUMN tint TEXT",
+            [],
+        );
         Ok(())
     }
 
@@ -491,7 +502,7 @@ impl Db {
 
     pub fn list_workspaces(&self, project_id: &str) -> AppResult<Vec<WorkspaceRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, name, task, branch, worktree_path, setup_script, status, created_at, last_active
+            "SELECT id, project_id, name, task, branch, worktree_path, setup_script, status, created_at, last_active, glyph, tint
              FROM workspaces WHERE project_id = ?1 ORDER BY last_active DESC",
         )?;
         let rows = stmt.query_map(params![project_id], |r| {
@@ -506,6 +517,8 @@ impl Db {
                 status: r.get(7)?,
                 created_at: r.get(8)?,
                 last_active: r.get(9)?,
+                glyph: r.get(10)?,
+                tint: r.get(11)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -513,6 +526,19 @@ impl Db {
 
     pub fn delete_workspace(&self, id: &str) -> AppResult<()> {
         self.conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn update_workspace_customization(
+        &self,
+        workspace_id: &str,
+        glyph: Option<&str>,
+        tint: Option<&str>,
+    ) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE workspaces SET glyph = ?1, tint = ?2 WHERE id = ?3",
+            params![glyph, tint, workspace_id],
+        )?;
         Ok(())
     }
 
@@ -572,6 +598,8 @@ pub struct WorkspaceRow {
     pub status: String,
     pub created_at: String,
     pub last_active: String,
+    pub glyph: Option<String>,
+    pub tint: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]

@@ -121,6 +121,8 @@ export interface ProjectInfo {
 
 // ─── Workspaces ───────────────────────────────────────────────────
 
+export type TintName = "brass" | "verdigris" | "rouge" | "indigo" | "lavender" | "smoke" | "bone";
+
 export interface Workspace {
   id: string;
   projectId: string;
@@ -132,6 +134,8 @@ export interface Workspace {
   status: string;
   createdAt: string;
   lastActive: string;
+  glyph: string | null;
+  tint: TintName | null;
 }
 
 // ─── Chat ─────────────────────────────────────────────────────────

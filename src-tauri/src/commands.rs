@@ -494,6 +494,22 @@ pub async fn delete_workspace(
     Ok(())
 }
 
+// ─── Update workspace customization ──────────────────────────────
+
+#[tauri::command]
+pub async fn update_workspace_customization(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    glyph: Option<String>,
+    tint: Option<String>,
+) -> AppResult<()> {
+    state.db.lock().update_workspace_customization(
+        &workspace_id,
+        glyph.as_deref(),
+        tint.as_deref(),
+    )
+}
+
 // ─── Chat commands ────────────────────────────────────────────────
 
 #[tauri::command]

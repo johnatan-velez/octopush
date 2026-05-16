@@ -108,6 +108,12 @@ export const ipc = {
   listWorkspaces: (projectId: string) => invoke<Workspace[]>("list_workspaces", { projectId }),
   deleteWorkspace: (workspaceId: string, projectPath: string, branch: string, worktreePath: string | null) =>
     invoke<void>("delete_workspace", { workspaceId, projectPath, branch, worktreePath }),
+  updateWorkspaceCustomization: (
+    workspaceId: string,
+    glyph: string | null,
+    tint: string | null,
+  ) =>
+    invoke<void>("update_workspace_customization", { workspaceId, glyph, tint }),
 
   // ─── Chat ───────────────────────────────────────────────────────
   sendChatMessage: (request: {

@@ -77,6 +77,7 @@ pub fn run() {
             commands::create_workspace,
             commands::list_workspaces,
             commands::delete_workspace,
+            commands::update_workspace_customization,
             commands::get_git_status,
             commands::get_git_diff,
             // Chat
