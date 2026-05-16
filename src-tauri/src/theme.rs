@@ -29,6 +29,21 @@ pub struct ThemeConfig {
 pub fn builtin_themes() -> Vec<ThemeConfig> {
     vec![
         ThemeConfig {
+            name: "atelier".into(),
+            bg: "#0c0a08".into(),
+            panel: "#14110d".into(),
+            border: "#2a2419".into(),
+            accent: "#d4a574".into(),
+            accent_dim: "#e8c39a".into(),
+            success: "#8fc9a8".into(),
+            warning: "#d4a574".into(),
+            danger: "#d18b8b".into(),
+            text: "#f4ecdb".into(),
+            text_dim: "#95897a".into(),
+            text_muted: "#6d6354".into(),
+            terminal_bg: "#0c0a08".into(),
+        },
+        ThemeConfig {
             name: "dark".into(),
             bg: "#0a0a0b".into(),
             panel: "#101013".into(),
@@ -107,12 +122,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_themes_valid() {
+    fn builtin_themes_includes_atelier_as_default() {
         let themes = builtin_themes();
-        assert_eq!(themes.len(), 3);
-        assert_eq!(themes[0].name, "dark");
-        assert_eq!(themes[1].name, "midnight");
-        assert_eq!(themes[2].name, "solarized-dark");
+        assert!(themes.len() >= 4, "should have at least 4 built-in themes");
+        assert_eq!(
+            themes[0].name, "atelier",
+            "atelier must be first so it's the default for new installs"
+        );
+        assert_eq!(themes[0].bg, "#0c0a08", "atelier bg must be onyx");
+        assert_eq!(themes[0].accent, "#d4a574", "atelier accent must be brass");
+        assert_eq!(themes[0].text, "#f4ecdb", "atelier text must be ivory");
+        assert_eq!(themes[0].success, "#8fc9a8", "atelier success must be verdigris");
+        assert_eq!(themes[0].danger, "#d18b8b", "atelier danger must be rouge");
+    }
+
+    #[test]
+    fn legacy_themes_remain_available() {
+        let themes = builtin_themes();
+        let names: Vec<&str> = themes.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"dark"), "legacy dark theme must still exist");
+        assert!(names.contains(&"midnight"), "midnight must still exist");
+        assert!(names.contains(&"solarized-dark"), "solarized-dark must still exist");
     }
 
     #[test]
@@ -120,7 +150,7 @@ mod tests {
         let theme = &builtin_themes()[0];
         let json = serde_json::to_string(theme).unwrap();
         let back: ThemeConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.name, "dark");
-        assert_eq!(back.accent, "#a78bfa");
+        assert_eq!(back.name, "atelier");
+        assert_eq!(back.accent, "#d4a574");
     }
 }
