@@ -190,41 +190,43 @@ export function ChatMessage({ message }: Props) {
 
   return (
     <div data-role="assistant" className="flex flex-col gap-2">
-      <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-brass">
+      <div className="animate-keyfade-eyebrow font-mono text-[10px] uppercase tracking-[0.25em] text-octo-brass">
         — {modelDisplayName(model)}
       </div>
 
       {keyPhrase && (
-        <ReactMarkdown
-          components={{
-            code({ children }) {
-              return (
-                <code className="font-mono not-italic text-octo-brass">
-                  {children}
-                </code>
-              );
-            },
-            p({ children }) {
-              return (
-                <p className="font-serif italic text-[20px] leading-[1.15] tracking-[-0.005em] text-octo-ivory">
-                  {children}
-                </p>
-              );
-            },
-          }}
-        >
-          {keyPhrase}
-        </ReactMarkdown>
+        <div className="animate-keyfade-key">
+          <ReactMarkdown
+            components={{
+              code({ children }) {
+                return (
+                  <code className="font-mono not-italic text-octo-brass">
+                    {children}
+                  </code>
+                );
+              },
+              p({ children }) {
+                return (
+                  <p className="font-serif italic text-[20px] leading-[1.15] tracking-[-0.005em] text-octo-ivory">
+                    {children}
+                  </p>
+                );
+              },
+            }}
+          >
+            {keyPhrase}
+          </ReactMarkdown>
+        </div>
       )}
 
       {body && (
-        <div className="text-[13px] leading-[1.6] text-octo-sage">
+        <div className="animate-keyfade-body text-[13px] leading-[1.6] text-octo-sage">
           <ReactMarkdown components={markdownComponents}>{body}</ReactMarkdown>
         </div>
       )}
 
       {(model || inputTokens != null || outputTokens != null) && (
-        <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-octo-mute">
+        <div className="animate-keyfade-body font-mono text-[9px] uppercase tracking-[0.2em] text-octo-mute">
           {[
             inputTokens != null ? `${formatTokenCount(inputTokens)} in` : null,
             outputTokens != null ? `${formatTokenCount(outputTokens)} out` : null,
