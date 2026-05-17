@@ -190,10 +190,7 @@ function App() {
   // ── Chat / terminal handlers wired to Companion ──
   const handleNewChat = useCallback(() => {
     if (!activeWorkspaceId) return;
-    const newId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? (crypto as { randomUUID: () => string }).randomUUID()
-        : `chat-${Date.now()}`;
+    const newId = crypto.randomUUID();
     const list = chatsPerWorkspace[activeWorkspaceId] ?? [];
     const chat: ChatRef = {
       id: newId,
@@ -360,8 +357,13 @@ function App() {
   const handleCustomizeSubmit = useCallback(
     async (glyph: string | null, tint: TintName | null) => {
       if (!customizingWorkspaceId) return;
-      await updateCustomization(customizingWorkspaceId, glyph, tint);
-      setCustomizingWorkspaceId(null);
+      try {
+        await updateCustomization(customizingWorkspaceId, glyph, tint);
+      } catch (err) {
+        console.error("Failed to update workspace customization:", err);
+      } finally {
+        setCustomizingWorkspaceId(null);
+      }
     },
     [customizingWorkspaceId, updateCustomization],
   );
