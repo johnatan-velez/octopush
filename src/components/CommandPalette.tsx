@@ -1,16 +1,5 @@
 import { Command } from "cmdk";
 import { useEffect, useState, useCallback } from "react";
-import {
-  Plus,
-  Zap,
-  Gauge,
-  XCircle,
-  FileText,
-  Coins,
-  Download,
-  LayoutTemplate,
-  Palette,
-} from "lucide-react";
 import { useSessionStore } from "../stores/sessionStore";
 import { ipc } from "../lib/ipc";
 import { pushToast } from "./Toasts";
@@ -57,49 +46,52 @@ export function CommandPalette({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[20vh] backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh]"
+      style={{ background: "rgba(12, 10, 8, 0.55)", backdropFilter: "blur(4px)" }}
       onClick={onClose}
     >
-      <div onClick={(e) => e.stopPropagation()} className="w-[540px]">
-        <Command
-          className="rounded-xl border border-octo-border bg-octo-panel shadow-2xl"
-          loop
-        >
-          <Command.Input
-            placeholder="Type a command..."
-            className="w-full border-b border-octo-border bg-transparent px-4 py-3 text-sm outline-none placeholder:text-zinc-600"
-            autoFocus
-          />
-          <Command.List className="max-h-80 overflow-y-auto p-2">
-            <Command.Empty className="px-4 py-6 text-center text-sm text-zinc-500">
-              No results found.
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-[560px] rounded-xl bg-octo-panel"
+        style={{
+          border: "1px solid var(--brass-dim)",
+          boxShadow:
+            "0 30px 60px -10px rgba(0,0,0,0.6), 0 0 0 6px rgba(212, 165, 116, 0.04)",
+        }}
+      >
+        <Command loop className="overflow-hidden rounded-xl">
+          <div className="flex items-center gap-3 border-b border-octo-hairline px-4 py-3">
+            <span className="font-mono text-[11px] text-octo-brass">⌘ K</span>
+            <Command.Input
+              autoFocus
+              placeholder="Type a command, or search…"
+              className="flex-1 bg-transparent font-serif italic text-[14px] text-octo-ivory outline-none placeholder:text-octo-mute"
+            />
+            <span className="rounded border border-octo-hairline bg-octo-onyx px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.15em] text-octo-mute">
+              ESC
+            </span>
+          </div>
+
+          <Command.List className="max-h-[380px] overflow-y-auto py-2">
+            <Command.Empty className="px-6 py-8 text-center font-serif italic text-[13px] text-octo-mute">
+              Nothing matches.
             </Command.Empty>
 
-            {/* Session actions */}
-            <Command.Group
-              heading="Sessions"
-              className="mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
-            >
-              <PaletteItem
-                icon={<Plus size={14} />}
-                label="New session"
-                shortcut="⌘T"
-                onSelect={() => run(onNewSession)}
-              />
+            {/* Sessions */}
+            <Group heading="Sessions">
+              <Item glyph="+" label="New session" shortcut="⌘T" onSelect={() => run(onNewSession)} />
               {sessions.map((s) => (
-                <PaletteItem
+                <Item
                   key={s.id}
-                  icon={
-                    <span className="text-xs">{s.icon}</span>
-                  }
+                  glyph={s.name.charAt(0).toUpperCase() || "?"}
                   label={`Switch to ${s.name}`}
                   detail={s.agent.model}
                   onSelect={() => run(() => select(s.id))}
                 />
               ))}
               {activeSession && (
-                <PaletteItem
-                  icon={<XCircle size={14} />}
+                <Item
+                  glyph="×"
                   label={`Kill ${activeSession.name}`}
                   onSelect={() =>
                     run(async () => {
@@ -108,19 +100,16 @@ export function CommandPalette({
                   }
                 />
               )}
-            </Command.Group>
+            </Group>
 
-            {/* Model actions */}
-            <Command.Group
-              heading="Models"
-              className="mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
-            >
+            {/* Models */}
+            <Group heading="Models">
               {models.map((m) => (
-                <PaletteItem
+                <Item
                   key={m.model.id}
-                  icon={<Zap size={14} />}
+                  glyph="◇"
                   label={`Model: ${m.model.displayName}`}
-                  detail={`${m.provider} • $${m.model.inputCostPerM}/M in`}
+                  detail={`${m.provider} · $${m.model.inputCostPerM}/M in`}
                   onSelect={() =>
                     run(async () => {
                       if (activeId) {
@@ -136,40 +125,34 @@ export function CommandPalette({
                   }
                 />
               ))}
-            </Command.Group>
+            </Group>
 
             {/* Templates */}
             {templates.length > 0 && (
-              <Command.Group
-                heading="Templates"
-                className="mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
-              >
+              <Group heading="Templates">
                 {templates.map((t) => (
-                  <PaletteItem
+                  <Item
                     key={t.name}
-                    icon={<LayoutTemplate size={14} />}
+                    glyph="❦"
                     label={`Template: ${t.name}`}
                     detail={t.projectRoot}
                     onSelect={() => run(onNewSession)}
                   />
                 ))}
-              </Command.Group>
+              </Group>
             )}
 
-            {/* Utility actions */}
-            <Command.Group
-              heading="Tools"
-              className="mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
-            >
-              <PaletteItem
-                icon={<Coins size={14} />}
-                label="Toggle token dashboard"
+            {/* Actions */}
+            <Group heading="Actions">
+              <Item
+                glyph="§"
+                label="Open Settings · Usage"
                 shortcut="⌘⇧T"
                 onSelect={() => run(onToggleTokens)}
               />
               {activeSession && (
-                <PaletteItem
-                  icon={<Gauge size={14} />}
+                <Item
+                  glyph="◷"
                   label="Set token budget"
                   onSelect={() =>
                     run(async () => {
@@ -185,24 +168,10 @@ export function CommandPalette({
                   }
                 />
               )}
-              <PaletteItem
-                icon={<FileText size={14} />}
-                label="View session recap"
-                onSelect={() =>
-                  run(async () => {
-                    if (activeId) {
-                      const report = await ipc.getTokenReport(activeId);
-                      alert(
-                        `Session report:\nInput: ${report.totalInput}\nOutput: ${report.totalOutput}\nCost: $${report.totalCostUsd.toFixed(2)}`,
-                      );
-                    }
-                  })
-                }
-              />
               {activeSession && (
                 <>
-                  <PaletteItem
-                    icon={<Download size={14} />}
+                  <Item
+                    glyph="↓"
                     label="Export session (JSON)"
                     onSelect={() =>
                       run(async () => {
@@ -211,8 +180,8 @@ export function CommandPalette({
                       })
                     }
                   />
-                  <PaletteItem
-                    icon={<Download size={14} />}
+                  <Item
+                    glyph="↓"
                     label="Export session (CSV)"
                     onSelect={() =>
                       run(async () => {
@@ -223,29 +192,109 @@ export function CommandPalette({
                   />
                 </>
               )}
-            </Command.Group>
+            </Group>
 
-            {/* Theme picker */}
+            {/* Themes */}
             {themes.length > 0 && (
-              <Command.Group
-                heading="Themes"
-                className="mb-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-600"
-              >
+              <Group heading="Themes">
                 {themes.map((t) => (
-                  <PaletteItem
+                  <Item
                     key={t.name}
-                    icon={<Palette size={14} />}
+                    glyph="◐"
                     label={`Theme: ${t.name}`}
+                    detail={t.accent}
                     onSelect={() => run(() => applyTheme(t))}
                   />
                 ))}
-              </Command.Group>
+              </Group>
             )}
           </Command.List>
         </Command>
       </div>
     </div>
   );
+}
+
+function Group({
+  heading,
+  children,
+}: {
+  heading: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Command.Group
+      heading={heading}
+      className="px-1 pb-1 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:pb-1.5 [&_[cmdk-group-heading]]:pt-3 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[8px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.3em] [&_[cmdk-group-heading]]:text-octo-brass"
+    >
+      {children}
+    </Command.Group>
+  );
+}
+
+function Item({
+  glyph,
+  label,
+  detail,
+  shortcut,
+  onSelect,
+}: {
+  glyph: string;
+  label: string;
+  detail?: string;
+  shortcut?: string;
+  onSelect: () => void;
+}) {
+  return (
+    <Command.Item
+      onSelect={onSelect}
+      className="group mx-1 flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-[13px] text-octo-sage aria-selected:text-octo-ivory"
+      style={
+        {
+          // Tailwind aria-selected variant doesn't reach inline style; use a CSS variable
+          // here so the rule below can pick it up via `aria-selected="true"` attribute.
+        }
+      }
+    >
+      <span
+        aria-hidden
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded font-serif italic text-[12px] text-octo-mute group-aria-selected:text-octo-brass"
+        style={{
+          border: "1px solid var(--color-octo-hairline)",
+        }}
+      >
+        {glyph}
+      </span>
+      <span className="flex-1 truncate">{label}</span>
+      {detail && (
+        <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.15em] text-octo-mute">
+          {detail}
+        </span>
+      )}
+      {shortcut && (
+        <kbd className="shrink-0 rounded border border-octo-hairline bg-octo-onyx px-1.5 py-0.5 font-mono text-[9px] tracking-[0.05em] text-octo-mute">
+          {shortcut}
+        </kbd>
+      )}
+    </Command.Item>
+  );
+}
+
+// CSS for aria-selected highlight (overrides Tailwind ordering and applies a
+// brass-ghost background to the currently focused item).
+const _styleInject = `
+[cmdk-item][aria-selected="true"] {
+  background: var(--brass-ghost);
+}
+[cmdk-item][aria-selected="true"] > span:first-child {
+  border-color: var(--brass-dim);
+}
+`;
+if (typeof document !== "undefined" && !document.getElementById("cmdk-brass-styles")) {
+  const el = document.createElement("style");
+  el.id = "cmdk-brass-styles";
+  el.textContent = _styleInject;
+  document.head.appendChild(el);
 }
 
 function downloadFile(name: string, content: string, mime: string) {
@@ -256,36 +305,4 @@ function downloadFile(name: string, content: string, mime: string) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
-}
-
-function PaletteItem({
-  icon,
-  label,
-  detail,
-  shortcut,
-  onSelect,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  detail?: string;
-  shortcut?: string;
-  onSelect: () => void;
-}) {
-  return (
-    <Command.Item
-      onSelect={onSelect}
-      className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm text-zinc-300 aria-selected:bg-octo-accent/10 aria-selected:text-zinc-100"
-    >
-      <span className="shrink-0 text-zinc-500">{icon}</span>
-      <span className="flex-1 truncate">{label}</span>
-      {detail && (
-        <span className="shrink-0 text-[10px] text-zinc-600">{detail}</span>
-      )}
-      {shortcut && (
-        <kbd className="shrink-0 rounded border border-octo-border bg-octo-bg px-1.5 py-0.5 text-[10px] text-zinc-500">
-          {shortcut}
-        </kbd>
-      )}
-    </Command.Item>
-  );
 }
