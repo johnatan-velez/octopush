@@ -47,6 +47,68 @@
   --dur-reveal:   600ms;
 }
 
+/* ── Motion · Phase 7 signature animations ───────────────────── */
+
+@keyframes brassgrow {
+  from { width: 0; opacity: 0; }
+  to   { width: 28px; opacity: 1; }
+}
+
+@keyframes keyfade-eyebrow {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes keyfade-key {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes keyfade-body {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes keyfade-tool {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes namefade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Utility classes that wire keyframes to Phase 1 ease/dur variables. */
+.animate-brass-grow {
+  animation: brassgrow var(--dur-reveal) var(--ease-octo) forwards;
+  width: 0;
+}
+
+.animate-keyfade-eyebrow {
+  animation: keyfade-eyebrow 180ms ease-out forwards;
+  opacity: 0;
+}
+
+.animate-keyfade-key {
+  animation: keyfade-key var(--dur-standard) ease-out 80ms forwards;
+  opacity: 0;
+}
+
+.animate-keyfade-body {
+  animation: keyfade-body var(--dur-standard) ease-out 220ms forwards;
+  opacity: 0;
+}
+
+.animate-keyfade-tool {
+  animation: keyfade-tool var(--dur-standard) ease-out 320ms forwards;
+  opacity: 0;
+}
+
+.animate-name-in {
+  animation: namefade-in 260ms ease-in-out forwards;
+}
+
 html,
 body,
 #root {
