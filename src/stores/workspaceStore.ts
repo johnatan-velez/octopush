@@ -13,6 +13,7 @@ interface WorkspaceState {
            branch: string, fromBranch: string, setupScript: string) => Promise<Workspace>;
   select: (id: string | null) => void;
   remove: (workspaceId: string, projectPath: string, branch: string, worktreePath: string | null) => Promise<void>;
+  updateCustomization: (workspaceId: string, glyph: string | null, tint: string | null) => Promise<void>;
   notify: (workspaceId: string) => void;
   clearNotification: (workspaceId: string) => void;
 }
@@ -48,6 +49,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((s) => ({
       workspaces: s.workspaces.filter((w) => w.id !== workspaceId),
       activeId: s.activeId === workspaceId ? null : s.activeId,
+    }));
+  },
+
+  updateCustomization: async (workspaceId, glyph, tint) => {
+    await ipc.updateWorkspaceCustomization(workspaceId, glyph, tint as any);
+    set((s) => ({
+      workspaces: s.workspaces.map((w) =>
+        w.id === workspaceId
+          ? { ...w, glyph: (glyph as any), tint: (tint as any) }
+          : w,
+      ),
     }));
   },
 
