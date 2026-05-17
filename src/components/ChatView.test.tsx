@@ -42,10 +42,10 @@ const { useWorkspaceStore } = await import("../stores/workspaceStore");
 // ─── Helpers ──────────────────────────────────────────────────────────
 function resetStore() {
   useChatStore.setState({
-    messages: [],
-    streaming: false,
-    streamBuffer: "",
-    error: null,
+    messagesByWs: {},
+    streamingByWs: {},
+    streamBufferByWs: {},
+    errorByWs: {},
   });
   // Workspace store must have an active id for the "notify on non-active
   // workspace" logic in the listener to no-op.
@@ -66,40 +66,42 @@ describe("ChatView — renders tool cards in the DOM", () => {
 
   it("renders a tool card when chatStore has a tool message (state-driven)", () => {
     useChatStore.setState({
-      messages: [
-        {
-          id: 1,
-          workspaceId: "ws-1",
-          role: "user",
-          content: "Make a thing",
-          model: null,
-          inputTokens: null, outputTokens: null, costUsd: null,
-          createdAt: "2026-05-17T10:00:00Z",
-        },
-        {
-          id: 2,
-          workspaceId: "ws-1",
-          role: "tool" as "user" | "assistant",
-          content: JSON.stringify({
-            toolName: "write_file",
-            toolInput: { path: "index.html" },
-            result: "wrote",
-          }),
-          model: null,
-          inputTokens: null, outputTokens: null, costUsd: null,
-          createdAt: "2026-05-17T10:00:01Z",
-        },
-        {
-          id: 3,
-          workspaceId: "ws-1",
-          role: "assistant",
-          content: "Done.",
-          model: "claude-sonnet-4-6",
-          inputTokens: null, outputTokens: null, costUsd: null,
-          createdAt: "2026-05-17T10:00:02Z",
-        },
-      ],
-      streaming: false,
+      messagesByWs: {
+        "ws-1": [
+          {
+            id: 1,
+            workspaceId: "ws-1",
+            role: "user",
+            content: "Make a thing",
+            model: null,
+            inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-05-17T10:00:00Z",
+          },
+          {
+            id: 2,
+            workspaceId: "ws-1",
+            role: "tool" as "user" | "assistant",
+            content: JSON.stringify({
+              toolName: "write_file",
+              toolInput: { path: "index.html" },
+              result: "wrote",
+            }),
+            model: null,
+            inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-05-17T10:00:01Z",
+          },
+          {
+            id: 3,
+            workspaceId: "ws-1",
+            role: "assistant",
+            content: "Done.",
+            model: "claude-sonnet-4-6",
+            inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-05-17T10:00:02Z",
+          },
+        ],
+      },
+      streamingByWs: { "ws-1": false },
     });
 
     render(<ChatView workspaceId="ws-1" workspacePath="/tmp" />);
@@ -220,41 +222,43 @@ describe("ChatView — renders tool cards in the DOM", () => {
 
   it("renders multiple tool cards in order between user and assistant", () => {
     useChatStore.setState({
-      messages: [
-        {
-          id: 1, workspaceId: "ws-1", role: "user", content: "Build it",
-          model: null, inputTokens: null, outputTokens: null, costUsd: null,
-          createdAt: "2026-05-17T10:00:00Z",
-        },
-        {
-          id: 2, workspaceId: "ws-1",
-          role: "tool" as "user" | "assistant",
-          content: JSON.stringify({ toolName: "list_files", toolInput: { path: "." }, result: "" }),
-          model: null, inputTokens: null, outputTokens: null, costUsd: null,
-          createdAt: "2026-05-17T10:00:01Z",
-        },
-        {
-          id: 3, workspaceId: "ws-1",
-          role: "tool" as "user" | "assistant",
-          content: JSON.stringify({ toolName: "write_file", toolInput: { path: "a.ts" }, result: "" }),
-          model: null, inputTokens: null, outputTokens: null, costUsd: null,
-          createdAt: "2026-05-17T10:00:02Z",
-        },
-        {
-          id: 4, workspaceId: "ws-1",
-          role: "tool" as "user" | "assistant",
-          content: JSON.stringify({ toolName: "run_command", toolInput: { command: "npm test" }, result: "" }),
-          model: null, inputTokens: null, outputTokens: null, costUsd: null,
-          createdAt: "2026-05-17T10:00:03Z",
-        },
-        {
-          id: 5, workspaceId: "ws-1", role: "assistant",
-          content: "All done.", model: "claude-sonnet-4-6",
-          inputTokens: null, outputTokens: null, costUsd: null,
-          createdAt: "2026-05-17T10:00:04Z",
-        },
-      ],
-      streaming: false,
+      messagesByWs: {
+        "ws-1": [
+          {
+            id: 1, workspaceId: "ws-1", role: "user", content: "Build it",
+            model: null, inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-05-17T10:00:00Z",
+          },
+          {
+            id: 2, workspaceId: "ws-1",
+            role: "tool" as "user" | "assistant",
+            content: JSON.stringify({ toolName: "list_files", toolInput: { path: "." }, result: "" }),
+            model: null, inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-05-17T10:00:01Z",
+          },
+          {
+            id: 3, workspaceId: "ws-1",
+            role: "tool" as "user" | "assistant",
+            content: JSON.stringify({ toolName: "write_file", toolInput: { path: "a.ts" }, result: "" }),
+            model: null, inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-05-17T10:00:02Z",
+          },
+          {
+            id: 4, workspaceId: "ws-1",
+            role: "tool" as "user" | "assistant",
+            content: JSON.stringify({ toolName: "run_command", toolInput: { command: "npm test" }, result: "" }),
+            model: null, inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-05-17T10:00:03Z",
+          },
+          {
+            id: 5, workspaceId: "ws-1", role: "assistant",
+            content: "All done.", model: "claude-sonnet-4-6",
+            inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-05-17T10:00:04Z",
+          },
+        ],
+      },
+      streamingByWs: { "ws-1": false },
     });
 
     render(<ChatView workspaceId="ws-1" workspacePath="/tmp" />);

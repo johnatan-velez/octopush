@@ -15,14 +15,6 @@ export type ConversationItem =
   | { kind: "message"; message: ChatMessage }
   | { kind: "tool"; tool: ToolExecution; id: number };
 
-/**
- * Emitted by the backend whenever a chat message is persisted to the DB.
- * Carries the DB rowid (stable, unique, monotonic) + the full row, so the
- * frontend can append to local state without inventing an id.
- *
- * This event replaces the legacy `chat://tool-use` event and the
- * final-text-on-done shortcut: user, tool, and assistant all flow here.
- */
 export interface MessageAddedEvent {
   workspaceId: string;
   id: number;
@@ -35,18 +27,33 @@ export interface MessageAddedEvent {
   createdAt: string;
 }
 
+// Stable empty values returned by selectors when a workspace has no data.
+// Critical: returning a NEW empty array per call would make Zustand selectors
+// invalidate every render → infinite re-render loop (caught in Phase 4 bug fix).
+const EMPTY_MESSAGES: ChatMessage[] = [];
+const EMPTY_TIMELINE: ConversationItem[] = [];
+
 interface ChatState {
-  /** All messages for the active workspace, keyed by DB rowid. */
-  messages: ChatMessage[];
-  streaming: boolean;
-  /** Live text buffer for the partial assistant bubble during streaming. */
-  streamBuffer: string;
+  /** Messages keyed by workspaceId. Each workspace has its own conversation. */
+  messagesByWs: Record<string, ChatMessage[]>;
+  /** Streaming flag per workspace. `true` only while THAT workspace's agentic loop runs. */
+  streamingByWs: Record<string, boolean>;
+  /** Partial assistant text being streamed per workspace. */
+  streamBufferByWs: Record<string, string>;
+  /** Last error per workspace. */
+  errorByWs: Record<string, string | null>;
+
+  /** Global model preference. Applies to whichever workspace the user types in. */
   model: string;
-  error: string | null;
 
-  /** Compute the conversation timeline (messages + tool cards interleaved). */
-  getTimeline: () => ConversationItem[];
+  // Selectors (read-only, scoped by workspaceId)
+  getMessages: (workspaceId: string) => ChatMessage[];
+  getStreaming: (workspaceId: string) => boolean;
+  getStreamBuffer: (workspaceId: string) => string;
+  getError: (workspaceId: string) => string | null;
+  getTimeline: (workspaceId: string) => ConversationItem[];
 
+  // Actions
   loadHistory: (workspaceId: string) => Promise<void>;
   send: (
     workspaceId: string,
@@ -55,26 +62,25 @@ interface ChatState {
     systemPrompt?: string,
   ) => Promise<void>;
   setModel: (model: string) => void;
-  clear: () => void;
-  clearError: () => void;
+  clear: (workspaceId: string) => void;
+  clearError: (workspaceId: string) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => {
-  // Single event channel for every persisted message — user, tool, assistant.
-  // Backend supplies the DB rowid so React keys are stable and unique.
+  // ── chat://message-added ──────────────────────────────────────
+  // Append a message to ITS workspace's bucket, with idempotency on id.
   listen<MessageAddedEvent>("chat://message-added", (ev) => {
     const payload = ev.payload;
+    const wsId = payload.workspaceId;
+
     set((s) => {
-      // Idempotent: if a message with this id is already in state, no-op.
-      // Defends against duplicate listener registration (HMR, strict mode).
-      if (s.messages.some((m) => m.id === payload.id)) {
+      const existing = s.messagesByWs[wsId] ?? EMPTY_MESSAGES;
+      if (existing.some((m) => m.id === payload.id)) {
         return {};
       }
       const newMessage: ChatMessage = {
         id: payload.id,
         workspaceId: payload.workspaceId,
-        // ChatMessage typed as "user" | "assistant"; the runtime "tool" value
-        // is handled by getTimeline() via a string check.
         role: payload.role as "user" | "assistant",
         content: payload.content,
         model: payload.model,
@@ -83,36 +89,59 @@ export const useChatStore = create<ChatState>((set, get) => {
         costUsd: payload.costUsd,
         createdAt: payload.createdAt,
       };
-      return { messages: [...s.messages, newMessage] };
+      return {
+        messagesByWs: {
+          ...s.messagesByWs,
+          [wsId]: [...existing, newMessage],
+        },
+      };
     });
-    // Notify workspace if a message arrived for a non-active workspace.
+
+    // Cross-workspace notification (unchanged behavior).
     const wsStore = useWorkspaceStore.getState();
-    if (payload.workspaceId && payload.workspaceId !== wsStore.activeId) {
-      wsStore.notify(payload.workspaceId);
+    if (wsId && wsId !== wsStore.activeId) {
+      wsStore.notify(wsId);
     }
   });
 
-  // Streaming text deltas for the live assistant bubble. `done: true` is
-  // metadata-only: the assistant message already arrived via message-added.
+  // ── chat://stream ─────────────────────────────────────────────
+  // Stream deltas or done signal — routed to the originating workspace.
   listen<ChatStreamEvent>("chat://stream", (ev) => {
     const payload = ev.payload;
+    const wsId = payload.workspaceId;
+    if (!wsId) return;
+
     if (payload.done) {
-      set({ streaming: false, streamBuffer: "" });
+      set((s) => ({
+        streamingByWs: { ...s.streamingByWs, [wsId]: false },
+        streamBufferByWs: { ...s.streamBufferByWs, [wsId]: "" },
+      }));
     } else {
-      set((s) => ({ streamBuffer: s.streamBuffer + payload.delta }));
+      set((s) => ({
+        streamBufferByWs: {
+          ...s.streamBufferByWs,
+          [wsId]: (s.streamBufferByWs[wsId] ?? "") + payload.delta,
+        },
+      }));
     }
   });
 
   return {
-    messages: [],
-    streaming: false,
-    streamBuffer: "",
+    messagesByWs: {},
+    streamingByWs: {},
+    streamBufferByWs: {},
+    errorByWs: {},
     model: "claude-sonnet-4-6",
-    error: null,
 
-    getTimeline: () => {
+    getMessages: (workspaceId) => get().messagesByWs[workspaceId] ?? EMPTY_MESSAGES,
+    getStreaming: (workspaceId) => get().streamingByWs[workspaceId] ?? false,
+    getStreamBuffer: (workspaceId) => get().streamBufferByWs[workspaceId] ?? "",
+    getError: (workspaceId) => get().errorByWs[workspaceId] ?? null,
+
+    getTimeline: (workspaceId) => {
+      const msgs = get().messagesByWs[workspaceId];
+      if (!msgs || msgs.length === 0) return EMPTY_TIMELINE;
       const items: ConversationItem[] = [];
-      const msgs = get().messages;
       for (const msg of msgs) {
         const role = msg.role as string;
         if (role === "tool") {
@@ -131,18 +160,17 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     loadHistory: async (workspaceId) => {
       const messages = await ipc.listChatMessages(workspaceId);
-      set({ messages: messages as ChatMessage[] });
+      set((s) => ({
+        messagesByWs: { ...s.messagesByWs, [workspaceId]: messages as ChatMessage[] },
+      }));
     },
 
-    send: async (workspaceId, workspacePath, content, _systemPrompt) => {
-      // Start streaming immediately for instant visual feedback. The user
-      // message itself arrives via chat://message-added in ~5ms once the
-      // backend persists it — no optimistic local append with a fake id.
-      set({
-        streaming: true,
-        streamBuffer: "",
-        error: null,
-      });
+    send: async (workspaceId, workspacePath, content, systemPrompt) => {
+      set((s) => ({
+        streamingByWs: { ...s.streamingByWs, [workspaceId]: true },
+        streamBufferByWs: { ...s.streamBufferByWs, [workspaceId]: "" },
+        errorByWs: { ...s.errorByWs, [workspaceId]: null },
+      }));
 
       try {
         await ipc.sendChatMessage({
@@ -150,16 +178,30 @@ export const useChatStore = create<ChatState>((set, get) => {
           workspacePath,
           model: get().model,
           userMessage: content,
-          system: _systemPrompt,
+          system: systemPrompt,
           maxTokens: 8192,
         });
       } catch (e) {
-        set({ streaming: false, streamBuffer: "", error: String(e) });
+        set((s) => ({
+          streamingByWs: { ...s.streamingByWs, [workspaceId]: false },
+          streamBufferByWs: { ...s.streamBufferByWs, [workspaceId]: "" },
+          errorByWs: { ...s.errorByWs, [workspaceId]: String(e) },
+        }));
       }
     },
 
     setModel: (model) => set({ model }),
-    clear: () => set({ messages: [], streamBuffer: "", error: null }),
-    clearError: () => set({ error: null }),
+
+    clear: (workspaceId) =>
+      set((s) => ({
+        messagesByWs: { ...s.messagesByWs, [workspaceId]: EMPTY_MESSAGES },
+        streamBufferByWs: { ...s.streamBufferByWs, [workspaceId]: "" },
+        errorByWs: { ...s.errorByWs, [workspaceId]: null },
+      })),
+
+    clearError: (workspaceId) =>
+      set((s) => ({
+        errorByWs: { ...s.errorByWs, [workspaceId]: null },
+      })),
   };
 });

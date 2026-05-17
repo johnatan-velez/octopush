@@ -1,14 +1,14 @@
 /**
- * Regression test for the "tool cards disappearing" bug.
+ * Regression tests for chatStore.
  *
- * Architectural invariant under test: every chat message has a stable,
- * unique id supplied by the backend (DB rowid). The frontend never
- * invents ids via Date.now(). This eliminates the class of bugs where
- * user-msg and assistant-msg shared the same React key, causing
- * reconciliation to drop tool cards in between.
+ * Architectural invariants under test:
+ * 1. Every chat message has a stable, unique id supplied by the backend
+ *    (DB rowid). The frontend never invents ids via Date.now().
+ * 2. State is SCOPED PER WORKSPACE. Two workspaces never share messages,
+ *    streaming flag, streamBuffer, or error.
  *
- * If any future change reintroduces Date.now() ids or strips messages
- * on the done event, these tests fail loudly.
+ * If any future change reintroduces Date.now() ids, strips messages on the
+ * done event, or globalizes state, these tests fail loudly.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ChatStreamEvent } from "../lib/types";
@@ -32,10 +32,8 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 
-// Import AFTER mocks are wired so chatStore picks them up.
 const { useChatStore } = await import("./chatStore");
 
-// ─── Helpers ──────────────────────────────────────────────────────────
 function emit(eventName: string, payload: unknown) {
   const h = handlers[eventName];
   if (!h) throw new Error(`No handler registered for ${eventName}`);
@@ -44,10 +42,10 @@ function emit(eventName: string, payload: unknown) {
 
 function resetStore() {
   useChatStore.setState({
-    messages: [],
-    streaming: false,
-    streamBuffer: "",
-    error: null,
+    messagesByWs: {},
+    streamingByWs: {},
+    streamBufferByWs: {},
+    errorByWs: {},
   });
 }
 
@@ -67,26 +65,21 @@ function makeMsg(overrides: Partial<MessageAddedEvent>): MessageAddedEvent {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────
-describe("chatStore — tool card persistence through done event", () => {
-  beforeEach(() => {
-    resetStore();
-  });
+describe("chatStore — single workspace tool-card persistence", () => {
+  beforeEach(() => resetStore());
 
   it("preserves tool messages through the full agentic loop sequence", async () => {
     const workspaceId = "ws-1";
     const workspacePath = "/tmp/octopus-test";
 
-    // 1. User calls send → streaming begins, no optimistic local message.
     await useChatStore.getState().send(workspaceId, workspacePath, "build me a thing");
-    expect(useChatStore.getState().streaming).toBe(true);
-    expect(useChatStore.getState().messages).toHaveLength(0);
+    expect(useChatStore.getState().getStreaming(workspaceId)).toBe(true);
+    expect(useChatStore.getState().getMessages(workspaceId)).toHaveLength(0);
 
-    // 2. Backend persists user msg → emits message-added (id=1).
     emit("chat://message-added", makeMsg({ id: 1, role: "user", content: "build me a thing" }));
-    expect(useChatStore.getState().messages).toHaveLength(1);
-    expect(useChatStore.getState().messages[0].role).toBe("user");
+    expect(useChatStore.getState().getMessages(workspaceId)).toHaveLength(1);
+    expect(useChatStore.getState().getMessages(workspaceId)[0].role).toBe("user");
 
-    // 3. Backend persists 3 tool executions → emits message-added per tool.
     const tools = [
       { toolName: "list_files", toolInput: { path: "." }, result: "a\nb\nc" },
       { toolName: "read_file", toolInput: { path: "a" }, result: "// file a" },
@@ -100,11 +93,8 @@ describe("chatStore — tool card persistence through done event", () => {
       }));
     });
 
-    expect(useChatStore.getState().messages).toHaveLength(4);
-    expect(useChatStore.getState().messages.slice(1).every((m) => String(m.role) === "tool")).toBe(true);
+    expect(useChatStore.getState().getMessages(workspaceId)).toHaveLength(4);
 
-    // 4. Backend streams final delta, then emits message-added for assistant,
-    //    then emits stream { done: true } as metadata.
     emit("chat://stream", {
       workspaceId,
       delta: "Done. Built the thing.",
@@ -130,8 +120,7 @@ describe("chatStore — tool card persistence through done event", () => {
       outputTokens: 200,
     } satisfies ChatStreamEvent);
 
-    // 5. Final state: user + 3 tools + assistant = 5. Tools survive the done event.
-    const afterDone = useChatStore.getState().messages;
+    const afterDone = useChatStore.getState().getMessages(workspaceId);
     const roleCounts = afterDone.reduce<Record<string, number>>((acc, m) => {
       const r = String(m.role);
       acc[r] = (acc[r] ?? 0) + 1;
@@ -140,29 +129,26 @@ describe("chatStore — tool card persistence through done event", () => {
 
     expect(roleCounts).toEqual({ user: 1, tool: 3, assistant: 1 });
     expect(afterDone).toHaveLength(5);
-    expect(useChatStore.getState().streaming).toBe(false);
-    expect(useChatStore.getState().streamBuffer).toBe("");
+    expect(useChatStore.getState().getStreaming(workspaceId)).toBe(false);
+    expect(useChatStore.getState().getStreamBuffer(workspaceId)).toBe("");
   });
 
-  it("uses unique, monotonic backend-provided ids — no Date.now() collisions", () => {
-    // The new architecture: backend rowids are integers, monotonically
-    // increasing per insert. They cannot collide with each other.
+  it("uses unique backend-provided ids — no Date.now() collisions", () => {
     emit("chat://message-added", makeMsg({ id: 1, role: "user", content: "hi" }));
     emit("chat://message-added", makeMsg({ id: 2, role: "tool", content: JSON.stringify({ toolName: "read_file", toolInput: {}, result: "" }) }));
     emit("chat://message-added", makeMsg({ id: 3, role: "assistant", content: "done" }));
 
-    const msgs = useChatStore.getState().messages;
-    const ids = msgs.map((m) => m.id);
+    const ids = useChatStore.getState().getMessages("ws-1").map((m) => m.id);
     expect(ids).toEqual([1, 2, 3]);
-    expect(new Set(ids).size).toBe(3); // unique
+    expect(new Set(ids).size).toBe(3);
   });
 
-  it("React keys are unique across timeline (no duplicate-key reconciliation bugs)", () => {
+  it("React keys are unique across timeline", () => {
     emit("chat://message-added", makeMsg({ id: 1, role: "user", content: "hi" }));
     emit("chat://message-added", makeMsg({ id: 2, role: "tool", content: JSON.stringify({ toolName: "read_file", toolInput: {}, result: "" }) }));
     emit("chat://message-added", makeMsg({ id: 3, role: "assistant", content: "done" }));
 
-    const timeline = useChatStore.getState().getTimeline();
+    const timeline = useChatStore.getState().getTimeline("ws-1");
     const keys = timeline.map((it) =>
       it.kind === "tool" ? `tool-${it.id}` : String(it.message.id),
     );
@@ -170,14 +156,13 @@ describe("chatStore — tool card persistence through done event", () => {
     expect(dupes, `Duplicate React keys: ${JSON.stringify(keys)}`).toEqual([]);
   });
 
-  it("is idempotent under duplicate message-added events (defends against HMR)", () => {
+  it("is idempotent under duplicate message-added events", () => {
     const ev = makeMsg({ id: 42, role: "user", content: "hi" });
     emit("chat://message-added", ev);
-    emit("chat://message-added", ev); // duplicate — should no-op
-    emit("chat://message-added", ev); // duplicate again
+    emit("chat://message-added", ev);
+    emit("chat://message-added", ev);
 
-    const msgs = useChatStore.getState().messages;
-    expect(msgs).toHaveLength(1);
+    expect(useChatStore.getState().getMessages("ws-1")).toHaveLength(1);
   });
 
   it("getTimeline parses tool messages into tool items", () => {
@@ -185,18 +170,84 @@ describe("chatStore — tool card persistence through done event", () => {
     emit("chat://message-added", makeMsg({
       id: 2,
       role: "tool",
-      content: JSON.stringify({
-        toolName: "read_file",
-        toolInput: { path: "x" },
-        result: "ok",
-      }),
+      content: JSON.stringify({ toolName: "read_file", toolInput: { path: "x" }, result: "ok" }),
     }));
     emit("chat://message-added", makeMsg({ id: 3, role: "assistant", content: "done" }));
 
-    const timeline = useChatStore.getState().getTimeline();
+    const timeline = useChatStore.getState().getTimeline("ws-1");
     expect(timeline).toHaveLength(3);
     expect(timeline[0].kind).toBe("message");
     expect(timeline[1].kind).toBe("tool");
     expect(timeline[2].kind).toBe("message");
+  });
+});
+
+describe("chatStore — workspace isolation", () => {
+  beforeEach(() => resetStore());
+
+  it("messages are scoped per workspace", () => {
+    emit("chat://message-added", makeMsg({ workspaceId: "ws-A", id: 1, role: "user", content: "hello from A" }));
+    emit("chat://message-added", makeMsg({ workspaceId: "ws-B", id: 2, role: "user", content: "hello from B" }));
+
+    expect(useChatStore.getState().getMessages("ws-A")).toHaveLength(1);
+    expect(useChatStore.getState().getMessages("ws-A")[0].content).toBe("hello from A");
+    expect(useChatStore.getState().getMessages("ws-B")).toHaveLength(1);
+    expect(useChatStore.getState().getMessages("ws-B")[0].content).toBe("hello from B");
+  });
+
+  it("streaming flag is scoped per workspace (the reported bug)", async () => {
+    await useChatStore.getState().send("ws-A", "/tmp/a", "do something");
+
+    // ws-A is now streaming. ws-B must NOT be.
+    expect(useChatStore.getState().getStreaming("ws-A")).toBe(true);
+    expect(useChatStore.getState().getStreaming("ws-B")).toBe(false);
+  });
+
+  it("streamBuffer is scoped per workspace", () => {
+    emit("chat://stream", {
+      workspaceId: "ws-A",
+      delta: "alpha text",
+      done: false,
+      inputTokens: null,
+      outputTokens: null,
+    });
+
+    expect(useChatStore.getState().getStreamBuffer("ws-A")).toBe("alpha text");
+    expect(useChatStore.getState().getStreamBuffer("ws-B")).toBe("");
+  });
+
+  it("done event only clears the streaming of the originating workspace", async () => {
+    await useChatStore.getState().send("ws-A", "/tmp/a", "X");
+    await useChatStore.getState().send("ws-B", "/tmp/b", "Y");
+    expect(useChatStore.getState().getStreaming("ws-A")).toBe(true);
+    expect(useChatStore.getState().getStreaming("ws-B")).toBe(true);
+
+    emit("chat://stream", {
+      workspaceId: "ws-A",
+      delta: "",
+      done: true,
+      inputTokens: null,
+      outputTokens: null,
+    });
+
+    expect(useChatStore.getState().getStreaming("ws-A")).toBe(false);
+    expect(useChatStore.getState().getStreaming("ws-B")).toBe(true);
+  });
+
+  it("empty selectors return stable references (no infinite re-render trap)", () => {
+    // Calling getMessages on an unknown workspace twice returns THE SAME array
+    // reference, so a React component subscribing via useChatStore((s) => s.getMessages(...))
+    // doesn't see a "change" when there's no data.
+    const a1 = useChatStore.getState().getMessages("never-seen");
+    const a2 = useChatStore.getState().getMessages("never-seen");
+    expect(a1).toBe(a2);
+
+    const t1 = useChatStore.getState().getTimeline("never-seen");
+    const t2 = useChatStore.getState().getTimeline("never-seen");
+    expect(t1).toBe(t2);
+
+    expect(useChatStore.getState().getStreaming("never-seen")).toBe(false);
+    expect(useChatStore.getState().getStreamBuffer("never-seen")).toBe("");
+    expect(useChatStore.getState().getError("never-seen")).toBeNull();
   });
 });

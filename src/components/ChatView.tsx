@@ -14,8 +14,15 @@ interface Props {
 }
 
 export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) {
-  const { messages, streaming, streamBuffer, model, error, loadHistory, send, setModel, clearError } =
-    useChatStore();
+  const messages = useChatStore((s) => s.getMessages(workspaceId));
+  const streaming = useChatStore((s) => s.getStreaming(workspaceId));
+  const streamBuffer = useChatStore((s) => s.getStreamBuffer(workspaceId));
+  const error = useChatStore((s) => s.getError(workspaceId));
+  const model = useChatStore((s) => s.model);
+  const loadHistory = useChatStore((s) => s.loadHistory);
+  const send = useChatStore((s) => s.send);
+  const setModel = useChatStore((s) => s.setModel);
+  const clearError = useChatStore((s) => s.clearError);
 
   // Compute timeline locally with useMemo. Do NOT use
   //   useChatStore((s) => s.getTimeline())
@@ -125,7 +132,7 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
             {error && (
               <ErrorBlock
                 error={error}
-                onConfigureApiKey={onOpenSettings ? () => { clearError(); onOpenSettings(); } : null}
+                onConfigureApiKey={onOpenSettings ? () => { clearError(workspaceId); onOpenSettings(); } : null}
               />
             )}
           </>
