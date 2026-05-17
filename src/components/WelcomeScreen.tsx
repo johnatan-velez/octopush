@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Clock, ChevronRight } from "lucide-react";
 import { useProjectStore } from "../stores/projectStore";
 import type { ProjectInfo } from "../lib/types";
 
@@ -48,13 +47,11 @@ export function WelcomeScreen({ onNewProject }: Props) {
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragOver(false);
-    // Tauri exposes dropped file paths via dataTransfer in some versions
     const items = Array.from(e.dataTransfer.items);
     for (const item of items) {
       if (item.kind === "file") {
         const file = item.getAsFile();
         if (file) {
-          // file.path is available in Tauri's webview
           const path = (file as File & { path?: string }).path;
           if (path) {
             open(path);
@@ -63,132 +60,151 @@ export function WelcomeScreen({ onNewProject }: Props) {
         }
       }
     }
-    // Fallback: show path input
     setShowPathInput(true);
   }
 
   return (
     <div
       data-tauri-drag-region
-      className="flex h-full w-full flex-col items-center justify-center gap-8 bg-octo-bg px-4"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="relative flex h-full w-full flex-col items-center justify-center bg-octo-bg px-6"
+      style={{
+        background:
+          "radial-gradient(ellipse at center top, rgba(212,165,116,0.06), transparent 55%), var(--color-octo-onyx)",
+      }}
     >
+      {/* Mark */}
+      <div
+        aria-hidden
+        className="relative flex h-14 w-14 items-center justify-center rounded-full font-serif italic text-[26px] text-octo-brass"
+        style={{ border: "1px solid var(--brass-dim)" }}
+      >
+        O
+        <span
+          className="absolute -inset-2 rounded-full"
+          style={{ border: "1px solid rgba(212, 165, 116, 0.15)" }}
+        />
+      </div>
+
       {/* Logo */}
-      <div className="font-mono text-2xl font-bold uppercase tracking-[0.3em] text-zinc-100">
-        OCTOPUS SH
+      <h1 className="mt-6 font-serif italic text-[32px] leading-[1.05] tracking-[-0.01em] text-octo-ivory">
+        Octopus<span className="px-1.5 text-octo-brass">&amp;</span>you
+      </h1>
+
+      {/* Tagline */}
+      <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.35em] text-octo-mute">
+        eight arms · one mind
       </div>
 
-      {/* Dropzone / Open Project */}
-      <div className="flex flex-col items-center gap-4">
-        <button
-          type="button"
-          onClick={handleOpenClick}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          className={`group flex w-72 flex-col items-center gap-3 rounded-xl border-2 border-dashed px-8 py-10 transition ${
-            dragOver
-              ? "border-octo-accent bg-octo-accent/10"
-              : "border-octo-border bg-octo-panel hover:border-octo-accent/60 hover:bg-octo-accent/5"
-          }`}
-        >
-          <FolderOpen
-            size={32}
-            className={`transition ${
-              dragOver
-                ? "text-octo-accent"
-                : "text-zinc-500 group-hover:text-octo-accent"
-            }`}
+      {/* Brass rule */}
+      <div
+        aria-hidden
+        className="my-6 h-px w-7"
+        style={{ background: "linear-gradient(90deg, var(--color-octo-brass), transparent)" }}
+      />
+
+      {/* Primary CTA */}
+      <button
+        type="button"
+        onClick={onNewProject}
+        className="rounded-md px-5 py-2.5 font-serif italic text-[14px] text-octo-brass transition"
+        style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+      >
+        Begin a new study
+      </button>
+
+      {/* Or — open existing */}
+      <div className="mt-4 font-mono text-[9px] uppercase tracking-[0.3em] text-octo-mute">
+        or
+      </div>
+
+      {/* Drop / open path */}
+      {!showPathInput ? (
+        <div className="mt-3 text-center text-[12px] leading-[1.6] text-octo-sage">
+          <span>Drop a folder, or </span>
+          <button
+            type="button"
+            onClick={handleOpenClick}
+            className="font-serif italic text-octo-ivory underline decoration-octo-brass/40 underline-offset-2 hover:decoration-octo-brass"
+          >
+            open one from disk
+          </button>
+        </div>
+      ) : (
+        <div className="mt-3 flex w-72 items-center gap-2">
+          <input
+            autoFocus
+            value={pathValue}
+            onChange={(e) => setPathValue(e.target.value)}
+            onKeyDown={handlePathKeyDown}
+            placeholder="/path/to/project"
+            className="min-w-0 flex-1 rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
           />
-          <div className="flex flex-col items-center gap-1">
-            <span className="text-sm font-medium text-zinc-200">
-              Open Project
-            </span>
-            <span className="text-center text-xs text-zinc-500">
-              Drag a folder with .git or click to browse
-            </span>
-          </div>
-        </button>
+          <button
+            type="button"
+            onClick={handleConfirmPath}
+            disabled={!pathValue.trim() || loading}
+            className="rounded-md px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-octo-brass disabled:opacity-40"
+            style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+          >
+            Open
+          </button>
+          <button
+            type="button"
+            onClick={() => { setShowPathInput(false); setPathValue(""); }}
+            className="px-2 py-2 text-[12px] text-octo-mute hover:text-octo-sage"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
-        {/* Path input — shown after clicking Open Project */}
-        {showPathInput && (
-          <div className="flex w-72 items-center gap-2">
-            <input
-              autoFocus
-              value={pathValue}
-              onChange={(e) => setPathValue(e.target.value)}
-              onKeyDown={handlePathKeyDown}
-              placeholder="/path/to/project"
-              className="min-w-0 flex-1 rounded-md border border-octo-border bg-octo-panel px-3 py-2 text-sm font-mono text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-octo-accent"
-            />
-            <button
-              type="button"
-              onClick={handleConfirmPath}
-              disabled={!pathValue.trim() || loading}
-              className="rounded-md bg-octo-accent px-3 py-2 text-sm font-medium text-zinc-950 transition hover:bg-octo-accent-dim disabled:opacity-40"
-            >
-              Open
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowPathInput(false);
-                setPathValue("");
-              }}
-              className="rounded-md px-2 py-2 text-sm text-zinc-500 transition hover:text-zinc-200"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-
-        {/* Error feedback */}
-        {error && (
-          <div className="w-72 rounded-md border border-octo-danger/40 bg-octo-danger/10 px-3 py-2 text-xs text-octo-danger">
-            {error}
-          </div>
-        )}
-      </div>
-
-      {/* New project CTA */}
-      <div className="flex flex-col items-center gap-2">
-        <span className="text-xs text-zinc-500">Or start a new project</span>
-        <button
-          type="button"
-          onClick={onNewProject}
-          className="flex items-center gap-1.5 rounded-md border border-octo-accent/40 bg-octo-accent/10 px-4 py-2 text-sm font-medium text-octo-accent transition hover:bg-octo-accent/20"
+      {/* Error */}
+      {error && (
+        <div
+          className="mt-4 max-w-md rounded-md px-3 py-2 text-[12px] text-octo-rouge"
+          style={{ borderLeft: "1px solid var(--color-octo-rouge)", background: "rgba(209, 139, 139, 0.08)" }}
         >
-          <span className="text-base leading-none">+</span>
-          New Project
-        </button>
-      </div>
+          {error}
+        </div>
+      )}
+
+      {/* Dropzone hint when dragging */}
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-8 rounded-2xl"
+          style={{ border: "1px dashed var(--brass-dim)", background: "rgba(212, 165, 116, 0.04)" }}
+        />
+      )}
 
       {/* Recent projects */}
       {recent.length > 0 && (
-        <div className="w-72">
-          <div className="mb-2 flex items-center gap-1.5 text-xs uppercase tracking-wider text-zinc-600">
-            <Clock size={11} />
+        <div className="absolute bottom-10 left-1/2 -translate-x-1/2">
+          <div className="mb-3 text-center font-mono text-[9px] uppercase tracking-[0.3em] text-octo-mute">
             Recent
           </div>
-          <ul className="flex flex-col gap-0.5">
-            {recent.map((project: ProjectInfo) => (
+          <ul className="flex items-stretch gap-3">
+            {recent.slice(0, 5).map((project: ProjectInfo) => (
               <li key={project.id}>
                 <button
                   type="button"
                   onClick={() => open(project.path)}
-                  className="group flex w-full items-center justify-between rounded-md px-3 py-2 text-left transition hover:bg-octo-panel"
+                  className="flex items-center gap-2.5 rounded-md px-3 py-2 transition hover:bg-octo-panel"
+                  title={project.path}
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-zinc-200">
-                      {project.name}
-                    </div>
-                    <div className="truncate text-xs text-zinc-600">
-                      {project.path}
-                    </div>
-                  </div>
-                  <ChevronRight
-                    size={14}
-                    className="ml-2 shrink-0 text-zinc-700 transition group-hover:text-zinc-400"
-                  />
+                  <span
+                    className="flex h-7 w-7 items-center justify-center rounded-md font-serif italic text-[14px] text-octo-brass"
+                    style={{
+                      background: "var(--brass-ghost)",
+                      border: "1px solid var(--brass-dim)",
+                    }}
+                  >
+                    {project.name.charAt(0).toUpperCase() || "?"}
+                  </span>
+                  <span className="font-serif italic text-[13px] text-octo-ivory">
+                    {project.name}
+                  </span>
                 </button>
               </li>
             ))}
