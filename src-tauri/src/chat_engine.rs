@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use chrono;
 
 const MAX_TOOL_ITERATIONS: usize = 25;
 
@@ -54,6 +55,24 @@ pub struct ToolUseEvent {
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub result: String,
+}
+
+/// Emitted whenever a chat message is persisted to the DB.
+/// Carries the DB rowid + the full message row so the frontend can append
+/// to its local state using a stable ID. Replaces the prior `chat://tool-use`
+/// event, and replaces the done-with-final-text shortcut.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageAddedEvent {
+    pub workspace_id: String,
+    pub id: i64,
+    pub role: String,
+    pub content: String,
+    pub model: Option<String>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cost_usd: Option<f64>,
+    pub created_at: String,
 }
 
 // ─── Tools definition ─────────────────────────────────────────────
@@ -232,6 +251,37 @@ impl ChatEngine {
         }
     }
 
+    /// Insert a message into the DB and emit a `chat://message-added` event
+    /// carrying the full row (including the DB-assigned id).
+    fn insert_and_emit_message(
+        &self,
+        app: &AppHandle,
+        workspace_id: &str,
+        role: &str,
+        content: &str,
+        model: Option<&str>,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
+        cost_usd: Option<f64>,
+    ) -> AppResult<i64> {
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+        let id = self.db.lock().insert_chat_message(
+            workspace_id, role, content, model, input_tokens, output_tokens, cost_usd,
+        )?;
+        let _ = app.emit("chat://message-added", &MessageAddedEvent {
+            workspace_id: workspace_id.to_string(),
+            id,
+            role: role.to_string(),
+            content: content.to_string(),
+            model: model.map(|s| s.to_string()),
+            input_tokens,
+            output_tokens,
+            cost_usd,
+            created_at: now,
+        });
+        Ok(id)
+    }
+
     /// Run the agentic loop: send messages with tools, execute tool calls,
     /// feed results back, repeat until Claude gives a final text answer.
     pub async fn send_agentic(
@@ -247,8 +297,9 @@ impl ChatEngine {
 
         let workspace_path = std::path::PathBuf::from(&request.workspace_path);
 
-        // Persist user message.
-        self.db.lock().insert_chat_message(
+        // Persist user message and emit message-added so the frontend learns the DB id.
+        self.insert_and_emit_message(
+            &app,
             &request.workspace_id,
             "user",
             &request.user_message,
@@ -435,8 +486,25 @@ impl ChatEngine {
             if stop_reason != "tool_use" || tool_uses.is_empty() {
                 let final_text = text_parts.trim().to_string();
 
-                // Emit done — include the final text so the frontend can
-                // decide whether to show a message bubble.
+                // Persist final assistant message and emit message-added. Order matters:
+                // this event must arrive before the done event so the frontend has the
+                // final message before it clears the streaming bubble.
+                if !final_text.is_empty() {
+                    let cost = token_engine::compute_cost(&request.model, total_input, total_output, 0, 0);
+                    self.insert_and_emit_message(
+                        &app,
+                        &request.workspace_id,
+                        "assistant",
+                        &final_text,
+                        Some(&request.model),
+                        Some(total_input as i64),
+                        Some(total_output as i64),
+                        Some(cost),
+                    )?;
+                }
+
+                // Emit done — pure metadata. The final assistant content was delivered
+                // via the chat://message-added event above.
                 let _ = app.emit("chat://stream", &ChatStreamEvent {
                     workspace_id: request.workspace_id.clone(),
                     delta: String::new(),
@@ -444,16 +512,6 @@ impl ChatEngine {
                     input_tokens: Some(total_input),
                     output_tokens: Some(total_output),
                 });
-
-                // Only persist if there's actual text.
-                if !final_text.is_empty() {
-                    let cost = token_engine::compute_cost(&request.model, total_input, total_output, 0, 0);
-                    self.db.lock().insert_chat_message(
-                        &request.workspace_id, "assistant", &final_text,
-                        Some(&request.model), Some(total_input as i64),
-                        Some(total_output as i64), Some(cost),
-                    )?;
-                }
 
                 return Ok(());
             }
@@ -485,29 +543,20 @@ impl ChatEngine {
                     tool_input.clone()
                 };
 
-                // Persist tool execution to DB as role="tool" message.
+                // Persist tool execution as role="tool" and emit message-added.
                 let tool_record = serde_json::json!({
                     "toolName": tool_name,
                     "toolInput": input_for_display,
                     "result": result,
                 });
-                if let Err(e) = self.db.lock().insert_chat_message(
+                if let Err(e) = self.insert_and_emit_message(
+                    &app,
                     &request.workspace_id,
                     "tool",
                     &tool_record.to_string(),
                     None, None, None, None,
                 ) {
                     tracing::error!(tool = %tool_name, error = %e, "failed to persist tool execution");
-                }
-
-                // Emit tool use event for the frontend.
-                if let Err(e) = app.emit("chat://tool-use", &ToolUseEvent {
-                    workspace_id: request.workspace_id.clone(),
-                    tool_name: tool_name.clone(),
-                    tool_input: input_for_display,
-                    result: result.clone(),
-                }) {
-                    tracing::error!(tool = %tool_name, error = %e, "failed to emit tool-use event");
                 }
 
                 tool_results.push(serde_json::json!({
