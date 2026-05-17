@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import { NewProjectFlow } from "./components/NewProjectFlow";
-import { ProjectSidebar } from "./components/ProjectSidebar";
-import { WorkspaceBar } from "./components/WorkspaceBar";
-import type { WorkspaceTab } from "./components/WorkspaceBar";
+import { WorkspaceRail } from "./components/WorkspaceRail";
+import { ContextHeader } from "./components/ContextHeader";
+import { ModeSwitcher } from "./components/ModeSwitcher";
+import { Companion } from "./components/Companion";
+import { WorkspaceCustomizeMenu } from "./components/WorkspaceCustomizeMenu";
 import { WorkspaceCreator } from "./components/WorkspaceCreator";
 import { ChatView } from "./components/ChatView";
 import { ChangesPanel } from "./components/ChangesPanel";
@@ -15,478 +17,477 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { useProjectStore } from "./stores/projectStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useThemeStore } from "./stores/themeStore";
+import { resolveMonogram } from "./lib/monogram";
+import { type WorkspaceMode } from "./lib/modes";
 import { ipc } from "./lib/ipc";
+import type { GitStatus, TintName } from "./lib/types";
 
-type AppView = "welcome" | "new-project" | "terminal" | "chat" | "changes";
+interface ChatRef {
+  id: string;
+  title: string;
+  meta: string;
+}
+
+interface TerminalRef {
+  id: string;
+  label: string;
+  meta: string;
+  sessionId: string | null;
+}
+
+type AppView = "project" | "new-project";
 
 function App() {
   const project = useProjectStore((s) => s.current);
   const loadTheme = useThemeStore((s) => s.load);
-  const { workspaces, activeId: activeWorkspaceId, load: loadWorkspaces } = useWorkspaceStore();
+  const {
+    workspaces,
+    activeId: activeWorkspaceId,
+    load: loadWorkspaces,
+    updateCustomization,
+    select: selectWorkspace,
+  } = useWorkspaceStore();
 
-  const [view, _setView] = useState<AppView>("welcome");
-  const [viewPerWorkspace, setViewPerWorkspace] = useState<Record<string, string>>({});
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [appView, setAppView] = useState<AppView>("project");
 
-  // Multi-tab state
-  const [tabsPerWorkspace, setTabsPerWorkspace] = useState<Record<string, WorkspaceTab[]>>({});
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  // Per-workspace state — modes, chats, terminals.
+  const [modePerWorkspace, setModePerWorkspace] = useState<Record<string, WorkspaceMode>>({});
+  const [chatsPerWorkspace, setChatsPerWorkspace] = useState<Record<string, ChatRef[]>>({});
+  const [terminalsPerWorkspace, setTerminalsPerWorkspace] = useState<Record<string, TerminalRef[]>>({});
+  const [activeChatPerWorkspace, setActiveChatPerWorkspace] = useState<Record<string, string>>({});
+  const [activeTerminalPerWorkspace, setActiveTerminalPerWorkspace] = useState<Record<string, string>>({});
 
-  // Wrapper that tracks per-workspace view
-  const setView = useCallback((v: AppView) => {
-    _setView(v);
-    const wsId = useWorkspaceStore.getState().activeId;
-    if (wsId && v !== "welcome" && v !== "new-project") {
-      setViewPerWorkspace((prev) => ({ ...prev, [wsId]: v }));
-    }
-  }, []);
+  // Overlay/menu state
   const [showTokens, setShowTokens] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showCreator, setShowCreator] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [customizingWorkspaceId, setCustomizingWorkspaceId] = useState<string | null>(null);
 
-  const creatingSessionRef = useRef<Set<string>>(new Set());
+  // Git status (refreshed on workspace change)
+  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
 
+  // Layout version (forces TerminalPane fit-resize when sidebar/companion toggle)
   const layoutVersionRef = useRef(0);
   const [layoutVersion, setLayoutVersion] = useState(0);
-
   const bumpLayout = useCallback(() => {
     layoutVersionRef.current += 1;
     setLayoutVersion(layoutVersionRef.current);
   }, []);
 
-  // Ensure tabs exist for a workspace, returns current tabs
-  const ensureTabs = useCallback((wsId: string): WorkspaceTab[] => {
-    const existing = tabsPerWorkspace[wsId];
-    if (existing && existing.length > 0) return existing;
-    const initial: WorkspaceTab[] = [
-      { id: `chat-${wsId}`, type: "chat", label: "Chat", conversationId: wsId },
-    ];
-    setTabsPerWorkspace((prev) => ({ ...prev, [wsId]: initial }));
-    return initial;
-  }, [tabsPerWorkspace]);
+  const creatingTerminalRef = useRef<Set<string>>(new Set());
 
-  // Load theme on startup
+  // ── Theme load ──
   useEffect(() => {
     loadTheme();
   }, [loadTheme]);
 
-  // When project becomes non-null, switch to hub and load workspaces
+  // ── Project switch → load workspaces, reset view ──
   useEffect(() => {
     if (project) {
-      setView("chat");
+      setAppView("project");
       setShowCreator(false);
       loadWorkspaces(project.id);
     } else {
-      setView("welcome");
       setShowCreator(false);
     }
   }, [project, loadWorkspaces]);
 
-  // When active workspace changes (sidebar click), restore last view or default to chat
-  const prevWorkspaceRef = useRef(activeWorkspaceId);
+  // ── Initialize per-workspace state when a new workspace becomes active ──
   useEffect(() => {
-    if (activeWorkspaceId && activeWorkspaceId !== prevWorkspaceRef.current) {
-      const tabs = ensureTabs(activeWorkspaceId);
-      const lastView = viewPerWorkspace[activeWorkspaceId] as AppView || "chat";
-      _setView(lastView);
-      // Find a tab matching the last view, or fall back to first tab
-      if (lastView === "chat" || lastView === "terminal") {
-        const matchingTab = tabs.find((t) => t.type === lastView);
-        setActiveTabId(matchingTab?.id || tabs[0]?.id || null);
-      }
-      setShowCreator(false);
-    }
-    prevWorkspaceRef.current = activeWorkspaceId;
-  }, [activeWorkspaceId, viewPerWorkspace]);
-
-  // Ensure terminal session for a tab
-  const ensureTerminalForTab = useCallback(async (tab: WorkspaceTab) => {
-    if (tab.sessionId) return;
     if (!activeWorkspaceId) return;
-    if (creatingSessionRef.current.has(tab.id)) return;
+    setChatsPerWorkspace((prev) => {
+      if (prev[activeWorkspaceId]) return prev;
+      const initial: ChatRef = {
+        id: activeWorkspaceId, // first chat uses workspace id as conversationId
+        title: "Conversation",
+        meta: "NOW",
+      };
+      return { ...prev, [activeWorkspaceId]: [initial] };
+    });
+    setActiveChatPerWorkspace((prev) =>
+      prev[activeWorkspaceId] ? prev : { ...prev, [activeWorkspaceId]: activeWorkspaceId },
+    );
+    setTerminalsPerWorkspace((prev) => {
+      if (prev[activeWorkspaceId]) return prev;
+      const initial: TerminalRef = {
+        id: `term-${activeWorkspaceId}-1`,
+        label: "Main",
+        meta: "READY",
+        sessionId: null,
+      };
+      return { ...prev, [activeWorkspaceId]: [initial] };
+    });
+    setActiveTerminalPerWorkspace((prev) =>
+      prev[activeWorkspaceId]
+        ? prev
+        : { ...prev, [activeWorkspaceId]: `term-${activeWorkspaceId}-1` },
+    );
+  }, [activeWorkspaceId]);
 
-    creatingSessionRef.current.add(tab.id);
+  // ── Refresh git status on workspace change ──
+  useEffect(() => {
+    const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+    const path = ws?.worktreePath ?? project?.path;
+    if (!path) {
+      setGitStatus(null);
+      return;
+    }
+    let cancelled = false;
+    ipc.getGitStatus(path).then((s) => {
+      if (!cancelled) setGitStatus(s);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, workspaces, project]);
+
+  // ── Mode helpers ──
+  const activeMode: WorkspaceMode =
+    (activeWorkspaceId && modePerWorkspace[activeWorkspaceId]) || "talk";
+
+  const setMode = useCallback(
+    (next: WorkspaceMode) => {
+      if (!activeWorkspaceId) return;
+      setModePerWorkspace((p) => ({ ...p, [activeWorkspaceId]: next }));
+    },
+    [activeWorkspaceId],
+  );
+
+  // ── Lazily create a PTY session for the active terminal when entering Run mode ──
+  const ensureTerminal = useCallback(async () => {
+    if (!activeWorkspaceId) return;
+    const list = terminalsPerWorkspace[activeWorkspaceId] ?? [];
+    const activeTid = activeTerminalPerWorkspace[activeWorkspaceId];
+    const term = list.find((t) => t.id === activeTid);
+    if (!term || term.sessionId) return;
+    if (creatingTerminalRef.current.has(term.id)) return;
+    creatingTerminalRef.current.add(term.id);
     try {
-      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === activeWorkspaceId);
-      const proj = useProjectStore.getState().current;
-      if (!ws || !proj) return;
-
+      const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+      if (!ws || !project) return;
       const session = await ipc.createSession({
-        name: `${ws.name} - ${tab.label}`,
-        projectRoot: ws.worktreePath || proj.path,
+        name: `${ws.name} - ${term.label}`,
+        projectRoot: ws.worktreePath || project.path,
       });
-      setTabsPerWorkspace((prev) => ({
+      setTerminalsPerWorkspace((prev) => ({
         ...prev,
-        [activeWorkspaceId!]: (prev[activeWorkspaceId!] || []).map((t) =>
-          t.id === tab.id ? { ...t, sessionId: session.id } : t
+        [activeWorkspaceId]: (prev[activeWorkspaceId] ?? []).map((t) =>
+          t.id === term.id ? { ...t, sessionId: session.id } : t,
         ),
       }));
     } finally {
-      creatingSessionRef.current.delete(tab.id);
+      creatingTerminalRef.current.delete(term.id);
     }
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, terminalsPerWorkspace, activeTerminalPerWorkspace, workspaces, project]);
 
-  // Tab actions
-  const addChatTab = useCallback(() => {
+  useEffect(() => {
+    if (activeMode === "run") {
+      ensureTerminal();
+    }
+  }, [activeMode, ensureTerminal]);
+
+  // ── Chat / terminal handlers wired to Companion ──
+  const handleNewChat = useCallback(() => {
     if (!activeWorkspaceId) return;
-    const newId = `chat-${Date.now()}`;
-    const convId = crypto.randomUUID ? crypto.randomUUID() : `conv-${Date.now()}`;
-    const existing = tabsPerWorkspace[activeWorkspaceId] || [];
-    const chatCount = existing.filter((t) => t.type === "chat").length;
-    const tab: WorkspaceTab = {
+    const newId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? (crypto as { randomUUID: () => string }).randomUUID()
+        : `chat-${Date.now()}`;
+    const list = chatsPerWorkspace[activeWorkspaceId] ?? [];
+    const chat: ChatRef = {
       id: newId,
-      type: "chat",
-      label: `Chat ${chatCount + 1}`,
-      conversationId: convId,
+      title: `Conversation ${list.length + 1}`,
+      meta: "NOW",
     };
-    setTabsPerWorkspace((prev) => ({
-      ...prev,
-      [activeWorkspaceId]: [...(prev[activeWorkspaceId] || []), tab],
-    }));
-    setActiveTabId(newId);
-    setView("chat");
-  }, [activeWorkspaceId, tabsPerWorkspace, setView]);
+    setChatsPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: [chat, ...list] }));
+    setActiveChatPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: newId }));
+  }, [activeWorkspaceId, chatsPerWorkspace]);
 
-  const addTerminalTab = useCallback(() => {
+  const handleSelectChat = useCallback(
+    (id: string) => {
+      if (!activeWorkspaceId) return;
+      setActiveChatPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: id }));
+    },
+    [activeWorkspaceId],
+  );
+
+  const handleNewTerminal = useCallback(() => {
     if (!activeWorkspaceId) return;
-    const newId = `term-${Date.now()}`;
-    const existing = tabsPerWorkspace[activeWorkspaceId] || [];
-    const termCount = existing.filter((t) => t.type === "terminal").length;
-    const tab: WorkspaceTab = {
-      id: newId,
-      type: "terminal",
-      label: `Terminal ${termCount + 1}`,
+    const list = terminalsPerWorkspace[activeWorkspaceId] ?? [];
+    const term: TerminalRef = {
+      id: `term-${activeWorkspaceId}-${list.length + 1}`,
+      label: `Terminal ${list.length + 1}`,
+      meta: "READY",
+      sessionId: null,
     };
-    setTabsPerWorkspace((prev) => ({
-      ...prev,
-      [activeWorkspaceId]: [...(prev[activeWorkspaceId] || []), tab],
-    }));
-    setActiveTabId(newId);
-    setView("terminal");
-  }, [activeWorkspaceId, tabsPerWorkspace, setView]);
+    setTerminalsPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: [...list, term] }));
+    setActiveTerminalPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: term.id }));
+  }, [activeWorkspaceId, terminalsPerWorkspace]);
 
-  const closeTab = useCallback((tabId: string) => {
-    if (!activeWorkspaceId) return;
-    const tabs = tabsPerWorkspace[activeWorkspaceId] || [];
-    const tab = tabs.find((t) => t.id === tabId);
-    if (!tab) return;
-    // Don't close the last tab of a type
-    const sameType = tabs.filter((t) => t.type === tab.type);
-    if (sameType.length <= 1) return;
-    const newTabs = tabs.filter((t) => t.id !== tabId);
-    setTabsPerWorkspace((prev) => ({ ...prev, [activeWorkspaceId]: newTabs }));
-    // If closing the active tab, switch to another of the same type
-    if (activeTabId === tabId) {
-      const next = newTabs.find((t) => t.type === tab.type);
-      if (next) {
-        setActiveTabId(next.id);
-      }
-    }
-  }, [activeWorkspaceId, tabsPerWorkspace, activeTabId]);
+  const handleSelectTerminal = useCallback(
+    (id: string) => {
+      if (!activeWorkspaceId) return;
+      setActiveTerminalPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: id }));
+    },
+    [activeWorkspaceId],
+  );
 
-  const renameTab = useCallback((tabId: string, newLabel: string) => {
-    if (!activeWorkspaceId) return;
-    setTabsPerWorkspace((prev) => ({
-      ...prev,
-      [activeWorkspaceId]: (prev[activeWorkspaceId] || []).map((t) =>
-        t.id === tabId ? { ...t, label: newLabel } : t,
-      ),
-    }));
-  }, [activeWorkspaceId]);
-
-  const selectTab = useCallback((tabId: string) => {
-    const tabs = tabsPerWorkspace[activeWorkspaceId || ""] || [];
-    const tab = tabs.find((t) => t.id === tabId);
-    if (tab) {
-      setActiveTabId(tabId);
-      setView(tab.type);
-      // If it's a terminal tab without a session, create one
-      if (tab.type === "terminal" && !tab.sessionId) {
-        ensureTerminalForTab(tab);
-      }
-    }
-  }, [activeWorkspaceId, tabsPerWorkspace, setView, ensureTerminalForTab]);
-
-  // Handle switching to terminal view (for keyboard shortcut)
-  const openTerminal = useCallback(() => {
-    if (!activeWorkspaceId) return;
-    setShowCreator(false);
-    const tabs = tabsPerWorkspace[activeWorkspaceId] || ensureTabs(activeWorkspaceId);
-    const termTab = tabs.find((t) => t.type === "terminal");
-    if (termTab) {
-      setActiveTabId(termTab.id);
-      setView("terminal");
-      if (!termTab.sessionId) {
-        ensureTerminalForTab(termTab);
-      }
-    } else {
-      // No terminal tabs exist yet, create one
-      addTerminalTab();
-    }
-  }, [activeWorkspaceId, tabsPerWorkspace, ensureTabs, setView, ensureTerminalForTab, addTerminalTab]);
-
-  const openChat = useCallback(() => {
-    if (!activeWorkspaceId) return;
-    setShowCreator(false);
-    const tabs = tabsPerWorkspace[activeWorkspaceId] || ensureTabs(activeWorkspaceId);
-    const chatTab = tabs.find((t) => t.type === "chat");
-    if (chatTab) {
-      setActiveTabId(chatTab.id);
-      setView("chat");
-    }
-  }, [activeWorkspaceId, tabsPerWorkspace, ensureTabs, setView]);
-
-  const openChanges = useCallback(() => {
-    setView("changes");
-    setShowCreator(false);
-  }, []);
-
-  // Keyboard shortcuts
+  // ── Keyboard shortcuts (spec §3.6) ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
 
-      // Command+T → open terminal (if in project)
-      if (mod && !e.shiftKey && e.key === "t") {
-        e.preventDefault();
-        if (project && activeWorkspaceId) {
-          openTerminal();
+      // ⌘1..⌘9 → switch workspace N
+      if (mod && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        const idx = parseInt(e.key, 10) - 1;
+        const ws = workspaces[idx];
+        if (ws) {
+          e.preventDefault();
+          selectWorkspace(ws.id);
         }
+        return;
       }
 
-      // Command+Shift+C → open chat
-      if (mod && e.shiftKey && (e.key === "C" || e.key === "c")) {
-        e.preventDefault();
-        if (project && activeWorkspaceId) {
-          openChat();
+      // ⌘⇧1/2/3 → switch mode
+      if (mod && e.shiftKey && ["1", "2", "3", "!", "@", "#"].includes(e.key)) {
+        const key = e.key === "!" ? "1" : e.key === "@" ? "2" : e.key === "#" ? "3" : e.key;
+        const mode: WorkspaceMode | null =
+          key === "1" ? "talk" : key === "2" ? "run" : key === "3" ? "review" : null;
+        if (mode) {
+          e.preventDefault();
+          setMode(mode);
         }
+        return;
       }
 
-      // Command+Shift+G → open changes
-      if (mod && e.shiftKey && (e.key === "G" || e.key === "g")) {
-        e.preventDefault();
-        if (project) {
-          openChanges();
-        }
-      }
-
-      // Command+N → show workspace creator
+      // ⌘N → new workspace
       if (mod && !e.shiftKey && e.key === "n") {
         e.preventDefault();
-        if (project) {
-          setShowCreator(true);
-        }
+        if (project) setShowCreator(true);
+        return;
       }
 
-      // Command+K → command palette
+      // ⌘K → command palette
       if (mod && !e.shiftKey && e.key === "k") {
         e.preventDefault();
         setShowPalette((v) => !v);
+        return;
       }
 
-      // Command+\ → toggle sidebar
+      // ⌘\ → toggle companion
       if (mod && e.key === "\\") {
         e.preventDefault();
-        setShowSidebar((v) => !v);
+        setShowTokens((v) => !v);
         bumpLayout();
+        return;
       }
 
-      // Command+Shift+T → toggle token dashboard
+      // ⌘, → settings
+      if (mod && e.key === ",") {
+        e.preventDefault();
+        setShowSettings(true);
+        return;
+      }
+
+      // ⌘⇧T → Settings · Usage
       if (mod && e.shiftKey && (e.key === "T" || e.key === "t")) {
         e.preventDefault();
         setShowTokens((v) => !v);
         bumpLayout();
+        return;
       }
     };
-
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [project, activeWorkspaceId, openTerminal, openChat, openChanges, bumpLayout]);
+  }, [workspaces, selectWorkspace, setMode, project, bumpLayout]);
 
+  // ── Computed values ──
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
+  const activeChatId = activeWorkspaceId
+    ? activeChatPerWorkspace[activeWorkspaceId] ?? activeWorkspaceId
+    : null;
+  const activeTerminal = activeWorkspaceId
+    ? (terminalsPerWorkspace[activeWorkspaceId] ?? []).find(
+        (t) => t.id === activeTerminalPerWorkspace[activeWorkspaceId],
+      ) ?? null
+    : null;
 
-  // Current workspace tabs
-  const currentTabs = activeWorkspaceId ? (tabsPerWorkspace[activeWorkspaceId] || ensureTabs(activeWorkspaceId)) : [];
+  const companionContextProps = useMemo(
+    () => ({
+      tokensUsed: 0,        // wired to real data in Phase 6 (TokenDashboard migration)
+      tokensLimit: 200_000,
+      filesInFlight: gitStatus?.changedFiles.length ?? 0,
+      toolCalls: 0,
+    }),
+    [gitStatus],
+  );
 
-  // Delete workspace handler
-  const handleDeleteWorkspace = useCallback(async () => {
-    if (!activeWorkspace || !project) return;
-    const ok = window.confirm(
-      `Delete workspace "${activeWorkspace.name}" (${activeWorkspace.branch})?\n\nThis will delete the branch and worktree. Cannot be undone.`
-    );
-    if (!ok) return;
-    const { remove, workspaces: wsList, select } = useWorkspaceStore.getState();
-    await remove(activeWorkspace.id, project.path, activeWorkspace.branch, activeWorkspace.worktreePath ?? null);
-    // Select next workspace if available
-    const remaining = wsList.filter((w) => w.id !== activeWorkspace.id);
-    if (remaining.length > 0) {
-      select(remaining[0].id);
-    } else {
-      setShowCreator(true);
-    }
-  }, [activeWorkspace, project]);
+  const companionHistoryProps = useMemo(
+    () => ({
+      chats: activeWorkspaceId ? chatsPerWorkspace[activeWorkspaceId] ?? [] : [],
+      activeChatId,
+      onSelectChat: handleSelectChat,
+      onNewChat: handleNewChat,
+    }),
+    [activeWorkspaceId, chatsPerWorkspace, activeChatId, handleSelectChat, handleNewChat],
+  );
 
-  // Full-screen views (no sidebar)
+  const companionTerminalsProps = useMemo(
+    () => ({
+      terminals: activeWorkspaceId ? terminalsPerWorkspace[activeWorkspaceId] ?? [] : [],
+      activeTerminalId: activeWorkspaceId
+        ? activeTerminalPerWorkspace[activeWorkspaceId] ?? null
+        : null,
+      onSelectTerminal: handleSelectTerminal,
+      onNewTerminal: handleNewTerminal,
+    }),
+    [
+      activeWorkspaceId,
+      terminalsPerWorkspace,
+      activeTerminalPerWorkspace,
+      handleSelectTerminal,
+      handleNewTerminal,
+    ],
+  );
+
+  const companionChangedProps = useMemo(
+    () => ({ changedFiles: gitStatus?.changedFiles ?? [] }),
+    [gitStatus],
+  );
+
+  // ── Customize menu submit ──
+  const handleCustomizeSubmit = useCallback(
+    async (glyph: string | null, tint: TintName | null) => {
+      if (!customizingWorkspaceId) return;
+      await updateCustomization(customizingWorkspaceId, glyph, tint);
+      setCustomizingWorkspaceId(null);
+    },
+    [customizingWorkspaceId, updateCustomization],
+  );
+
+  // ── Render: pre-project views ──
   if (!project) {
-    if (view === "new-project") {
+    if (appView === "new-project") {
       return (
-        <div className="flex h-screen w-screen bg-octo-bg text-zinc-100">
-          <NewProjectFlow onBack={() => setView("welcome")} />
+        <div className="flex h-screen w-screen bg-octo-bg text-octo-ivory">
+          <NewProjectFlow onBack={() => setAppView("project")} />
           <ToastContainer />
         </div>
       );
     }
-
     return (
-      <div className="flex h-screen w-screen bg-octo-bg text-zinc-100">
-        <WelcomeScreen onNewProject={() => setView("new-project")} />
+      <div className="flex h-screen w-screen bg-octo-bg text-octo-ivory">
+        <WelcomeScreen onNewProject={() => setAppView("new-project")} />
         <ToastContainer />
       </div>
     );
   }
 
-  // Project is open — sidebar + main content layout
-  function renderMainContent() {
-    if (showCreator && project) {
-      return (
-        <WorkspaceCreator
-          projectId={project.id}
-          projectPath={project.path}
-          onCreated={() => {
-            setShowCreator(false);
-            setView("chat");
-          }}
-          onCancel={() => setShowCreator(false)}
-        />
-      );
-    }
-
-    if (!activeWorkspace) {
-      // No workspaces yet — prompt to create one
-      return (
-        <WorkspaceCreator
-          projectId={project!.id}
-          projectPath={project!.path}
-          onCreated={() => {
-            setShowCreator(false);
-            setView("chat");
-          }}
-          onCancel={() => setShowCreator(false)}
-        />
-      );
-    }
-
-    switch (view) {
-      case "terminal": {
-        // Check if the active terminal tab has a session yet
-        const termTab = currentTabs.find((t) => t.id === activeTabId && t.type === "terminal");
-        if (termTab && !termTab.sessionId) {
-          return (
-            <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-              Starting terminal...
-            </div>
-          );
-        }
-        // Terminal is rendered persistently below, this returns null so the persistent div shows through
-        return null;
-      }
-
-      case "chat": {
-        const chatTab = currentTabs.find((t) => t.id === activeTabId && t.type === "chat");
-        if (chatTab?.conversationId) {
-          return (
-            <ChatView
-              workspaceId={chatTab.conversationId}
-              workspacePath={activeWorkspace?.worktreePath || project?.path || ""}
-              onOpenSettings={() => setShowSettings(true)}
-            />
-          );
-        }
-        return (
-          <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-            Select a workspace to start chatting
-          </div>
-        );
-      }
-
-      case "changes":
-        if (project) {
-          return <ChangesPanel projectPath={project.path} />;
-        }
-        return null;
-
-      default:
-        return null;
-    }
-  }
+  // ── Render: workspace shell ──
+  const customizingWorkspace = workspaces.find((w) => w.id === customizingWorkspaceId) ?? null;
 
   return (
-    <div className="flex h-screen w-screen bg-octo-bg text-zinc-100">
-      {showSidebar && (
-        <ProjectSidebar
-          onNewWorkspace={() => setShowCreator(true)}
-        />
-      )}
+    <div className="flex h-screen w-screen bg-octo-bg text-octo-ivory">
+      <WorkspaceRail
+        workspaces={workspaces}
+        activeId={activeWorkspaceId}
+        onSelect={(id) => selectWorkspace(id)}
+        onCustomize={(id) => setCustomizingWorkspaceId(id)}
+        onNewWorkspace={() => setShowCreator(true)}
+      />
 
-      <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-        {activeWorkspace && (
-          <WorkspaceBar
-            tabs={currentTabs}
-            activeTabId={activeTabId}
-            activeView={view}
-            onSelectTab={selectTab}
-            onAddChat={addChatTab}
-            onAddTerminal={addTerminalTab}
-            onCloseTab={closeTab}
-            onRenameTab={renameTab}
-            onViewChange={(v) => {
-              setView(v);
-              setShowCreator(false);
-              // When switching category, select the active tab within that category
-              if (v !== "changes" && activeWorkspaceId) {
-                const tabs = tabsPerWorkspace[activeWorkspaceId] || [];
-                const currentActive = tabs.find(t => t.id === activeTabId);
-                if (!currentActive || currentActive.type !== v) {
-                  const firstOfType = tabs.find(t => t.type === v);
-                  if (firstOfType) setActiveTabId(firstOfType.id);
-                }
-              }
-            }}
-            onDeleteWorkspace={handleDeleteWorkspace}
-            workspaceName={activeWorkspace.name}
-            branch={activeWorkspace.branch}
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {activeWorkspace ? (
+          <>
+            <div className="flex items-start">
+              <div className="min-w-0 flex-1">
+                <ContextHeader
+                  workspaceName={activeWorkspace.name}
+                  branch={activeWorkspace.branch}
+                  gitStatus={gitStatus}
+                />
+              </div>
+              <ModeSwitcher mode={activeMode} onChange={setMode} />
+            </div>
+
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <div className="relative min-w-0 flex-1 overflow-hidden">
+                {showCreator && (
+                  <WorkspaceCreator
+                    projectId={project.id}
+                    projectPath={project.path}
+                    onCreated={() => setShowCreator(false)}
+                    onCancel={() => setShowCreator(false)}
+                  />
+                )}
+                {!showCreator && activeMode === "talk" && (
+                  <ChatView
+                    workspaceId={activeChatId!}
+                    workspacePath={activeWorkspace.worktreePath || project.path}
+                    onOpenSettings={() => setShowSettings(true)}
+                  />
+                )}
+                {!showCreator && activeMode === "run" && (
+                  <>
+                    {!activeTerminal?.sessionId && (
+                      <div className="flex h-full items-center justify-center text-sm text-octo-mute">
+                        Starting terminal...
+                      </div>
+                    )}
+                    {activeTerminal?.sessionId && (
+                      <TerminalPane
+                        sessionId={activeTerminal.sessionId}
+                        visible={true}
+                        layoutVersion={layoutVersion}
+                      />
+                    )}
+                  </>
+                )}
+                {!showCreator && activeMode === "review" && (
+                  <ChangesPanel projectPath={activeWorkspace.worktreePath || project.path} />
+                )}
+              </div>
+
+              <Companion
+                mode={activeMode}
+                contextProps={companionContextProps}
+                historyProps={companionHistoryProps}
+                terminalsProps={companionTerminalsProps}
+                changedProps={companionChangedProps}
+              />
+            </div>
+          </>
+        ) : (
+          <WorkspaceCreator
+            projectId={project.id}
+            projectPath={project.path}
+            onCreated={() => setShowCreator(false)}
+            onCancel={() => setShowCreator(false)}
           />
         )}
-
-        <div className="relative flex min-w-0 flex-1 overflow-hidden">
-          <div className="min-w-0 flex-1 overflow-hidden">
-            {renderMainContent()}
-
-            {/* Terminal tabs — always rendered for persistence, shown/hidden via CSS */}
-            {currentTabs
-              .filter((t) => t.type === "terminal" && t.sessionId)
-              .map((tab) => (
-                <div
-                  key={tab.id}
-                  style={{
-                    display: activeTabId === tab.id && view === "terminal" ? "block" : "none",
-                    width: "100%",
-                    height: "100%",
-                  }}
-                >
-                  <TerminalPane
-                    sessionId={tab.sessionId!}
-                    visible={activeTabId === tab.id && view === "terminal"}
-                    layoutVersion={layoutVersion}
-                  />
-                </div>
-              ))}
-          </div>
-
-          {showTokens && <TokenDashboard />}
-        </div>
       </main>
+
+      {showTokens && <TokenDashboard />}
+
+      {customizingWorkspace && (
+        <div
+          className="absolute inset-0 z-30 flex items-start justify-start bg-black/30 p-2"
+          onClick={() => setCustomizingWorkspaceId(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div onClick={(e) => e.stopPropagation()} className="ml-14 mt-12">
+            <WorkspaceCustomizeMenu
+              initialGlyph={customizingWorkspace.glyph}
+              initialTint={customizingWorkspace.tint}
+              defaultGlyph={resolveMonogram({ ...customizingWorkspace, glyph: null, tint: null }).glyph}
+              onSubmit={handleCustomizeSubmit}
+              onCancel={() => setCustomizingWorkspaceId(null)}
+            />
+          </div>
+        </div>
+      )}
 
       <CommandPalette
         open={showPalette}
