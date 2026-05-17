@@ -423,31 +423,53 @@ function App() {
                     onCancel={() => setShowCreator(false)}
                   />
                 )}
-                {!showCreator && activeMode === "talk" && (
-                  <ChatView
-                    workspaceId={activeChatId!}
-                    workspacePath={activeWorkspace.worktreePath || project.path}
-                    onOpenSettings={() => setShowSettings(true)}
-                  />
-                )}
-                {!showCreator && activeMode === "run" && (
+                {!showCreator && (
                   <>
-                    {!activeTerminal?.sessionId && (
-                      <div className="flex h-full items-center justify-center text-sm text-octo-mute">
-                        Starting terminal...
-                      </div>
-                    )}
-                    {activeTerminal?.sessionId && (
-                      <TerminalPane
-                        sessionId={activeTerminal.sessionId}
-                        visible={true}
-                        layoutVersion={layoutVersion}
+                    <div
+                      className="absolute inset-0 transition-opacity duration-200 ease-out"
+                      style={{
+                        opacity: activeMode === "talk" ? 1 : 0,
+                        pointerEvents: activeMode === "talk" ? "auto" : "none",
+                        visibility: activeMode === "talk" ? "visible" : "hidden",
+                      }}
+                    >
+                      <ChatView
+                        workspaceId={activeChatId!}
+                        workspacePath={activeWorkspace.worktreePath || project.path}
+                        onOpenSettings={() => setShowSettings(true)}
                       />
-                    )}
+                    </div>
+
+                    <div
+                      className="absolute inset-0 transition-opacity duration-200 ease-out"
+                      style={{
+                        opacity: activeMode === "run" ? 1 : 0,
+                        pointerEvents: activeMode === "run" ? "auto" : "none",
+                        visibility: activeMode === "run" ? "visible" : "hidden",
+                      }}
+                    >
+                      {activeTerminal?.sessionId ? (
+                        <TerminalPane
+                          sessionId={activeTerminal.sessionId}
+                          visible={activeMode === "run"}
+                          layoutVersion={layoutVersion}
+                        />
+                      ) : (
+                        <RunEmptyState onStart={ensureTerminal} />
+                      )}
+                    </div>
+
+                    <div
+                      className="absolute inset-0 transition-opacity duration-200 ease-out"
+                      style={{
+                        opacity: activeMode === "review" ? 1 : 0,
+                        pointerEvents: activeMode === "review" ? "auto" : "none",
+                        visibility: activeMode === "review" ? "visible" : "hidden",
+                      }}
+                    >
+                      <ChangesPanel projectPath={activeWorkspace.worktreePath || project.path} />
+                    </div>
                   </>
-                )}
-                {!showCreator && activeMode === "review" && (
-                  <ChangesPanel projectPath={activeWorkspace.worktreePath || project.path} />
                 )}
               </div>
 
@@ -507,6 +529,30 @@ function App() {
       />
 
       <ToastContainer />
+    </div>
+  );
+}
+
+function RunEmptyState({ onStart }: { onStart: () => Promise<void> | void }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
+      <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-octo-mute">
+        Run
+      </div>
+      <div className="font-serif italic text-[20px] leading-tight tracking-[-0.005em] text-octo-ivory">
+        Start a new terminal.
+      </div>
+      <p className="max-w-md text-[12px] leading-[1.6] text-octo-sage">
+        A terminal opens in the workspace's worktree directory. You can keep multiple terminals open and switch via the Companion panel.
+      </p>
+      <button
+        type="button"
+        onClick={() => onStart()}
+        className="mt-2 rounded-md px-4 py-2 font-serif italic text-[13px] text-octo-brass transition"
+        style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+      >
+        Open terminal
+      </button>
     </div>
   );
 }
