@@ -6,13 +6,31 @@ interface Props {
   onChange: (next: WorkspaceMode) => void;
 }
 
+// Each mode button is fixed width so the gliding indicator math is predictable.
+// If MODE_LABELS ever gets translated to longer strings, increase BUTTON_W.
+const BUTTON_W = 68;
+
 export function ModeSwitcher({ mode, onChange }: Props) {
+  const activeIndex = MODES.indexOf(mode);
+
   return (
     <div
       role="group"
       aria-label="Workspace mode"
-      className="m-4 inline-flex items-center gap-1 rounded-lg border border-octo-hairline bg-octo-panel p-1"
+      className="relative m-4 inline-flex items-center rounded-lg border border-octo-hairline bg-octo-panel p-1"
     >
+      {/* Gliding brass indicator. Translates by activeIndex * BUTTON_W. */}
+      <div
+        aria-hidden
+        className="absolute top-1 bottom-1 rounded-md transition-transform duration-[280ms] ease-[cubic-bezier(0.2,0.8,0.3,1)]"
+        style={{
+          left: "4px",
+          width: `${BUTTON_W}px`,
+          transform: `translateX(${activeIndex * BUTTON_W}px)`,
+          background: "var(--brass-ghost)",
+          border: "1px solid var(--brass-dim)",
+        }}
+      />
       {MODES.map((m) => {
         const active = m === mode;
         return (
@@ -22,20 +40,11 @@ export function ModeSwitcher({ mode, onChange }: Props) {
             onClick={() => onChange(m)}
             aria-pressed={active}
             title={`${MODE_LABELS[m]} (${MODE_SHORTCUTS[m]})`}
+            style={{ width: `${BUTTON_W}px` }}
             className={clsx(
-              "rounded-md px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] transition",
-              active
-                ? "border text-octo-brass"
-                : "border border-transparent text-octo-mute hover:text-octo-sage",
+              "relative z-10 rounded-md px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors",
+              active ? "text-octo-brass" : "text-octo-mute hover:text-octo-sage",
             )}
-            style={
-              active
-                ? {
-                    borderColor: "var(--brass-dim)",
-                    background: "var(--brass-ghost)",
-                  }
-                : undefined
-            }
           >
             {MODE_LABELS[m]}
           </button>
