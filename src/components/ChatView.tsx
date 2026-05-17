@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { AlertTriangle, Settings } from "lucide-react";
 import { clsx } from "clsx";
-import { useChatStore } from "../stores/chatStore";
+import { useChatStore, type ToolExecution, type ConversationItem } from "../stores/chatStore";
 import { AgentBar } from "./AgentBar";
 import { ChatMessage } from "./ChatMessage";
 import { ToolCallCard } from "./ToolCallCard";
@@ -16,9 +16,29 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
   const { messages, streaming, streamBuffer, model, error, loadHistory, send, setModel, clearError } =
     useChatStore();
 
-  // Single source of truth for the timeline — defined in chatStore.
-  // Subscribes to `messages` and re-derives on change.
-  const timeline = useChatStore((s) => s.getTimeline());
+  // Compute timeline locally with useMemo. Do NOT use
+  //   useChatStore((s) => s.getTimeline())
+  // because getTimeline() returns a new array on every call, which makes
+  // Zustand's selector think the value changed every render → infinite
+  // re-render loop. The render guard against this exact bug lives in
+  // ChatView.test.tsx ("survives the done event…").
+  const timeline = useMemo<ConversationItem[]>(() => {
+    const items: ConversationItem[] = [];
+    for (const msg of messages) {
+      const role = msg.role as string;
+      if (role === "tool") {
+        try {
+          const tool: ToolExecution = JSON.parse(msg.content);
+          items.push({ kind: "tool", tool, id: msg.id });
+        } catch {
+          items.push({ kind: "message", message: msg });
+        }
+      } else {
+        items.push({ kind: "message", message: msg });
+      }
+    }
+    return items;
+  }, [messages]);
 
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);

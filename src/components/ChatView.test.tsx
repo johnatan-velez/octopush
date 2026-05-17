@@ -1,0 +1,258 @@
+/**
+ * Visual/render regression tests for ChatView.
+ *
+ * Sister to `chatStore.test.ts` which asserts state-level invariants.
+ * THIS file asserts that the right pixels actually reach the DOM —
+ * specifically that tool cards render when the chatStore has tool messages.
+ *
+ * Past bug history: tool cards have repeatedly disappeared visually even
+ * when the state was correct. A unit test on the store alone can't catch
+ * that. These tests render ChatView with React Testing Library and assert
+ * specific DOM content.
+ */
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, act } from "@testing-library/react";
+
+// ─── Mocks (must be set up BEFORE chatStore is imported) ──────────────
+type EventHandler = (ev: { payload: unknown }) => void;
+const handlers: Record<string, EventHandler> = {};
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((eventName: string, handler: EventHandler) => {
+    handlers[eventName] = handler;
+    return Promise.resolve(() => {});
+  }),
+}));
+
+vi.mock("../lib/ipc", () => ({
+  ipc: {
+    sendChatMessage: vi.fn().mockResolvedValue(undefined),
+    listChatMessages: vi.fn().mockResolvedValue([]),
+    revealInFinder: vi.fn(),
+    openFileInSystem: vi.fn(),
+  },
+}));
+
+// Dynamic imports AFTER mocks are wired.
+const { useChatStore } = await import("../stores/chatStore");
+const { ChatView } = await import("./ChatView");
+const { useWorkspaceStore } = await import("../stores/workspaceStore");
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+function resetStore() {
+  useChatStore.setState({
+    messages: [],
+    streaming: false,
+    streamBuffer: "",
+    error: null,
+  });
+  // Workspace store must have an active id for the "notify on non-active
+  // workspace" logic in the listener to no-op.
+  useWorkspaceStore.setState({ activeId: "ws-1", workspaces: [], notifications: {}, loading: false });
+}
+
+function emit(eventName: string, payload: unknown) {
+  const h = handlers[eventName];
+  if (!h) throw new Error(`No handler registered for ${eventName}`);
+  h({ payload });
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────
+describe("ChatView — renders tool cards in the DOM", () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
+  it("renders a tool card when chatStore has a tool message (state-driven)", () => {
+    useChatStore.setState({
+      messages: [
+        {
+          id: 1,
+          workspaceId: "ws-1",
+          role: "user",
+          content: "Make a thing",
+          model: null,
+          inputTokens: null, outputTokens: null, costUsd: null,
+          createdAt: "2026-05-17T10:00:00Z",
+        },
+        {
+          id: 2,
+          workspaceId: "ws-1",
+          role: "tool" as "user" | "assistant",
+          content: JSON.stringify({
+            toolName: "write_file",
+            toolInput: { path: "index.html" },
+            result: "wrote",
+          }),
+          model: null,
+          inputTokens: null, outputTokens: null, costUsd: null,
+          createdAt: "2026-05-17T10:00:01Z",
+        },
+        {
+          id: 3,
+          workspaceId: "ws-1",
+          role: "assistant",
+          content: "Done.",
+          model: "claude-sonnet-4-6",
+          inputTokens: null, outputTokens: null, costUsd: null,
+          createdAt: "2026-05-17T10:00:02Z",
+        },
+      ],
+      streaming: false,
+    });
+
+    render(<ChatView workspaceId="ws-1" workspacePath="/tmp" />);
+
+    // ToolCallCard renders the tool name uppercased and the path.
+    expect(screen.getByText("WRITE")).toBeInTheDocument();
+    expect(screen.getByText("index.html")).toBeInTheDocument();
+  });
+
+  it("renders tools through the full event flow (user → tool → assistant → done)", async () => {
+    render(<ChatView workspaceId="ws-1" workspacePath="/tmp" />);
+    // Let mount-time loadHistory resolve before emitting; its async set
+    // would otherwise wipe `messages` after our emits.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      emit("chat://message-added", {
+        workspaceId: "ws-1", id: 1, role: "user", content: "hi",
+        model: null, inputTokens: null, outputTokens: null, costUsd: null,
+        createdAt: "2026-05-17T10:00:00Z",
+      });
+      emit("chat://message-added", {
+        workspaceId: "ws-1", id: 2, role: "tool",
+        content: JSON.stringify({
+          toolName: "read_file",
+          toolInput: { path: "foo.txt" },
+          result: "contents",
+        }),
+        model: null, inputTokens: null, outputTokens: null, costUsd: null,
+        createdAt: "2026-05-17T10:00:01Z",
+      });
+      emit("chat://message-added", {
+        workspaceId: "ws-1", id: 3, role: "assistant",
+        content: "Done with that.", model: "claude-sonnet-4-6",
+        inputTokens: null, outputTokens: null, costUsd: null,
+        createdAt: "2026-05-17T10:00:02Z",
+      });
+      emit("chat://stream", {
+        workspaceId: "ws-1", delta: "", done: true,
+        inputTokens: null, outputTokens: null,
+      });
+    });
+
+    expect(screen.getByText("READ")).toBeInTheDocument();
+    expect(screen.getByText("foo.txt")).toBeInTheDocument();
+    expect(screen.getByText("hi")).toBeInTheDocument();
+    expect(screen.getByText(/Done with that/i)).toBeInTheDocument();
+  });
+
+  it("renders multiple tool cards in order between user and assistant", () => {
+    useChatStore.setState({
+      messages: [
+        {
+          id: 1, workspaceId: "ws-1", role: "user", content: "Build it",
+          model: null, inputTokens: null, outputTokens: null, costUsd: null,
+          createdAt: "2026-05-17T10:00:00Z",
+        },
+        {
+          id: 2, workspaceId: "ws-1",
+          role: "tool" as "user" | "assistant",
+          content: JSON.stringify({ toolName: "list_files", toolInput: { path: "." }, result: "" }),
+          model: null, inputTokens: null, outputTokens: null, costUsd: null,
+          createdAt: "2026-05-17T10:00:01Z",
+        },
+        {
+          id: 3, workspaceId: "ws-1",
+          role: "tool" as "user" | "assistant",
+          content: JSON.stringify({ toolName: "write_file", toolInput: { path: "a.ts" }, result: "" }),
+          model: null, inputTokens: null, outputTokens: null, costUsd: null,
+          createdAt: "2026-05-17T10:00:02Z",
+        },
+        {
+          id: 4, workspaceId: "ws-1",
+          role: "tool" as "user" | "assistant",
+          content: JSON.stringify({ toolName: "run_command", toolInput: { command: "npm test" }, result: "" }),
+          model: null, inputTokens: null, outputTokens: null, costUsd: null,
+          createdAt: "2026-05-17T10:00:03Z",
+        },
+        {
+          id: 5, workspaceId: "ws-1", role: "assistant",
+          content: "All done.", model: "claude-sonnet-4-6",
+          inputTokens: null, outputTokens: null, costUsd: null,
+          createdAt: "2026-05-17T10:00:04Z",
+        },
+      ],
+      streaming: false,
+    });
+
+    render(<ChatView workspaceId="ws-1" workspacePath="/tmp" />);
+
+    // All three tool labels in the DOM.
+    expect(screen.getByText("LIST")).toBeInTheDocument();
+    expect(screen.getByText("WRITE")).toBeInTheDocument();
+    expect(screen.getByText("RUN")).toBeInTheDocument();
+  });
+
+  it("survives the done event: tool cards remain after streaming finishes", async () => {
+    // The exact sequence the user reported as broken — user message,
+    // tool executions, final assistant, done event. Tools must stay visible.
+    render(<ChatView workspaceId="ws-1" workspacePath="/tmp" />);
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => {
+      emit("chat://message-added", {
+        workspaceId: "ws-1", id: 1, role: "user",
+        content: "Crea una landing page",
+        model: null, inputTokens: null, outputTokens: null, costUsd: null,
+        createdAt: "2026-05-17T10:00:00Z",
+      });
+      emit("chat://message-added", {
+        workspaceId: "ws-1", id: 2, role: "tool",
+        content: JSON.stringify({ toolName: "write_file", toolInput: { path: "index.html" }, result: "ok" }),
+        model: null, inputTokens: null, outputTokens: null, costUsd: null,
+        createdAt: "2026-05-17T10:00:01Z",
+      });
+      emit("chat://message-added", {
+        workspaceId: "ws-1", id: 3, role: "tool",
+        content: JSON.stringify({ toolName: "write_file", toolInput: { path: "styles.css" }, result: "ok" }),
+        model: null, inputTokens: null, outputTokens: null, costUsd: null,
+        createdAt: "2026-05-17T10:00:02Z",
+      });
+    });
+
+    // Pre-done: tool cards visible.
+    expect(screen.getByText("index.html")).toBeInTheDocument();
+    expect(screen.getByText("styles.css")).toBeInTheDocument();
+
+    await act(async () => {
+      // Stream delta for the final text (no DOM assertion needed in between).
+      emit("chat://stream", {
+        workspaceId: "ws-1", delta: "La landing page está lista.", done: false,
+        inputTokens: null, outputTokens: null,
+      });
+      // Assistant message arrives via the same channel.
+      emit("chat://message-added", {
+        workspaceId: "ws-1", id: 4, role: "assistant",
+        content: "La landing page está lista.",
+        model: "claude-sonnet-4-6",
+        inputTokens: 1000, outputTokens: 200, costUsd: 0.01,
+        createdAt: "2026-05-17T10:00:03Z",
+      });
+      // Done event (metadata only — no message append).
+      emit("chat://stream", {
+        workspaceId: "ws-1", delta: "", done: true,
+        inputTokens: 1000, outputTokens: 200,
+      });
+    });
+
+    // CRITICAL: tool cards must STILL be in the DOM after the done event.
+    expect(screen.getByText("index.html")).toBeInTheDocument();
+    expect(screen.getByText("styles.css")).toBeInTheDocument();
+    expect(screen.getAllByText("WRITE")).toHaveLength(2);
+    expect(screen.getByText(/landing page está lista/i)).toBeInTheDocument();
+  });
+});
