@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import { clsx } from "clsx";
 import type { Components } from "react-markdown";
+import { parseKeyPhrase } from "../lib/parseKeyPhrase";
 
 interface MessageProps {
   role: "user" | "assistant";
@@ -14,13 +15,27 @@ interface Props {
   message: MessageProps;
 }
 
+// Maps Anthropic / OpenAI model IDs to short display names. Falls back to
+// the raw ID when not in the table.
+const MODEL_DISPLAY: Record<string, string> = {
+  "claude-sonnet-4-6": "Sonnet 4.6",
+  "claude-opus-4-6": "Opus 4.6",
+  "claude-opus-4-7": "Opus 4.7",
+  "claude-haiku-4-5": "Haiku 4.5",
+  "gpt-4o": "GPT-4o",
+  "gpt-4o-mini": "GPT-4o mini",
+};
+
+// Markdown renderers using Onyx & Brass design tokens. Body text only —
+// the lead sentence (key phrase) is rendered separately above as italic serif.
 const markdownComponents: Components = {
   code({ className, children, ...rest }) {
     const isInline = !className;
     if (isInline) {
       return (
         <code
-          className="rounded-[4px] bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[12px] text-octo-accent/90"
+          className="rounded-[3px] px-1.5 py-0.5 font-mono text-[12px] text-octo-brass"
+          style={{ background: "var(--brass-ghost)" }}
           {...rest}
         >
           {children}
@@ -30,7 +45,7 @@ const markdownComponents: Components = {
     return (
       <code
         className={clsx(
-          "block overflow-x-auto rounded-lg bg-zinc-950/80 p-4 font-mono text-[12px] leading-relaxed text-zinc-300",
+          "block overflow-x-auto rounded-md border border-octo-hairline bg-octo-onyx p-4 font-mono text-[12px] leading-relaxed text-octo-sage",
           className,
         )}
         {...rest}
@@ -40,67 +55,78 @@ const markdownComponents: Components = {
     );
   },
   pre({ children }) {
-    return <pre className="my-3 overflow-x-auto rounded-lg bg-zinc-950/80">{children}</pre>;
+    return <pre className="my-3 overflow-x-auto rounded-md">{children}</pre>;
   },
   p({ children }) {
-    return <p className="mb-3 leading-relaxed last:mb-0">{children}</p>;
+    return <p className="mb-3 leading-[1.6] last:mb-0">{children}</p>;
   },
   ul({ children }) {
     return (
-      <ul className="mb-3 ml-1 list-inside list-disc space-y-1.5 last:mb-0 marker:text-zinc-600">
+      <ul className="mb-3 ml-1 list-inside list-disc space-y-1.5 leading-[1.55] last:mb-0 marker:text-octo-mute">
         {children}
       </ul>
     );
   },
   ol({ children }) {
     return (
-      <ol className="mb-3 ml-1 list-inside list-decimal space-y-1.5 last:mb-0 marker:text-zinc-500">
+      <ol className="mb-3 ml-1 list-inside list-decimal space-y-1.5 leading-[1.55] last:mb-0 marker:text-octo-brass">
         {children}
       </ol>
     );
   },
   li({ children }) {
-    return <li className="leading-relaxed">{children}</li>;
+    return <li className="leading-[1.55]">{children}</li>;
   },
   h1({ children }) {
     return (
-      <h1 className="mb-3 mt-4 border-b border-octo-border/50 pb-1.5 text-base font-semibold text-zinc-100 first:mt-0">
+      <h1 className="mb-3 mt-4 font-serif italic text-[18px] leading-tight tracking-[-0.005em] text-octo-ivory first:mt-0">
         {children}
       </h1>
     );
   },
   h2({ children }) {
     return (
-      <h2 className="mb-2 mt-4 text-[13px] font-semibold uppercase tracking-wide text-octo-accent/80 first:mt-0">
+      <h2 className="mb-2 mt-4 font-serif italic text-[16px] text-octo-ivory first:mt-0">
         {children}
       </h2>
     );
   },
   h3({ children }) {
     return (
-      <h3 className="mb-1.5 mt-3 text-sm font-medium text-zinc-200 first:mt-0">
+      <h3 className="mb-1.5 mt-3 font-mono text-[10px] uppercase tracking-[0.25em] text-octo-brass first:mt-0">
         {children}
       </h3>
     );
   },
   blockquote({ children }) {
     return (
-      <blockquote className="my-3 border-l-2 border-octo-accent/30 bg-octo-accent/5 py-1 pl-3 text-zinc-400">
+      <blockquote
+        className="my-3 py-1 pl-3 text-octo-sage"
+        style={{ borderLeft: "1px solid var(--brass-dim)", background: "var(--brass-ghost)" }}
+      >
         {children}
       </blockquote>
     );
   },
   hr() {
-    return <hr className="my-4 border-octo-border/50" />;
+    return (
+      <hr
+        className="my-4 h-px border-0"
+        style={{ background: "linear-gradient(90deg, var(--color-octo-brass), transparent)" }}
+      />
+    );
   },
   strong({ children }) {
-    return <strong className="font-semibold text-zinc-100">{children}</strong>;
+    return <strong className="font-semibold text-octo-ivory">{children}</strong>;
+  },
+  em({ children }) {
+    return <em className="italic text-octo-ivory">{children}</em>;
   },
   a({ href, children }) {
     return (
       <a
         href={href}
-        className="text-octo-accent underline decoration-octo-accent/30 underline-offset-2 hover:decoration-octo-accent/60"
+        className="text-octo-brass underline decoration-octo-brass/40 underline-offset-2 hover:decoration-octo-brass"
         target="_blank"
         rel="noopener"
       >
@@ -110,21 +136,21 @@ const markdownComponents: Components = {
   },
   table({ children }) {
     return (
-      <div className="my-3 overflow-x-auto rounded-lg border border-octo-border">
-        <table className="w-full text-xs">{children}</table>
+      <div className="my-3 overflow-x-auto rounded-md border border-octo-hairline">
+        <table className="w-full text-[12px]">{children}</table>
       </div>
     );
   },
   th({ children }) {
     return (
-      <th className="border-b border-octo-border bg-zinc-900/50 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+      <th className="border-b border-octo-hairline bg-octo-panel px-3 py-2 text-left font-mono text-[9px] uppercase tracking-[0.25em] text-octo-brass">
         {children}
       </th>
     );
   },
   td({ children }) {
     return (
-      <td className="border-b border-octo-border/50 px-3 py-2 text-zinc-300">
+      <td className="border-b border-octo-hairline px-3 py-2 text-octo-sage">
         {children}
       </td>
     );
@@ -132,8 +158,13 @@ const markdownComponents: Components = {
 };
 
 function formatTokenCount(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
+}
+
+function modelDisplayName(model: string | null | undefined): string {
+  if (!model) return "Assistant";
+  return MODEL_DISPLAY[model] ?? model;
 }
 
 export function ChatMessage({ message }: Props) {
@@ -143,32 +174,65 @@ export function ChatMessage({ message }: Props) {
 
   if (role === "user") {
     return (
-      <div className="flex justify-end" data-role="user">
-        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-octo-accent/20 px-4 py-2.5 text-sm leading-relaxed text-zinc-200">
+      <div data-role="user" className="flex flex-col gap-1.5">
+        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-brass">
+          — You
+        </div>
+        <div className="text-[14px] leading-[1.55] text-octo-ivory">
           {content}
         </div>
       </div>
     );
   }
 
+  // Assistant: parse key phrase + body, render eyebrow + lead + markdown body.
+  const { keyPhrase, body } = parseKeyPhrase(content);
+
   return (
-    <div className="flex justify-start">
-      <div className="flex max-w-[85%] flex-col gap-1">
-        <div className="rounded-2xl rounded-bl-md border border-octo-border bg-octo-panel px-5 py-4 text-[13px] text-zinc-300">
-          <ReactMarkdown components={markdownComponents}>{content}</ReactMarkdown>
-        </div>
-        {(model || inputTokens != null || outputTokens != null) && (
-          <div className="px-1 text-[10px] text-zinc-600">
-            {[
-              model,
-              inputTokens != null ? `${formatTokenCount(inputTokens)} in` : null,
-              outputTokens != null ? `${formatTokenCount(outputTokens)} out` : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </div>
-        )}
+    <div data-role="assistant" className="flex flex-col gap-2">
+      <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-brass">
+        — {modelDisplayName(model)}
       </div>
+
+      {keyPhrase && (
+        <ReactMarkdown
+          components={{
+            code({ children }) {
+              return (
+                <code className="font-mono not-italic text-octo-brass">
+                  {children}
+                </code>
+              );
+            },
+            p({ children }) {
+              return (
+                <p className="font-serif italic text-[20px] leading-[1.15] tracking-[-0.005em] text-octo-ivory">
+                  {children}
+                </p>
+              );
+            },
+          }}
+        >
+          {keyPhrase}
+        </ReactMarkdown>
+      )}
+
+      {body && (
+        <div className="text-[13px] leading-[1.6] text-octo-sage">
+          <ReactMarkdown components={markdownComponents}>{body}</ReactMarkdown>
+        </div>
+      )}
+
+      {(model || inputTokens != null || outputTokens != null) && (
+        <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-octo-mute">
+          {[
+            inputTokens != null ? `${formatTokenCount(inputTokens)} in` : null,
+            outputTokens != null ? `${formatTokenCount(outputTokens)} out` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </div>
+      )}
     </div>
   );
 }
