@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { ArrowLeft, FolderOpen, GitBranch, Copy, LayoutTemplate } from "lucide-react";
 import { useProjectStore } from "../stores/projectStore";
 
 interface Props {
@@ -7,12 +6,16 @@ interface Props {
 }
 
 type ProjectType = "empty" | "clone" | "template";
+type Step = 1 | 2;
 
 export function NewProjectFlow({ onBack }: Props) {
   const { create, loading, error } = useProjectStore();
+  const [step, setStep] = useState<Step>(1);
   const [location, setLocation] = useState("~/.octopus-sh/projects");
   const [repoName, setRepoName] = useState("");
   const [projectType, setProjectType] = useState<ProjectType>("empty");
+
+  const nameValid = repoName.trim().length > 0;
 
   async function handleCreate() {
     const trimmedLocation = location.trim();
@@ -21,159 +24,269 @@ export function NewProjectFlow({ onBack }: Props) {
     await create(trimmedLocation, trimmedName);
   }
 
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && repoName.trim()) handleCreate();
+  function handleStep1KeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && nameValid) setStep(2);
   }
 
   return (
     <div
       data-tauri-drag-region
-      className="flex h-full w-full flex-col items-center justify-center bg-octo-bg px-4"
+      className="flex h-full w-full bg-octo-bg"
+      style={{
+        background:
+          "radial-gradient(ellipse at 30% 25%, rgba(212,165,116,0.05), transparent 50%), var(--color-octo-onyx)",
+      }}
     >
-      <div className="w-full max-w-lg">
-        {/* Back button */}
+      {/* Left index pane */}
+      <aside className="w-[220px] shrink-0 border-r border-octo-hairline bg-octo-panel px-6 py-10">
         <button
           type="button"
           onClick={onBack}
-          className="mb-8 flex items-center gap-1.5 text-sm text-zinc-500 transition hover:text-zinc-200"
+          className="mb-10 font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute hover:text-octo-sage"
         >
-          <ArrowLeft size={15} />
-          Back
+          ← Back
         </button>
 
-        {/* Heading */}
-        <h1 className="mb-6 text-xl font-semibold tracking-tight text-zinc-100">
-          New Project
-        </h1>
-
-        {/* Location */}
-        <label className="mb-5 block">
-          <span className="mb-1.5 block text-xs uppercase tracking-wider text-zinc-500">
-            Location
-          </span>
-          <div className="flex items-center gap-2">
-            <input
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              placeholder="~/.octopus-sh/projects"
-              className="min-w-0 flex-1 rounded-md border border-octo-border bg-octo-panel px-3 py-2 text-sm font-mono text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-octo-accent"
-            />
-            {/* Decorative folder icon button — no-op for now */}
-            <button
-              type="button"
-              title="Browse (not yet available)"
-              className="flex h-9 w-9 items-center justify-center rounded-md border border-octo-border bg-octo-panel text-zinc-500 transition hover:border-octo-accent/40 hover:text-zinc-200"
-            >
-              <FolderOpen size={15} />
-            </button>
-          </div>
-        </label>
-
-        {/* Project type cards */}
-        <div className="mb-5">
-          <span className="mb-1.5 block text-xs uppercase tracking-wider text-zinc-500">
-            Type
-          </span>
-          <div className="grid grid-cols-3 gap-3">
-            <TypeCard
-              icon={<GitBranch size={20} />}
-              label="Empty"
-              description="New git repo"
-              selected={projectType === "empty"}
-              disabled={false}
-              onClick={() => setProjectType("empty")}
-            />
-            <TypeCard
-              icon={<Copy size={20} />}
-              label="Clone"
-              description="From URL"
-              selected={projectType === "clone"}
-              disabled={true}
-              onClick={() => setProjectType("clone")}
-            />
-            <TypeCard
-              icon={<LayoutTemplate size={20} />}
-              label="Template"
-              description="Coming soon"
-              selected={projectType === "template"}
-              disabled={true}
-              onClick={() => setProjectType("template")}
-            />
-          </div>
+        <div className="font-serif italic text-[18px] text-octo-ivory">
+          A new project
         </div>
 
-        {/* Repository name */}
-        <label className="mb-6 block">
-          <span className="mb-1.5 block text-xs uppercase tracking-wider text-zinc-500">
-            Repository Name
-          </span>
-          <input
-            autoFocus
-            value={repoName}
-            onChange={(e) => setRepoName(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="my-project"
-            className="w-full rounded-md border border-octo-border bg-octo-panel px-3 py-2 text-sm font-mono text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-octo-accent"
-          />
-        </label>
+        <div className="mt-6 space-y-1">
+          <StepIndex active={step === 1} numeral="I" label="Name & path" onClick={() => setStep(1)} />
+          <StepIndex active={step === 2} numeral="II" label="Type" onClick={() => nameValid && setStep(2)} disabled={!nameValid && step !== 2} />
+        </div>
 
-        {/* Error */}
-        {error && (
-          <div className="mb-4 rounded-md border border-octo-danger/40 bg-octo-danger/10 px-3 py-2 text-xs text-octo-danger">
-            {error}
-          </div>
+        <div
+          aria-hidden
+          className="mt-10 h-px w-7"
+          style={{ background: "linear-gradient(90deg, var(--color-octo-brass), transparent)" }}
+        />
+      </aside>
+
+      {/* Right content pane */}
+      <main className="flex flex-1 flex-col justify-center px-14 py-10">
+        {step === 1 ? (
+          <>
+            <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-octo-brass">
+              STEP I · OF II
+            </div>
+            <h1 className="mt-3 font-serif italic text-[26px] leading-[1.05] tracking-[-0.005em] text-octo-ivory">
+              Name your new study.
+            </h1>
+            <p className="mt-3 max-w-[48ch] text-[13px] leading-[1.6] text-octo-sage">
+              A project is the home for your codebase. Each project can hold many workspaces — one per branch you're working on.
+            </p>
+
+            <div className="mt-8 max-w-[520px] space-y-5">
+              <Field label="PROJECT NAME">
+                <input
+                  autoFocus
+                  value={repoName}
+                  onChange={(e) => setRepoName(e.target.value)}
+                  onKeyDown={handleStep1KeyDown}
+                  placeholder="Hyperion"
+                  className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-sans text-[14px] text-octo-ivory outline-none placeholder:font-serif placeholder:italic placeholder:text-octo-mute focus:border-octo-brass"
+                />
+              </Field>
+
+              <Field label="LOCATION">
+                <input
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="~/.octopus-sh/projects"
+                  className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+                />
+              </Field>
+            </div>
+
+            <div className="mt-10 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setStep(2)}
+                disabled={!nameValid}
+                className="rounded-md px-4 py-2 font-serif italic text-[13px] text-octo-brass transition disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+              >
+                Continue
+              </button>
+              <button
+                type="button"
+                onClick={onBack}
+                className="rounded-md px-3 py-2 text-[12px] text-octo-mute hover:text-octo-sage"
+              >
+                Cancel
+              </button>
+              <div className="ml-auto font-mono text-[9px] uppercase tracking-[0.2em] text-octo-mute">
+                ↵ to continue
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-octo-brass">
+              STEP II · OF II
+            </div>
+            <h1 className="mt-3 font-serif italic text-[26px] leading-[1.05] tracking-[-0.005em] text-octo-ivory">
+              Where does it begin?
+            </h1>
+            <p className="mt-3 max-w-[48ch] text-[13px] leading-[1.6] text-octo-sage">
+              Start with an empty repository, clone an existing one, or scaffold from a template. Only "Empty" is available today.
+            </p>
+
+            <div className="mt-8 grid max-w-[640px] grid-cols-3 gap-3">
+              <TypeCard
+                glyph="∅"
+                label="Empty"
+                description="A fresh git repository."
+                selected={projectType === "empty"}
+                disabled={false}
+                onClick={() => setProjectType("empty")}
+              />
+              <TypeCard
+                glyph="⎘"
+                label="Clone"
+                description="From a remote URL."
+                selected={projectType === "clone"}
+                disabled
+                onClick={() => setProjectType("clone")}
+              />
+              <TypeCard
+                glyph="❦"
+                label="Template"
+                description="Coming soon."
+                selected={projectType === "template"}
+                disabled
+                onClick={() => setProjectType("template")}
+              />
+            </div>
+
+            {error && (
+              <div
+                className="mt-6 max-w-[520px] rounded-md px-3 py-2 text-[12px] text-octo-rouge"
+                style={{ borderLeft: "1px solid var(--color-octo-rouge)", background: "rgba(209, 139, 139, 0.08)" }}
+              >
+                {error}
+              </div>
+            )}
+
+            <div className="mt-10 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                className="rounded-md px-3 py-2 text-[12px] text-octo-mute hover:text-octo-sage"
+              >
+                ← Back
+              </button>
+              <button
+                type="button"
+                onClick={handleCreate}
+                disabled={!nameValid || loading || projectType !== "empty"}
+                className="rounded-md px-4 py-2 font-serif italic text-[13px] text-octo-brass transition disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+              >
+                {loading ? "Creating…" : "Bring it to life"}
+              </button>
+            </div>
+          </>
         )}
-
-        {/* Actions */}
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={handleCreate}
-            disabled={!repoName.trim() || loading || projectType !== "empty"}
-            className="rounded-md bg-octo-accent px-5 py-2 text-sm font-medium text-zinc-950 transition hover:bg-octo-accent-dim disabled:opacity-40"
-          >
-            {loading ? "Creating…" : "Create"}
-          </button>
-        </div>
-      </div>
+      </main>
     </div>
   );
 }
 
-interface TypeCardProps {
-  icon: React.ReactNode;
-  label: string;
-  description: string;
-  selected: boolean;
-  disabled: boolean;
-  onClick: () => void;
-}
-
-function TypeCard({
-  icon,
+function StepIndex({
+  active,
+  numeral,
   label,
-  description,
-  selected,
-  disabled,
   onClick,
-}: TypeCardProps) {
+  disabled = false,
+}: {
+  active: boolean;
+  numeral: string;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`flex flex-col items-center gap-2 rounded-lg border px-3 py-4 text-center transition ${
-        disabled
-          ? "cursor-not-allowed border-octo-border bg-octo-panel opacity-40"
-          : selected
-            ? "border-octo-accent bg-octo-accent/10 text-octo-accent"
-            : "border-octo-border bg-octo-panel text-zinc-400 hover:border-octo-accent/50 hover:text-zinc-200"
-      }`}
+      className="flex w-full items-baseline gap-3 py-1.5 text-left disabled:cursor-not-allowed"
     >
-      <div className="text-current">{icon}</div>
+      <span
+        className={`w-6 font-mono text-[10px] uppercase tracking-[0.2em] ${
+          active ? "text-octo-brass" : "text-octo-mute"
+        }`}
+      >
+        {numeral}
+      </span>
+      <span
+        className={
+          active
+            ? "font-serif italic text-[14px] text-octo-ivory"
+            : "font-sans text-[12px] text-octo-mute"
+        }
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <div className="mb-2 font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute">
+        {label}
+      </div>
+      {children}
+    </label>
+  );
+}
+
+function TypeCard({
+  glyph,
+  label,
+  description,
+  selected,
+  disabled,
+  onClick,
+}: {
+  glyph: string;
+  label: string;
+  description: string;
+  selected: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="flex flex-col items-start gap-3 rounded-md p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-40"
+      style={{
+        border: selected ? "1px solid var(--brass-dim)" : "1px solid var(--color-octo-hairline)",
+        background: selected ? "var(--brass-ghost)" : "transparent",
+      }}
+    >
+      <span
+        className="font-serif italic text-[20px]"
+        style={{ color: selected ? "var(--color-octo-brass)" : "var(--color-octo-sage)" }}
+      >
+        {glyph}
+      </span>
       <div>
-        <div className="text-sm font-medium leading-tight">{label}</div>
-        <div className="mt-0.5 text-xs text-zinc-600">{description}</div>
+        <div
+          className="font-mono text-[10px] uppercase tracking-[0.2em]"
+          style={{ color: selected ? "var(--color-octo-brass)" : "var(--color-octo-ivory)" }}
+        >
+          {label}
+        </div>
+        <div className="mt-1 font-serif italic text-[12px] text-octo-sage">
+          {description}
+        </div>
       </div>
     </button>
   );
