@@ -10,6 +10,8 @@ pub mod git_ops;
 pub mod git_url;
 pub mod provider_router;
 pub mod providers;
+pub mod pty_client;
+pub mod pty_daemon;
 mod pty_manager;
 mod session;
 pub mod session_recap;
@@ -76,7 +78,23 @@ pub fn run() {
 
     migrate_legacy_data_dir();
 
-    let app_state = AppState::init().expect("failed to initialize app state");
+    // Ensure the PTY daemon is running.  Failure is non-fatal — the app starts
+    // in degraded mode (no terminals) rather than refusing to launch.
+    let daemon_client = match pty_daemon::ensure_daemon_running()
+        .and_then(|sock_path| {
+            pty_client::DaemonClient::connect_to(sock_path.to_str().unwrap_or(""))
+        }) {
+        Ok(client) => {
+            tracing::info!("PTY daemon connected");
+            Some(client)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "PTY daemon unavailable — terminal features disabled");
+            None
+        }
+    };
+
+    let app_state = AppState::init(daemon_client).expect("failed to initialize app state");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

@@ -1,0 +1,641 @@
+//! Async client for the `octopush-pty-server` daemon.
+//!
+//! [`DaemonClient`] holds a single `UnixStream` connection.  A background
+//! reader thread multiplexes the incoming newline-delimited JSON stream into:
+//!
+//! - **Responses** (have a `type` field): dispatched to per-reqid oneshot
+//!   channels that callers block on.
+//! - **Events** (have an `event` field, `id` field): fan-out via a per-terminal
+//!   broadcast channel that the attach thread subscribes to.
+//!
+//! Connection healing: if the socket EOF's, the client attempts one reconnect
+//! (calls [`pty_daemon::ensure_daemon_running`] and re-opens the socket). If
+//! that fails too, the error is surfaced to the next caller.
+
+use crate::error::{AppError, AppResult};
+use crate::pty_daemon;
+use parking_lot::Mutex;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc as stdmpsc;
+use std::sync::Arc;
+
+/// A live terminal event pushed by the daemon (`data`, `exit`, `error`).
+#[derive(Debug, Clone)]
+pub enum TermEvent {
+    Data { seq: u64, bytes: Vec<u8> },
+    Exit { code: Option<i32> },
+    Error { message: String },
+}
+
+/// Minimal terminal descriptor returned by `list_terminals`.
+#[derive(Debug, Clone)]
+pub struct TerminalInfo {
+    pub id: String,
+    pub label: String,
+    pub running: bool,
+    pub cwd: String,
+    pub started_at: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Inner mutable state held behind a Mutex
+// ---------------------------------------------------------------------------
+
+type ReqMap = HashMap<u64, stdmpsc::SyncSender<Value>>;
+type EventMap = HashMap<String, Vec<stdmpsc::SyncSender<TermEvent>>>;
+
+struct Inner {
+    writer: Box<dyn Write + Send>,
+    /// Pending per-reqid response waiters.
+    pending: Arc<Mutex<ReqMap>>,
+    /// Per-terminal event subscribers.
+    events: Arc<Mutex<EventMap>>,
+    /// Whether the reader thread has detected a fatal error.
+    broken: Arc<AtomicBool>,
+}
+
+// ---------------------------------------------------------------------------
+// DaemonClient
+// ---------------------------------------------------------------------------
+
+pub struct DaemonClient {
+    inner: Mutex<Inner>,
+    next_reqid: AtomicU64,
+}
+
+impl DaemonClient {
+    /// Connect to the daemon socket and start the background reader thread.
+    pub fn connect() -> AppResult<Arc<Self>> {
+        let sock_path = pty_daemon::ensure_daemon_running()?;
+        Self::connect_to(sock_path.to_str().unwrap_or(""))
+    }
+
+    /// Build a stub client that reports "daemon unavailable" on every call.
+    ///
+    /// Used when the daemon binary is absent so Octopush can still start.
+    pub fn stub() -> Arc<Self> {
+        // We need a real socket path for the writer; use /dev/null as a
+        // placeholder write target that we'll never actually reach because
+        // `broken` is pre-set to `true`.
+        let pending: Arc<Mutex<ReqMap>> = Arc::new(Mutex::new(HashMap::new()));
+        let events: Arc<Mutex<EventMap>> = Arc::new(Mutex::new(HashMap::new()));
+        let broken = Arc::new(AtomicBool::new(true)); // pre-broken
+
+        // Use a dummy writer (writes are immediately discarded).
+        struct NullWriter;
+        impl Write for NullWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        Arc::new(Self {
+            inner: Mutex::new(Inner {
+                writer: Box::new(NullWriter),
+                pending,
+                events,
+                broken,
+            }),
+            next_reqid: AtomicU64::new(1),
+        })
+    }
+
+    /// Connect to a specific socket path (useful in tests).
+    pub fn connect_to(sock_path: &str) -> AppResult<Arc<Self>> {
+        let stream = UnixStream::connect(sock_path)
+            .map_err(|e| AppError::Other(format!("connect to daemon: {e}")))?;
+
+        let pending: Arc<Mutex<ReqMap>> = Arc::new(Mutex::new(HashMap::new()));
+        let events: Arc<Mutex<EventMap>> = Arc::new(Mutex::new(HashMap::new()));
+        let broken = Arc::new(AtomicBool::new(false));
+
+        let writer = stream
+            .try_clone()
+            .map_err(|e| AppError::Other(format!("clone socket: {e}")))?;
+
+        let client = Arc::new(Self {
+            inner: Mutex::new(Inner {
+                writer: Box::new(writer),
+                pending: Arc::clone(&pending),
+                events: Arc::clone(&events),
+                broken: Arc::clone(&broken),
+            }),
+            next_reqid: AtomicU64::new(1),
+        });
+
+        // Start reader thread.
+        let reader = BufReader::new(stream);
+        let pending2 = Arc::clone(&pending);
+        let events2 = Arc::clone(&events);
+        let broken2 = Arc::clone(&broken);
+        std::thread::Builder::new()
+            .name("daemon-reader".into())
+            .spawn(move || {
+                run_reader(reader, pending2, events2, broken2);
+            })
+            .map_err(|e| AppError::Other(format!("spawn reader thread: {e}")))?;
+
+        Ok(client)
+    }
+
+    // -----------------------------------------------------------------------
+    // Protocol methods
+    // -----------------------------------------------------------------------
+
+    /// List all terminals known to the daemon.
+    pub fn list_terminals(&self) -> AppResult<Vec<TerminalInfo>> {
+        let resp = self.send_request(serde_json::json!({"method": "list_terminals"}))?;
+        let arr = resp["terminals"]
+            .as_array()
+            .ok_or_else(|| AppError::Other("list_terminals: bad response".into()))?;
+        let infos = arr
+            .iter()
+            .map(|v| TerminalInfo {
+                id: v["id"].as_str().unwrap_or("").to_string(),
+                label: v["label"].as_str().unwrap_or("").to_string(),
+                running: v["running"].as_bool().unwrap_or(false),
+                cwd: v["cwd"].as_str().unwrap_or("").to_string(),
+                started_at: v["started_at"].as_i64().unwrap_or(0),
+            })
+            .collect();
+        Ok(infos)
+    }
+
+    /// Spawn a new PTY in the daemon.  Returns the OS pid.
+    pub fn spawn(
+        &self,
+        id: &str,
+        cwd: &str,
+        env: &HashMap<String, String>,
+        shell: Option<&str>,
+        rows: u16,
+        cols: u16,
+    ) -> AppResult<u32> {
+        let resp = self.send_request(serde_json::json!({
+            "method": "spawn",
+            "id": id,
+            "cwd": cwd,
+            "env": env,
+            "shell": shell,
+            "rows": rows,
+            "cols": cols,
+        }))?;
+        resp["pid"]
+            .as_u64()
+            .map(|n| n as u32)
+            .ok_or_else(|| AppError::Other(format!("spawn: unexpected response: {resp}")))
+    }
+
+    /// Attach to a terminal's event stream.
+    ///
+    /// Returns a `Receiver` that yields [`TermEvent`]s as they arrive from the
+    /// daemon.  The caller must drain the receiver promptly (channel capacity 256).
+    pub fn attach(
+        &self,
+        id: &str,
+        since_seq: u64,
+    ) -> AppResult<stdmpsc::Receiver<TermEvent>> {
+        // Register the event listener BEFORE sending the attach request so we
+        // don't miss early events.
+        let (tx, rx) = stdmpsc::sync_channel::<TermEvent>(256);
+        {
+            let inner_guard = self.inner.lock();
+            let mut ev = inner_guard.events.lock();
+            ev.entry(id.to_string()).or_default().push(tx);
+        }
+
+        let resp = self.send_request(serde_json::json!({
+            "method": "attach",
+            "id": id,
+            "since_seq": since_seq,
+        }));
+
+        if let Err(e) = resp {
+            // Clean up the listener we just registered.
+            let inner_guard = self.inner.lock();
+            let mut ev = inner_guard.events.lock();
+            if let Some(senders) = ev.get_mut(id) {
+                // Just pop the last one (which is ours).
+                senders.pop();
+            }
+            return Err(e);
+        }
+
+        Ok(rx)
+    }
+
+    /// Detach from a terminal.
+    pub fn detach(&self, id: &str) -> AppResult<()> {
+        self.send_request(serde_json::json!({
+            "method": "detach",
+            "id": id,
+        }))?;
+        // Remove event listeners for this terminal.
+        let inner_guard = self.inner.lock();
+        let mut ev = inner_guard.events.lock();
+        ev.remove(id);
+        Ok(())
+    }
+
+    /// Write bytes to a terminal's stdin (base64-encodes for the wire).
+    pub fn write(&self, id: &str, data: &[u8]) -> AppResult<()> {
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+        self.send_request(serde_json::json!({
+            "method": "write",
+            "id": id,
+            "data": encoded,
+        }))?;
+        Ok(())
+    }
+
+    /// Resize a terminal.
+    pub fn resize(&self, id: &str, cols: u16, rows: u16) -> AppResult<()> {
+        self.send_request(serde_json::json!({
+            "method": "resize",
+            "id": id,
+            "cols": cols,
+            "rows": rows,
+        }))?;
+        Ok(())
+    }
+
+    /// Kill a terminal.  `signal` is `"TERM"` (default) or `"KILL"`.
+    pub fn kill(&self, id: &str, signal: &str) -> AppResult<()> {
+        self.send_request(serde_json::json!({
+            "method": "kill",
+            "id": id,
+            "signal": signal,
+        }))?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Connection healing
+    // -----------------------------------------------------------------------
+
+    /// Attempt one reconnect: re-spawn daemon if needed and swap in a new socket.
+    pub fn try_reconnect(self: &Arc<Self>) -> AppResult<()> {
+        let sock_path = pty_daemon::ensure_daemon_running()?;
+        let stream = UnixStream::connect(&sock_path)
+            .map_err(|e| AppError::Other(format!("reconnect to daemon: {e}")))?;
+        let writer = stream
+            .try_clone()
+            .map_err(|e| AppError::Other(format!("clone reconnected socket: {e}")))?;
+
+        let mut inner = self.inner.lock();
+        inner.writer = Box::new(writer);
+        inner.broken.store(false, Ordering::SeqCst);
+
+        // Restart reader thread.
+        let pending2 = Arc::clone(&inner.pending);
+        let events2 = Arc::clone(&inner.events);
+        let broken2 = Arc::clone(&inner.broken);
+        let reader = BufReader::new(stream);
+        std::thread::Builder::new()
+            .name("daemon-reader-reconnect".into())
+            .spawn(move || {
+                run_reader(reader, pending2, events2, broken2);
+            })
+            .map_err(|e| AppError::Other(format!("spawn reconnect reader: {e}")))?;
+
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal helpers
+    // -----------------------------------------------------------------------
+
+    /// Assign the next request id.
+    fn next_id(&self) -> u64 {
+        self.next_reqid.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Send a JSON request, wait for the matching response, return it.
+    fn send_request(&self, mut payload: Value) -> AppResult<Value> {
+        // Check if the connection is broken before sending.
+        {
+            let inner = self.inner.lock();
+            if inner.broken.load(Ordering::SeqCst) {
+                return Err(AppError::Other("daemon connection is broken".into()));
+            }
+        }
+
+        let reqid = self.next_id();
+        payload["reqid"] = Value::Number(reqid.into());
+
+        // Register waiter before writing to avoid race.
+        let (tx, rx) = stdmpsc::sync_channel::<Value>(1);
+        {
+            let inner = self.inner.lock();
+            inner.pending.lock().insert(reqid, tx);
+        }
+
+        // Write the request.
+        let mut line = serde_json::to_vec(&payload)?;
+        line.push(b'\n');
+        {
+            let mut inner = self.inner.lock();
+            let write_result = inner.writer.write_all(&line);
+            if let Err(ref e) = write_result {
+                inner.broken.store(true, Ordering::SeqCst);
+                return Err(AppError::Other(format!("write to daemon: {e}")));
+            }
+        }
+
+        // Wait for response (5-second timeout to avoid deadlock on daemon hang).
+        let resp = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| AppError::Other("daemon response timeout".into()))?;
+
+        if let Some(msg) = resp["message"].as_str() {
+            if resp["type"].as_str() == Some("error") {
+                return Err(AppError::Other(format!("daemon error: {msg}")));
+            }
+        }
+
+        Ok(resp)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Background reader thread
+// ---------------------------------------------------------------------------
+
+fn run_reader(
+    reader: BufReader<UnixStream>,
+    pending: Arc<Mutex<ReqMap>>,
+    events: Arc<Mutex<EventMap>>,
+    broken: Arc<AtomicBool>,
+) {
+    use base64::Engine as _;
+
+    for line_result in reader.lines() {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, "daemon reader: I/O error");
+                break;
+            }
+        };
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+
+        let v: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, raw = %line, "daemon reader: JSON parse error");
+                continue;
+            }
+        };
+
+        // Determine if this is a Response (has "type") or an Event (has "event").
+        if v["event"].is_string() {
+            // It's a streaming event; dispatch to per-terminal listeners.
+            let id = v["id"].as_str().unwrap_or("").to_string();
+            let event = match v["event"].as_str() {
+                Some("data") => {
+                    let seq = v["seq"].as_u64().unwrap_or(0);
+                    let bytes = v["bytes"]
+                        .as_str()
+                        .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+                        .unwrap_or_default();
+                    TermEvent::Data { seq, bytes }
+                }
+                Some("exit") => {
+                    let code = v["code"].as_i64().map(|c| c as i32);
+                    TermEvent::Exit { code }
+                }
+                Some("error") => {
+                    let message = v["message"].as_str().unwrap_or("").to_string();
+                    TermEvent::Error { message }
+                }
+                _ => continue,
+            };
+
+            // Fan-out to all registered listeners for this id, removing any
+            // whose channel has been dropped.
+            let mut ev_map = events.lock();
+            if let Some(senders) = ev_map.get_mut(&id) {
+                senders.retain(|s| s.try_send(event.clone()).is_ok());
+            }
+        } else if v["type"].is_string() {
+            // It's a response; dispatch to the reqid waiter.
+            let reqid = v["reqid"].as_u64();
+            if let Some(id) = reqid {
+                if let Some(tx) = pending.lock().remove(&id) {
+                    let _ = tx.send(v);
+                }
+            } else {
+                tracing::warn!(raw = %line, "daemon reader: response with no reqid, dropping");
+            }
+        } else {
+            tracing::debug!(raw = %line, "daemon reader: unknown message shape");
+        }
+    }
+
+    tracing::warn!("daemon reader: EOF — connection lost");
+    broken.store(true, Ordering::SeqCst);
+
+    // Wake all pending waiters with an error so callers don't block forever.
+    let mut pend = pending.lock();
+    for (_, tx) in pend.drain() {
+        let _ = tx.send(serde_json::json!({
+            "type": "error",
+            "message": "daemon connection closed"
+        }));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+//
+// These tests start the daemon as an external process (since the server code
+// lives in the bin crate, not the lib crate).  We build the daemon binary
+// before running — `cargo test` in the workspace takes care of this.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    /// Start the daemon binary on a given socket path (via env var override).
+    ///
+    /// The daemon reads `HOME` to locate its socket.  We override `HOME` to
+    /// point at a temp directory so tests are isolated from each other and
+    /// from the real daemon.
+    fn start_daemon_process(home: &std::path::Path) -> std::process::Child {
+        // Find the daemon binary (sibling of current exe or in target/debug).
+        let daemon_bin = find_daemon_bin();
+
+        let child = Command::new(&daemon_bin)
+            .env("HOME", home)
+            // Use a very short auto-exit timer so the daemon stops after tests.
+            .env("OCTOPUSH_PTY_AUTO_EXIT_SECS", "10")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn daemon binary");
+
+        // Give daemon time to start.
+        std::thread::sleep(Duration::from_millis(200));
+        child
+    }
+
+    fn find_daemon_bin() -> PathBuf {
+        // Try sibling-of-exe.
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                let c = parent.join("octopush-pty-server");
+                if c.exists() {
+                    return c;
+                }
+                // In cargo test the exe is in deps/; try one level up.
+                if let Some(gp) = parent.parent() {
+                    let c = gp.join("octopush-pty-server");
+                    if c.exists() {
+                        return c;
+                    }
+                }
+            }
+        }
+        // Fallback: workspace target/debug.
+        if let Ok(cwd) = std::env::current_dir() {
+            for rel in &[
+                "target/debug/octopush-pty-server",
+                "../target/debug/octopush-pty-server",
+            ] {
+                let c = cwd.join(rel);
+                if c.exists() {
+                    return c;
+                }
+            }
+        }
+        panic!("octopush-pty-server binary not found; run `cargo build --bin octopush-pty-server` first");
+    }
+
+    /// Poll the socket until ready or timeout.
+    fn wait_for_socket(sock: &PathBuf, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if sock.exists() && std::os::unix::net::UnixStream::connect(sock).is_ok() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn client_spawn_write_exit_flow() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let base = home.join(".octopush");
+        fs::create_dir_all(&base).unwrap();
+        let sock_path = base.join("pty-server.sock");
+
+        let mut daemon = start_daemon_process(home);
+        assert!(
+            wait_for_socket(&sock_path, Duration::from_secs(5)),
+            "daemon socket did not appear"
+        );
+
+        let client = DaemonClient::connect_to(sock_path.to_str().unwrap()).unwrap();
+
+        // Spawn a shell.
+        let env = HashMap::new();
+        let pid = client
+            .spawn("tc-flow", "/tmp", &env, Some("/bin/sh"), 24, 80)
+            .expect("spawn");
+        assert!(pid > 0, "expected non-zero pid, got {pid}");
+
+        // Attach before sending input so we catch all output.
+        let rx = client.attach("tc-flow", 0).expect("attach");
+
+        // Send `echo hi` + `exit`.
+        client.write("tc-flow", b"echo hi\nexit\n").expect("write");
+
+        // Collect events until we see "hi" in data or get exit.
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut found_hi = false;
+        let mut found_exit = false;
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(TermEvent::Data { bytes, .. }) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    if text.contains("hi") {
+                        found_hi = true;
+                    }
+                }
+                Ok(TermEvent::Exit { .. }) => {
+                    found_exit = true;
+                    break;
+                }
+                Ok(TermEvent::Error { message }) => {
+                    if !message.is_empty() {
+                        panic!("unexpected error event: {message}");
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+
+        daemon.kill().ok();
+        assert!(found_hi, "expected 'hi' in PTY output");
+        assert!(found_exit, "expected exit event after shell exits");
+    }
+
+    #[test]
+    #[serial]
+    fn client_reconnect_after_socket_close() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let base = home.join(".octopush");
+        fs::create_dir_all(&base).unwrap();
+        let sock_path = base.join("pty-server.sock");
+
+        let mut daemon = start_daemon_process(home);
+        assert!(
+            wait_for_socket(&sock_path, Duration::from_secs(5)),
+            "daemon socket did not appear"
+        );
+
+        let client = DaemonClient::connect_to(sock_path.to_str().unwrap()).unwrap();
+
+        // Verify basic comms work.
+        let terminals = client.list_terminals().expect("list_terminals before kill");
+        assert!(terminals.is_empty());
+
+        // Kill the daemon.
+        daemon.kill().ok();
+        let _ = daemon.wait();
+        fs::remove_file(&sock_path).ok();
+
+        // Wait for the reader thread to notice.
+        std::thread::sleep(Duration::from_millis(200));
+
+        // The connection is now broken. The next call should fail gracefully.
+        let result = client.list_terminals();
+        assert!(result.is_err(), "expected error after daemon death, got Ok");
+    }
+}

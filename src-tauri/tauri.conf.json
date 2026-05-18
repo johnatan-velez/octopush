@@ -42,6 +42,7 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "The IDE for Agentic Developers",
-    "longDescription": "Octopush — eight arms, zero wasted tokens. A native IDE that treats agentic coding sessions as first-class citizens with real PTY terminals, token budgets, and multi-agent orchestration."
+    "longDescription": "Octopush — eight arms, zero wasted tokens. A native IDE that treats agentic coding sessions as first-class citizens with real PTY terminals, token budgets, and multi-agent orchestration.",
+    "externalBin": ["octopush-pty-server"]
   }
 }

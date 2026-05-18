@@ -1,8 +1,8 @@
 //! Unix socket accept loop and request dispatcher.
 
 use crate::protocol::{
-    AttachParams, DetachParams, KillParams, Request, ResizeParams, Response, SpawnParams,
-    TerminalInfo, WriteParams,
+    AttachParams, DetachParams, KillParams, Request, RequestPayload, ResizeParams, Response,
+    ResponsePayload, SpawnParams, TerminalInfo, WriteParams,
 };
 use crate::session::{ClientSender, PtyHandles, Session, TerminalId};
 use crate::storage::read_pty_log;
@@ -160,18 +160,19 @@ fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
         let req: Request = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
-                let resp = Response::Error {
+                let resp = Response::bare(ResponsePayload::Error {
                     message: format!("parse error: {e}"),
-                };
+                });
                 let _ = tx.send(resp.to_line());
                 continue;
             }
         };
 
-        let is_shutdown = matches!(req, Request::Shutdown);
-        let resp = dispatch(req, &state, tx.clone());
+        let reqid = req.reqid;
+        let is_shutdown = matches!(req.payload, RequestPayload::Shutdown);
+        let resp = dispatch(req.payload, reqid, &state, tx.clone());
         // SentDirectly means the handler already queued its own response.
-        if !matches!(resp, Response::SentDirectly) {
+        if !matches!(resp.payload, ResponsePayload::SentDirectly) {
             let _ = tx.send(resp.to_line());
         }
 
@@ -200,20 +201,26 @@ fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
 // Request dispatch
 // ---------------------------------------------------------------------------
 
-fn dispatch(req: Request, state: &SharedState, tx: ClientSender) -> Response {
-    match req {
-        Request::ListTerminals => cmd_list_terminals(state),
-        Request::Spawn(p) => cmd_spawn(p, state, tx),
-        Request::Attach(p) => cmd_attach(p, state, tx),
-        Request::Detach(p) => cmd_detach(p, state),
-        Request::Write(p) => cmd_write(p, state),
-        Request::Resize(p) => cmd_resize(p, state),
-        Request::Kill(p) => cmd_kill(p, state),
-        Request::Shutdown => cmd_shutdown(state),
-    }
+fn dispatch(
+    payload: RequestPayload,
+    reqid: Option<u64>,
+    state: &SharedState,
+    tx: ClientSender,
+) -> Response {
+    let inner = match payload {
+        RequestPayload::ListTerminals => cmd_list_terminals(state),
+        RequestPayload::Spawn(p) => cmd_spawn(p, state, tx),
+        RequestPayload::Attach(p) => cmd_attach(p, reqid, state, tx),
+        RequestPayload::Detach(p) => cmd_detach(p, state),
+        RequestPayload::Write(p) => cmd_write(p, state),
+        RequestPayload::Resize(p) => cmd_resize(p, state),
+        RequestPayload::Kill(p) => cmd_kill(p, state),
+        RequestPayload::Shutdown => cmd_shutdown(state),
+    };
+    Response::with_reqid(inner, reqid)
 }
 
-fn cmd_list_terminals(state: &SharedState) -> Response {
+fn cmd_list_terminals(state: &SharedState) -> ResponsePayload {
     let st = state.lock();
     let terminals = st
         .sessions
@@ -226,10 +233,10 @@ fn cmd_list_terminals(state: &SharedState) -> Response {
             started_at: s.started_at,
         })
         .collect();
-    Response::Terminals { terminals }
+    ResponsePayload::Terminals { terminals }
 }
 
-fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Response {
+fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> ResponsePayload {
     let SpawnParams {
         id,
         cwd,
@@ -243,7 +250,7 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
     {
         let st = state.lock();
         if st.sessions.contains_key(&id) {
-            return Response::Error {
+            return ResponsePayload::Error {
                 message: format!("terminal {id} already exists"),
             };
         }
@@ -258,7 +265,7 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
     }) {
         Ok(p) => p,
         Err(e) => {
-            return Response::Error {
+            return ResponsePayload::Error {
                 message: format!("openpty: {e}"),
             }
         }
@@ -288,7 +295,7 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
     let child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,
         Err(e) => {
-            return Response::Error {
+            return ResponsePayload::Error {
                 message: format!("spawn: {e}"),
             }
         }
@@ -300,7 +307,7 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
     let mut reader = match pair.master.try_clone_reader() {
         Ok(r) => r,
         Err(e) => {
-            return Response::Error {
+            return ResponsePayload::Error {
                 message: format!("clone_reader: {e}"),
             }
         }
@@ -308,7 +315,7 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
     let writer = match pair.master.take_writer() {
         Ok(w) => w,
         Err(e) => {
-            return Response::Error {
+            return ResponsePayload::Error {
                 message: format!("take_writer: {e}"),
             }
         }
@@ -373,10 +380,15 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
         .ok();
 
     info!(id = %id, pid = pid, "spawned PTY");
-    Response::Spawned { id, pid }
+    ResponsePayload::Spawned { id, pid }
 }
 
-fn cmd_attach(params: AttachParams, state: &SharedState, tx: ClientSender) -> Response {
+fn cmd_attach(
+    params: AttachParams,
+    reqid: Option<u64>,
+    state: &SharedState,
+    tx: ClientSender,
+) -> ResponsePayload {
     let AttachParams { id, since_seq } = params;
     let since = since_seq.unwrap_or(0);
 
@@ -388,7 +400,7 @@ fn cmd_attach(params: AttachParams, state: &SharedState, tx: ClientSender) -> Re
         st.touch();
         match st.sessions.get_mut(&id) {
             None => {
-                return Response::Error {
+                return ResponsePayload::Error {
                     message: format!("terminal {id} not found"),
                 }
             }
@@ -400,8 +412,10 @@ fn cmd_attach(params: AttachParams, state: &SharedState, tx: ClientSender) -> Re
         }
     };
 
-    // Send Ok{} FIRST so the client's send_recv call sees it before any events.
-    let _ = replay_tx.send(Response::Ok {}.to_line());
+    // Send Ok{} FIRST (with reqid echoed) so the client's send_recv call sees
+    // it before any events.
+    let ok_resp = Response::with_reqid(ResponsePayload::Ok {}, reqid);
+    let _ = replay_tx.send(ok_resp.to_line());
 
     // Then send backlog (from disk or ring).
     if use_disk {
@@ -431,27 +445,27 @@ fn cmd_attach(params: AttachParams, state: &SharedState, tx: ClientSender) -> Re
     }
 
     // Return SentDirectly so handle_connection doesn't send a duplicate Ok{}.
-    Response::SentDirectly
+    ResponsePayload::SentDirectly
 }
 
-fn cmd_detach(params: DetachParams, state: &SharedState) -> Response {
+fn cmd_detach(params: DetachParams, state: &SharedState) -> ResponsePayload {
     let mut st = state.lock();
     st.touch();
     if let Some(sess) = st.sessions.get_mut(&params.id) {
         sess.detach();
-        Response::Ok {}
+        ResponsePayload::Ok {}
     } else {
-        Response::Error {
+        ResponsePayload::Error {
             message: format!("terminal {} not found", params.id),
         }
     }
 }
 
-fn cmd_write(params: WriteParams, state: &SharedState) -> Response {
+fn cmd_write(params: WriteParams, state: &SharedState) -> ResponsePayload {
     let data = match base64::engine::general_purpose::STANDARD.decode(&params.data) {
         Ok(d) => d,
         Err(e) => {
-            return Response::Error {
+            return ResponsePayload::Error {
                 message: format!("base64 decode: {e}"),
             }
         }
@@ -459,44 +473,44 @@ fn cmd_write(params: WriteParams, state: &SharedState) -> Response {
 
     let st = state.lock();
     match st.handles.get(&params.id) {
-        None => Response::Error {
+        None => ResponsePayload::Error {
             message: format!("terminal {} not found", params.id),
         },
         Some(h) => {
             let mut hg = h.lock();
             if let Err(e) = hg.writer.write_all(&data) {
-                Response::Error {
+                ResponsePayload::Error {
                     message: format!("write: {e}"),
                 }
             } else {
                 let _ = hg.writer.flush();
-                Response::Ok {}
+                ResponsePayload::Ok {}
             }
         }
     }
 }
 
-fn cmd_resize(params: ResizeParams, state: &SharedState) -> Response {
+fn cmd_resize(params: ResizeParams, state: &SharedState) -> ResponsePayload {
     let st = state.lock();
     match st.handles.get(&params.id) {
-        None => Response::Error {
+        None => ResponsePayload::Error {
             message: format!("terminal {} not found", params.id),
         },
         Some(h) => match h.lock().resize(params.rows, params.cols) {
-            Ok(_) => Response::Ok {},
-            Err(e) => Response::Error {
+            Ok(_) => ResponsePayload::Ok {},
+            Err(e) => ResponsePayload::Error {
                 message: format!("resize: {e}"),
             },
         },
     }
 }
 
-fn cmd_kill(params: KillParams, state: &SharedState) -> Response {
+fn cmd_kill(params: KillParams, state: &SharedState) -> ResponsePayload {
     let sigkill = params.signal.as_deref() == Some("KILL");
 
     let mut st = state.lock();
     match st.handles.get(&params.id) {
-        None => Response::Error {
+        None => ResponsePayload::Error {
             message: format!("terminal {} not found", params.id),
         },
         Some(h) => {
@@ -524,14 +538,14 @@ fn cmd_kill(params: KillParams, state: &SharedState) -> Response {
             if let Some(sess) = st.sessions.get_mut(&params.id) {
                 sess.mark_exit(None);
             }
-            Response::Ok {}
+            ResponsePayload::Ok {}
         }
     }
 }
 
-fn cmd_shutdown(state: &SharedState) -> Response {
+fn cmd_shutdown(state: &SharedState) -> ResponsePayload {
     let mut st = state.lock();
     st.shutdown = true;
     info!("shutdown requested");
-    Response::Ok {}
+    ResponsePayload::Ok {}
 }

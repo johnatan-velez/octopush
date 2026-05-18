@@ -290,7 +290,7 @@ mod terminal_tests {
 
         // Simulate the command-level behaviour: ignore "not found" from pty.kill,
         // then delete from DB.
-        let mut pty = crate::pty_manager::PtyManager::new();
+        let mut pty = crate::pty_manager::PtyManager::new(crate::pty_client::DaemonClient::stub());
         let _ = pty.kill("term-d"); // must not panic
 
         db.delete_terminal("term-d").unwrap();

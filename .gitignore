@@ -14,6 +14,9 @@ src-tauri/target/
 src-tauri/gen/schemas/
 Cargo.lock
 
+# Build-generated triple-suffixed sidecar binaries (created by build.rs)
+src-tauri/octopush-pty-server-*
+
 # Editor
 .vscode/*
 !.vscode/extensions.json
