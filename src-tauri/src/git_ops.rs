@@ -49,20 +49,37 @@ pub fn default_branch(path: &Path) -> AppResult<Option<String>> {
 }
 
 /// Ensure the repo has at least one commit (needed before creating branches).
-/// If the repo is empty, creates an initial empty commit on "main".
+/// If the repo is empty, creates an initial commit. If the working tree
+/// contains files, they are staged and committed — otherwise the commit is
+/// empty. This matters for "Open existing folder": auto-initialized folders
+/// must carry their existing files into the initial commit, so worktrees
+/// branched off `main` actually contain those files instead of being empty.
 pub fn ensure_initial_commit(path: &Path) -> AppResult<()> {
     let repo = open_repo(path)?;
     if repo.head().is_ok() {
         return Ok(()); // Already has commits
     }
-    // Create an initial empty commit
-    let sig = repo.signature()
+    let sig = repo
+        .signature()
         .or_else(|_| git2::Signature::now("Octopush", "octopush@localhost"))
         .map_err(|e| AppError::Other(format!("git signature: {e}")))?;
-    let tree_id = repo.index()
-        .and_then(|mut idx| { idx.write()?; idx.write_tree() })
+
+    // Stage any existing files. add_all with "*" respects .gitignore but
+    // sweeps everything else into the index.
+    let mut index = repo
+        .index()
+        .map_err(|e| AppError::Other(format!("open index: {e}")))?;
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .map_err(|e| AppError::Other(format!("add_all: {e}")))?;
+    index
+        .write()
+        .map_err(|e| AppError::Other(format!("write index: {e}")))?;
+    let tree_id = index
+        .write_tree()
         .map_err(|e| AppError::Other(format!("write tree: {e}")))?;
-    let tree = repo.find_tree(tree_id)
+    let tree = repo
+        .find_tree(tree_id)
         .map_err(|e| AppError::Other(format!("find tree: {e}")))?;
     repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
         .map_err(|e| AppError::Other(format!("initial commit: {e}")))?;
