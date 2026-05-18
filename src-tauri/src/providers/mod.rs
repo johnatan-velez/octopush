@@ -105,3 +105,6 @@ pub trait LlmProvider: Send + Sync {
 
 pub mod anthropic;
 pub mod openai_compat;
+
+#[cfg(test)]
+mod tests;
