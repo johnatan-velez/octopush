@@ -163,6 +163,14 @@ pub fn get_diff_text(path: &Path) -> AppResult<String> {
         .map_err(|e| AppError::Other(format!("diff: {e}")))?;
     let mut buf = Vec::new();
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        // libgit2 strips the leading `+`/`-`/` ` marker from `line.content()`
+        // and exposes it separately as `line.origin()`. Re-emit the marker so
+        // the resulting patch is a faithful unified diff that downstream
+        // consumers (e.g., the Diffs counter) can parse line-by-line.
+        let origin = line.origin();
+        if matches!(origin, '+' | '-' | ' ') {
+            buf.push(origin as u8);
+        }
         buf.extend_from_slice(line.content());
         true
     }).map_err(|e| AppError::Other(format!("diff print: {e}")))?;
