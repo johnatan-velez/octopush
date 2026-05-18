@@ -18,7 +18,7 @@ export function WorkspaceRail({
 }: Props) {
   return (
     <aside
-      className="flex h-full w-12 flex-col items-center gap-2 border-r border-octo-hairline bg-octo-panel py-3"
+      className="flex h-full w-12 flex-col items-center gap-2 border-r border-octo-hairline bg-octo-panel pb-3 pt-9"
       aria-label="Workspaces"
     >
       {workspaces.map((ws) => (

@@ -23,6 +23,7 @@ import { useTokenStore } from "./stores/tokenStore";
 import { useTerminalsStore } from "./stores/terminalsStore";
 import { useChatStore } from "./stores/chatStore";
 import { listen } from "@tauri-apps/api/event";
+import type { ModelWithProvider } from "./lib/types";
 import type { SettingsTab } from "./lib/settingsTabs";
 import { resolveMonogram } from "./lib/monogram";
 import { type WorkspaceMode } from "./lib/modes";
@@ -40,7 +41,6 @@ type AppView = "project" | "new-project";
 function App() {
   const project = useProjectStore((s) => s.current);
   const loadTheme = useThemeStore((s) => s.load);
-  const tokenReport = useTokenStore((s) => s.report);
   const refreshTokens = useTokenStore((s) => s.refresh);
   const {
     workspaces,
@@ -328,16 +328,43 @@ function App() {
     [activeChatMessages],
   );
 
+  const activeModel = useChatStore((s) => s.model);
+
+  // Load the model registry once so we can resolve max_context for the
+  // active model. Cheap call; the result is stable across the app lifetime.
+  const [modelCatalog, setModelCatalog] = useState<ModelWithProvider[]>([]);
+  useEffect(() => {
+    ipc.listModels().then(setModelCatalog).catch(() => {});
+  }, []);
+
+  const activeModelMaxContext = useMemo(() => {
+    const found = modelCatalog.find((m) => m.model.id === activeModel);
+    return found?.model.maxContext ?? 200_000;
+  }, [modelCatalog, activeModel]);
+
+  // Context window usage of the most recent assistant turn in the active
+  // chat. Numerator = inputTokens of the latest assistant message (that's
+  // exactly what filled the model's prompt for the next response).
+  // Denominator = max_context of the active model. This lets the user see
+  // how close they are to the conversation memory ceiling.
+  const lastTurnInputTokens = useMemo(() => {
+    for (let i = activeChatMessages.length - 1; i >= 0; i--) {
+      const m = activeChatMessages[i];
+      if (m.role === "assistant" && m.inputTokens != null) {
+        return m.inputTokens;
+      }
+    }
+    return 0;
+  }, [activeChatMessages]);
+
   const companionContextProps = useMemo(() => {
-    const tokensUsed =
-      (tokenReport?.totalInput ?? 0) + (tokenReport?.totalOutput ?? 0);
     return {
-      tokensUsed,
-      tokensLimit: 200_000,
+      tokensUsed: lastTurnInputTokens,
+      tokensLimit: activeModelMaxContext,
       unstaged: gitStatus?.changedFiles.length ?? 0,
       toolCalls: liveToolCalls,
     };
-  }, [gitStatus, tokenReport, liveToolCalls]);
+  }, [gitStatus, lastTurnInputTokens, activeModelMaxContext, liveToolCalls]);
 
   const companionHistoryProps = useMemo(
     () => ({
