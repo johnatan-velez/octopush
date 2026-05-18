@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   GitBranch,
   FilePlus,
@@ -23,23 +23,17 @@ export function ChangesPanel({ projectPath }: Props) {
   const [diff, setDiff] = useState<string>("");
   const [activeTab, setActiveTab] = useState<TabView>("files");
   const [commitMessage, setCommitMessage] = useState("");
-  const hasFetchedDiff = useRef(false);
 
   async function refresh() {
     try {
-      const status = await ipc.getGitStatus(projectPath);
+      const [status, d] = await Promise.all([
+        ipc.getGitStatus(projectPath),
+        ipc.getGitDiff(projectPath).catch(() => ""),
+      ]);
       setGitStatus(status);
-    } catch {
-      // silently ignore — project may not be a git repo yet
-    }
-  }
-
-  async function fetchDiff() {
-    try {
-      const d = await ipc.getGitDiff(projectPath);
       setDiff(d);
     } catch {
-      setDiff("");
+      // silently ignore — project may not be a git repo yet
     }
   }
 
@@ -50,14 +44,16 @@ export function ChangesPanel({ projectPath }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectPath]);
 
-  // Fetch diff once when switching to the Diffs tab
-  useEffect(() => {
-    if (activeTab === "diffs") {
-      fetchDiff();
-      hasFetchedDiff.current = true;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, projectPath]);
+  // Count +/- lines from the diff, excluding the `+++ b/file` and `--- a/file`
+  // header lines that git emits at the start of each file section.
+  const diffLineCount = diff
+    ? diff
+        .split("\n")
+        .filter((l) => {
+          if (l.startsWith("+++") || l.startsWith("---")) return false;
+          return l.startsWith("+") || l.startsWith("-");
+        }).length
+    : 0;
 
   const files = gitStatus?.changedFiles ?? [];
   const branch = gitStatus?.branch ?? null;
@@ -97,10 +93,7 @@ export function ChangesPanel({ projectPath }: Props) {
           active={activeTab === "diffs"}
           onClick={() => setActiveTab("diffs")}
         >
-          Diffs {activeTab === "diffs" ? "" : ""}
-          {activeTab === "diffs" && diff
-            ? diff.split("\n").filter((l) => l.startsWith("+") || l.startsWith("-")).length
-            : 0}
+          Diffs {diffLineCount}
         </TabButton>
         <TabButton
           active={activeTab === "files"}
