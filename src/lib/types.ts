@@ -186,9 +186,16 @@ export interface FileChange {
 
 // ─── Settings ─────────────────────────────────────────────────────
 
+export interface GitCredentialEntry {
+  username: string;
+  token: string;
+}
+
 export interface AppSettings {
   providerKeys: Record<string, string>;
   providerBaseUrls: Record<string, string>;
+  /** Per-host git credentials, keyed by hostname (e.g. "github.com"). */
+  gitCredentials: Record<string, GitCredentialEntry>;
   /** @deprecated use providerKeys.anthropic */
   anthropicApiKey?: string | null;
   /** @deprecated use providerKeys.openai */

@@ -9,7 +9,7 @@ use crate::token_engine::{BudgetStatus, TokenEvent, TokenReport};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::path::Path;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 // ─── Session commands ─────────────────────────────────────────────
@@ -621,6 +621,125 @@ pub async fn delete_terminal(
     state.db.lock().delete_terminal(&id)
 }
 
+// ─── Clone command ────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloneCredentials {
+    pub username: String,
+    pub token: String,
+}
+
+#[tauri::command]
+pub async fn clone_project(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    path: String,
+    url: String,
+    name_override: Option<String>,
+    credentials: Option<CloneCredentials>,
+) -> AppResult<ProjectInfo> {
+    use crate::git_url::parse_git_url;
+    use git2::{build::RepoBuilder, FetchOptions, RemoteCallbacks};
+
+    let parsed = parse_git_url(&url)
+        .ok_or_else(|| AppError::Other(format!("Could not parse git URL: {url}")))?;
+
+    let target_name = name_override
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| parsed.repo.clone());
+
+    let base_path = expand_tilde(&path);
+    let target_path = std::path::Path::new(&base_path).join(&target_name);
+
+    if target_path.exists() {
+        return Err(AppError::Other(format!(
+            "Directory already exists: {}",
+            target_path.display()
+        )));
+    }
+
+    // We need to move values into the spawn_blocking closure.
+    let url_clone = url.clone();
+    let host_clone = parsed.host.clone();
+    let is_ssh = parsed.is_ssh;
+    let creds_for_closure = credentials.map(|c| (c.username, c.token));
+    let app_clone = app.clone();
+    let target_path_for_closure = target_path.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        let target_path = target_path_for_closure;
+        let mut callbacks = RemoteCallbacks::new();
+
+        // Credentials callback
+        callbacks.credentials(move |_url, username_from_url, _allowed| {
+            if is_ssh {
+                git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"))
+            } else if let Some((ref uname, ref tok)) = creds_for_closure {
+                git2::Cred::userpass_plaintext(uname, tok)
+            } else {
+                Err(git2::Error::from_str("No credentials available for HTTPS clone"))
+            }
+        });
+
+        // Transfer progress → emit event
+        callbacks.transfer_progress(move |stats| {
+            let _ = app_clone.emit(
+                "clone://progress",
+                serde_json::json!({
+                    "receivedObjects": stats.received_objects(),
+                    "totalObjects": stats.total_objects(),
+                    "receivedBytes": stats.received_bytes(),
+                }),
+            );
+            true
+        });
+
+        let mut fetch_opts = FetchOptions::new();
+        fetch_opts.remote_callbacks(callbacks);
+
+        RepoBuilder::new()
+            .fetch_options(fetch_opts)
+            .clone(&url_clone, &target_path)
+            .map_err(|e| {
+                let msg = e.message().to_string();
+                // Detect HTTP 401/403 to surface structured AuthRequired.
+                if e.class() == git2::ErrorClass::Http
+                    || msg.contains("401")
+                    || msg.contains("403")
+                    || msg.contains("Authentication")
+                    || msg.contains("authentication")
+                    || msg.contains("credential")
+                {
+                    AppError::AuthRequired { host: host_clone.clone() }
+                } else {
+                    AppError::Other(format!("git clone failed: {msg}"))
+                }
+            })?;
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("spawn_blocking failed: {e}")))?;
+
+    result?;
+
+    // Insert into DB and return ProjectInfo.
+    let id = uuid::Uuid::new_v4().to_string();
+    let path_str = target_path.to_string_lossy().to_string();
+    state
+        .db
+        .lock()
+        .insert_project(&id, &target_name, &path_str)?;
+
+    Ok(ProjectInfo {
+        id,
+        name: target_name,
+        path: path_str,
+    })
+}
+
 // ─── Settings ─────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -631,6 +750,11 @@ pub async fn get_settings() -> AppResult<crate::settings::AppSettings> {
 #[tauri::command]
 pub async fn save_settings(settings: crate::settings::AppSettings) -> AppResult<()> {
     crate::settings::save_settings(&settings)
+}
+
+#[tauri::command]
+pub async fn save_git_credentials(host: String, username: String, token: String) -> AppResult<()> {
+    crate::settings::save_git_credentials(&host, &username, &token)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────

@@ -5,6 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Stored credentials for a single git host.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCredentialEntry {
+    pub username: String,
+    pub token: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -12,6 +20,11 @@ pub struct AppSettings {
     pub provider_keys: HashMap<String, String>,
     #[serde(default)]
     pub provider_base_urls: HashMap<String, String>,
+
+    /// Per-host git credentials (username + PAT).  Key is the host name,
+    /// e.g. `"github.com"`.
+    #[serde(default)]
+    pub git_credentials: HashMap<String, GitCredentialEntry>,
 
     #[serde(default, rename = "anthropicApiKey", skip_serializing)]
     pub legacy_anthropic_api_key: Option<String>,
@@ -76,6 +89,27 @@ pub fn get_provider_base_url(provider: &str) -> Option<String> {
 /// Get the Anthropic API key: settings file first, then env var fallback.
 pub fn get_anthropic_key() -> Option<String> {
     get_provider_key("anthropic").or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+}
+
+/// Get stored git credentials for a host (e.g. `"github.com"`).
+pub fn get_git_credentials(host: &str) -> Option<GitCredentialEntry> {
+    load_settings()
+        .ok()
+        .and_then(|s| s.git_credentials.get(host).cloned())
+}
+
+/// Persist git credentials for a host.  Safe to call concurrently — the
+/// entire settings file is read, updated, then written atomically.
+pub fn save_git_credentials(host: &str, username: &str, token: &str) -> AppResult<()> {
+    let mut settings = load_settings()?;
+    settings.git_credentials.insert(
+        host.to_string(),
+        GitCredentialEntry {
+            username: username.to_string(),
+            token: token.to_string(),
+        },
+    );
+    save_settings(&settings)
 }
 
 #[cfg(test)]

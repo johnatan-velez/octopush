@@ -213,6 +213,7 @@ function ModelsPane() {
       providerBaseUrls: Object.fromEntries(
         Object.entries(baseUrls).filter(([_, v]) => v && v.length > 0),
       ),
+      gitCredentials: {},
     });
     setSaving(false);
     setSaved(true);

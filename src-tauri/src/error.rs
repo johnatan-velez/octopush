@@ -2,7 +2,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 /// Application-wide error type. Implements `Serialize` so Tauri commands
-/// can return it directly to the JS side as a string.
+/// can return it directly to the JS side as a string (or structured object
+/// for variants the frontend needs to pattern-match).
 #[derive(Error, Debug)]
 pub enum AppError {
     #[error("pty error: {0}")]
@@ -22,6 +23,11 @@ pub enum AppError {
 
     #[error("other: {0}")]
     Other(String),
+
+    /// Returned when a git clone fails with HTTP 401/403.
+    /// The frontend detects `kind == "AuthRequired"` to show the credential panel.
+    #[error("Authentication required for {host}")]
+    AuthRequired { host: String },
 }
 
 impl From<anyhow::Error> for AppError {
@@ -30,10 +36,48 @@ impl From<anyhow::Error> for AppError {
     }
 }
 
+/// Serialise `AppError` in a way the frontend can pattern-match.
+///
+/// Most variants produce a plain string (backwards-compatible).
+/// `AuthRequired` produces `{"kind":"AuthRequired","host":"<host>"}`.
 impl Serialize for AppError {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        ser.serialize_str(&self.to_string())
+        use serde::ser::SerializeMap;
+        match self {
+            AppError::AuthRequired { host } => {
+                let mut map = ser.serialize_map(Some(2))?;
+                map.serialize_entry("kind", "AuthRequired")?;
+                map.serialize_entry("host", host)?;
+                map.end()
+            }
+            other => ser.serialize_str(&other.to_string()),
+        }
     }
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_required_serializes_correctly() {
+        let err = AppError::AuthRequired {
+            host: "github.com".to_string(),
+        };
+        let json = serde_json::to_string(&err).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(val["kind"], "AuthRequired");
+        assert_eq!(val["host"], "github.com");
+    }
+
+    #[test]
+    fn other_error_serializes_as_string() {
+        let err = AppError::Other("something went wrong".to_string());
+        let json = serde_json::to_string(&err).unwrap();
+        // Should be a JSON string, not an object
+        assert!(json.starts_with('"'));
+        assert!(json.contains("something went wrong"));
+    }
+}

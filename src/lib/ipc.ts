@@ -106,6 +106,18 @@ export const ipc = {
   openProject: (path: string) => invoke<ProjectInfo>("open_project", { path }),
   listRecentProjects: () => invoke<ProjectInfo[]>("list_recent_projects"),
   createProject: (path: string, name: string) => invoke<ProjectInfo>("create_project", { path, name }),
+  cloneProject: (args: {
+    path: string;
+    url: string;
+    nameOverride?: string;
+    credentials?: { username: string; token: string };
+  }) =>
+    invoke<ProjectInfo>("clone_project", {
+      path: args.path,
+      url: args.url,
+      nameOverride: args.nameOverride ?? null,
+      credentials: args.credentials ?? null,
+    }),
 
   // ─── Workspaces ─────────────────────────────────────────────────
   createWorkspace: (projectId: string, projectPath: string, name: string, task: string,
@@ -145,6 +157,8 @@ export const ipc = {
     invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) =>
     invoke<void>("save_settings", { settings }),
+  saveGitCredentials: (host: string, username: string, token: string) =>
+    invoke<void>("save_git_credentials", { host, username, token }),
 
   // ─── Terminals ────────────────────────────────────────────────
   listTerminals: (workspaceId: string) =>

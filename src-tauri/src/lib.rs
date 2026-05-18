@@ -7,6 +7,7 @@ pub mod context_guard;
 mod db;
 mod error;
 pub mod git_ops;
+pub mod git_url;
 pub mod provider_router;
 pub mod providers;
 mod pty_manager;
@@ -87,9 +88,12 @@ pub fn run() {
             // File operations
             commands::open_file_in_system,
             commands::reveal_in_finder,
+            // Clone
+            commands::clone_project,
             // Settings
             commands::get_settings,
             commands::save_settings,
+            commands::save_git_credentials,
             // Terminals
             commands::list_terminals,
             commands::create_terminal,

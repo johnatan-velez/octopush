@@ -1,0 +1,81 @@
+/**
+ * Client-side mirror of the Rust `git_url::parse_git_url` parser.
+ * Keeps name-auto-detect instant (no IPC round-trip per keystroke).
+ *
+ * Supported shapes:
+ *   https://github.com/owner/repo.git
+ *   https://github.com/owner/repo
+ *   git@github.com:owner/repo.git          (SCP)
+ *   ssh://git@github.com/owner/repo.git
+ *   https://gitlab.com/group/sub/repo.git  (multi-level)
+ *   https://bitbucket.org/owner/repo.git
+ *   https://gitea.example.com/owner/repo   (custom host)
+ */
+
+export interface ParsedGitUrl {
+  host: string;
+  owner: string;
+  repo: string;
+  isSsh: boolean;
+}
+
+/** Strip trailing `.git` suffix and split `path` into [owner, repo]. */
+function splitOwnerRepo(path: string): [string, string] | null {
+  const stripped = path
+    .replace(/\/$/, "")
+    .replace(/\.git$/, "");
+  const segments = stripped.split("/").filter(Boolean);
+  if (segments.length < 2) return null;
+  const repo = segments[segments.length - 1];
+  const owner = segments[segments.length - 2];
+  if (!repo || !owner) return null;
+  return [owner, repo];
+}
+
+export function parseGitUrl(raw: string): ParsedGitUrl | null {
+  const url = raw.trim();
+  if (!url) return null;
+
+  // ── SCP-style: git@github.com:owner/repo.git ──────────────────────
+  if (!url.includes("://")) {
+    const atIdx = url.indexOf("@");
+    if (atIdx === -1) return null;
+    const afterAt = url.slice(atIdx + 1);
+    const colonIdx = afterAt.indexOf(":");
+    if (colonIdx === -1) return null;
+    const host = afterAt.slice(0, colonIdx);
+    const path = afterAt.slice(colonIdx + 1);
+    if (!host || !path) return null;
+    const parts = splitOwnerRepo(path);
+    if (!parts) return null;
+    return { host, owner: parts[0], repo: parts[1], isSsh: true };
+  }
+
+  // ── URL-scheme forms ───────────────────────────────────────────────
+  const schemeEnd = url.indexOf("://");
+  const scheme = url.slice(0, schemeEnd).toLowerCase();
+  if (!["https", "http", "ssh", "git"].includes(scheme)) return null;
+
+  const isSsh = scheme === "ssh" || scheme === "git";
+
+  let rest = url.slice(schemeEnd + 3);
+
+  // Strip optional user@ prefix (only if @ is before the first /)
+  const atIdx = rest.indexOf("@");
+  const slashIdx = rest.indexOf("/");
+  if (atIdx !== -1 && (slashIdx === -1 || atIdx < slashIdx)) {
+    rest = rest.slice(atIdx + 1);
+  }
+
+  // Split host from path
+  const firstSlash = rest.indexOf("/");
+  if (firstSlash === -1) return null;
+  const host = rest.slice(0, firstSlash);
+  const path = rest.slice(firstSlash + 1);
+  if (!host || !path) return null;
+
+  const parts = splitOwnerRepo(path);
+  if (!parts) return null;
+
+  return { host, owner: parts[0], repo: parts[1], isSsh };
+}
