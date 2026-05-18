@@ -490,175 +490,179 @@ function App() {
       />
 
       <main className="flex min-w-0 flex-1 overflow-hidden">
-        {activeWorkspace ? (
-          <>
-            {/* LEFT COLUMN — header + canvas (input lives inside the canvas).
-                Layout note: putting ContextHeader inside the left column (not
-                spanning the full window) means its top edge aligns with the
-                ModeSwitcher in the right column, and the canvas bottom aligns
-                with the Companion bottom. Eliminates the dead zones above the
-                Companion and below it that came from a flex-col main with the
-                ModeSwitcher in its own row. */}
-            <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-4">
-              <ContextHeader
-                projectName={project.name}
-                onOpenProjectSwitcher={() => {
-                  loadRecentProjects();
-                  setShowProjectSwitcher(true);
-                }}
-                workspaceName={activeWorkspace.name}
-                branch={activeWorkspace.branch}
-                gitStatus={gitStatus}
-              />
+        {/* LEFT COLUMN — always mounted so the canvas (and the TerminalPanes
+            inside the Run mode panel) survive any moment when there's no
+            active workspace, e.g. just after creating a fresh project that
+            has zero workspaces yet. Previously a top-level
+            {activeWorkspace ? <shell> : <EmptyState>} conditional was
+            unmounting every running PTY whenever the user crossed that
+            boundary. */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-4">
+          {activeWorkspace && (
+            <ContextHeader
+              projectName={project.name}
+              onOpenProjectSwitcher={() => {
+                loadRecentProjects();
+                setShowProjectSwitcher(true);
+              }}
+              workspaceName={activeWorkspace.name}
+              branch={activeWorkspace.branch}
+              gitStatus={gitStatus}
+            />
+          )}
 
-              <div className="relative min-w-0 flex-1 overflow-hidden">
-                {/* Mode panels are always mounted so TerminalPanes, the
-                    chat editor, and PTYs survive across overlays like the
-                    workspace creator. The creator floats on top via z-index
-                    when showCreator is true. Unmounting these to swap views
-                    was killing PTYs and wiping editor tabs every time the
-                    user opened any workspace dialog. */}
-                <>
-                    <div
-                      className="absolute inset-0 transition-opacity duration-200 ease-out"
-                      style={{
-                        opacity: activeMode === "talk" ? 1 : 0,
-                        pointerEvents: activeMode === "talk" ? "auto" : "none",
-                        visibility: activeMode === "talk" ? "visible" : "hidden",
-                      }}
-                    >
-                      <ChatView
-                        workspaceId={activeChatId!}
-                        workspacePath={activeWorkspace.worktreePath || project.path}
-                        onOpenSettings={() => setSettingsTab("general")}
-                      />
-                    </div>
+          <div className="relative min-w-0 flex-1 overflow-hidden">
+            {/* Talk panel — chat for the active workspace. */}
+            <div
+              className="absolute inset-0 transition-opacity duration-200 ease-out"
+              style={{
+                opacity: activeWorkspace && activeMode === "talk" ? 1 : 0,
+                pointerEvents:
+                  activeWorkspace && activeMode === "talk" ? "auto" : "none",
+                visibility:
+                  activeWorkspace && activeMode === "talk" ? "visible" : "hidden",
+              }}
+            >
+              {activeWorkspace && (
+                <ChatView
+                  workspaceId={activeChatId!}
+                  workspacePath={activeWorkspace.worktreePath || project.path}
+                  onOpenSettings={() => setSettingsTab("general")}
+                />
+              )}
+            </div>
 
-                    <div
-                      className="absolute inset-0 transition-opacity duration-200 ease-out"
-                      style={{
-                        opacity: activeMode === "run" ? 1 : 0,
-                        pointerEvents: activeMode === "run" ? "auto" : "none",
-                        visibility: activeMode === "run" ? "visible" : "hidden",
-                      }}
-                    >
-                      {/* Mount-once panes — one per (workspace, terminal) pair
-                          across the entire store. Visibility is toggled via
-                          display:block/none so xterm never unmounts and PTYs
-                          stay alive across workspace AND mode switches. */}
-                      <div className="relative h-full w-full">
-                        {allTerminalRefs.map((t) => {
-                          const ws = workspaces.find((w) => w.id === t.workspaceId);
-                          const wsPath = ws?.worktreePath || project.path;
-                          return (
-                            <TerminalPane
-                              key={t.id}
-                              terminalId={t.id}
-                              workspacePath={wsPath}
-                              label={t.label}
-                              visible={
-                                activeMode === "run" &&
-                                t.workspaceId === activeWorkspaceId &&
-                                t.id === activeTerminalId
-                              }
-                              layoutVersion={layoutVersion}
-                              onSpawn={() => markRunning(t.workspaceId, t.id, true)}
-                              onExit={() => markRunning(t.workspaceId, t.id, false)}
-                            />
-                          );
-                        })}
-                        {terminals.length === 0 && (
-                          <RunEmptyState
-                            onStart={() => {
-                              createTerminal(activeWorkspaceId!, "Main").catch(console.error);
-                            }}
-                          />
-                        )}
-                      </div>
-                    </div>
-
-                    <div
-                      className="absolute inset-0 transition-opacity duration-200 ease-out"
-                      style={{
-                        opacity: activeMode === "review" ? 1 : 0,
-                        pointerEvents: activeMode === "review" ? "auto" : "none",
-                        visibility: activeMode === "review" ? "visible" : "hidden",
-                      }}
-                    >
-                      <div className="flex h-full min-h-0">
-                        {/* Left: Changes panel — only when there are unstaged changes.
-                            Otherwise we save the real estate for the editor + tree
-                            so the user can still browse and edit files. */}
-                        {(gitStatus?.changedFiles.length ?? 0) > 0 && (
-                          <div className="w-[320px] shrink-0 border-r border-octo-hairline">
-                            <ChangesPanel
-                              projectPath={activeWorkspace.worktreePath || project.path}
-                              diff={gitDiff}
-                            />
-                          </div>
-                        )}
-                        {/* Middle: Editor canvas — always available so clicking a
-                            file in the right-side tree opens it, even in clean
-                            repos. */}
-                        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                          <EditorTabs workspaceId={activeWorkspaceId!} />
-                          <EditorPane
-                            workspaceId={activeWorkspaceId!}
-                            workspacePath={activeWorkspace.worktreePath || project.path}
-                            diffText={gitDiff}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                </>
-
-                {/* Workspace creator floats above the mode panels so the
-                    underlying PTYs and editor state stay mounted. */}
-                {showCreator && (
-                  <div className="absolute inset-0 z-50 bg-octo-bg">
-                    <WorkspaceCreator
-                      projectId={project.id}
-                      projectPath={project.path}
-                      onCreated={() => setShowCreator(false)}
-                      onCancel={() => setShowCreator(false)}
+            {/* Run panel — TerminalPanes for ALL (workspace, terminal) pairs
+                in the store are mounted here unconditionally. Individual
+                panes hide via display:none when not the active one, but the
+                container itself is never gated by activeWorkspace, so PTYs
+                survive project switches and new-project creation. */}
+            <div
+              className="absolute inset-0 transition-opacity duration-200 ease-out"
+              style={{
+                opacity: activeMode === "run" ? 1 : 0,
+                pointerEvents: activeMode === "run" ? "auto" : "none",
+                visibility: activeMode === "run" ? "visible" : "hidden",
+              }}
+            >
+              <div className="relative h-full w-full">
+                {allTerminalRefs.map((t) => {
+                  const ws = workspaces.find((w) => w.id === t.workspaceId);
+                  const wsPath = ws?.worktreePath || project.path;
+                  return (
+                    <TerminalPane
+                      key={t.id}
+                      terminalId={t.id}
+                      workspacePath={wsPath}
+                      label={t.label}
+                      visible={
+                        activeMode === "run" &&
+                        !!activeWorkspaceId &&
+                        t.workspaceId === activeWorkspaceId &&
+                        t.id === activeTerminalId
+                      }
+                      layoutVersion={layoutVersion}
+                      onSpawn={() => markRunning(t.workspaceId, t.id, true)}
+                      onExit={() => markRunning(t.workspaceId, t.id, false)}
                     />
-                  </div>
+                  );
+                })}
+                {activeWorkspace && terminals.length === 0 && (
+                  <RunEmptyState
+                    onStart={() => {
+                      createTerminal(activeWorkspaceId!, "Main").catch(console.error);
+                    }}
+                  />
                 )}
               </div>
-
             </div>
 
-            {/* RIGHT COLUMN — ModeSwitcher pinned at the top, Companion fills
-                the rest. Same vertical extents as the left column so top and
-                bottom edges align cleanly. */}
-            <div className="flex w-[312px] shrink-0 flex-col gap-3 p-4 pl-0">
-              <ModeSwitcher mode={activeMode} onChange={setMode} />
-              <Companion
-                mode={activeMode}
-                workspaceId={activeWorkspaceId}
-                contextProps={companionContextProps}
-                historyProps={companionHistoryProps}
-                fileTree={fileTreeProps}
-              />
+            {/* Review panel — only meaningful with an active workspace. */}
+            <div
+              className="absolute inset-0 transition-opacity duration-200 ease-out"
+              style={{
+                opacity: activeWorkspace && activeMode === "review" ? 1 : 0,
+                pointerEvents:
+                  activeWorkspace && activeMode === "review" ? "auto" : "none",
+                visibility:
+                  activeWorkspace && activeMode === "review" ? "visible" : "hidden",
+              }}
+            >
+              {activeWorkspace && (
+                <div className="flex h-full min-h-0">
+                  {(gitStatus?.changedFiles.length ?? 0) > 0 && (
+                    <div className="w-[320px] shrink-0 border-r border-octo-hairline">
+                      <ChangesPanel
+                        projectPath={activeWorkspace.worktreePath || project.path}
+                        diff={gitDiff}
+                      />
+                    </div>
+                  )}
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                    <EditorTabs workspaceId={activeWorkspaceId!} />
+                    <EditorPane
+                      workspaceId={activeWorkspaceId!}
+                      workspacePath={activeWorkspace.worktreePath || project.path}
+                      diffText={gitDiff}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
-          </>
-        ) : showInlineCreator ? (
-          <WorkspaceCreator
-            projectId={project.id}
-            projectPath={project.path}
-            onCreated={() => setShowInlineCreator(false)}
-            onCancel={() => setShowInlineCreator(false)}
+
+            {/* Workspace creator overlay (from the rail "+" button). */}
+            {showCreator && (
+              <div className="absolute inset-0 z-50 bg-octo-bg">
+                <WorkspaceCreator
+                  projectId={project.id}
+                  projectPath={project.path}
+                  onCreated={() => setShowCreator(false)}
+                  onCancel={() => setShowCreator(false)}
+                />
+              </div>
+            )}
+
+            {/* Empty-project layer — overlays the canvas when there is no
+                active workspace. The shell underneath stays mounted so any
+                running terminals from other projects keep their PTYs and
+                scrollback intact. */}
+            {!activeWorkspace && (
+              <div className="absolute inset-0 z-40 bg-octo-bg">
+                {showInlineCreator ? (
+                  <WorkspaceCreator
+                    projectId={project.id}
+                    projectPath={project.path}
+                    onCreated={() => setShowInlineCreator(false)}
+                    onCancel={() => setShowInlineCreator(false)}
+                  />
+                ) : (
+                  <EmptyProjectState
+                    projectName={project.name}
+                    onCreateWorkspace={() => setShowInlineCreator(true)}
+                    onSwitchProject={() => {
+                      loadRecentProjects();
+                      setShowProjectSwitcher(true);
+                    }}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* RIGHT COLUMN — ModeSwitcher + Companion always mounted. When
+            there's no active workspace the panel just shows empty/default
+            data; the structure is preserved. */}
+        <div className="flex w-[312px] shrink-0 flex-col gap-3 p-4 pl-0">
+          <ModeSwitcher mode={activeMode} onChange={setMode} />
+          <Companion
+            mode={activeMode}
+            workspaceId={activeWorkspaceId}
+            contextProps={companionContextProps}
+            historyProps={companionHistoryProps}
+            fileTree={fileTreeProps}
           />
-        ) : (
-          <EmptyProjectState
-            projectName={project.name}
-            onCreateWorkspace={() => setShowInlineCreator(true)}
-            onSwitchProject={() => {
-              loadRecentProjects();
-              setShowProjectSwitcher(true);
-            }}
-          />
-        )}
+        </div>
       </main>
 
       {customizingWorkspace && (
