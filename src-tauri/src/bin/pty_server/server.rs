@@ -1,0 +1,537 @@
+//! Unix socket accept loop and request dispatcher.
+
+use crate::protocol::{
+    AttachParams, DetachParams, KillParams, Request, ResizeParams, Response, SpawnParams,
+    TerminalInfo, WriteParams,
+};
+use crate::session::{ClientSender, PtyHandles, Session, TerminalId};
+use crate::storage::read_pty_log;
+use anyhow::Result;
+use base64::Engine as _;
+use chrono::Utc;
+use parking_lot::Mutex;
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
+use tracing::{debug, info, warn};
+
+// ---------------------------------------------------------------------------
+// Shared daemon state
+// ---------------------------------------------------------------------------
+
+pub struct ServerState {
+    pub sessions: HashMap<TerminalId, Session>,
+    pub handles: HashMap<TerminalId, Arc<Mutex<PtyHandles>>>,
+    pub last_active: Instant,
+    /// Signals the main accept loop to stop.
+    pub shutdown: bool,
+}
+
+impl ServerState {
+    pub fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            handles: HashMap::new(),
+            last_active: Instant::now(),
+            shutdown: false,
+        }
+    }
+
+    fn touch(&mut self) {
+        self.last_active = Instant::now();
+    }
+}
+
+pub type SharedState = Arc<Mutex<ServerState>>;
+
+// ---------------------------------------------------------------------------
+// Accept loop
+// ---------------------------------------------------------------------------
+
+/// Runs the Unix socket accept loop.  Each incoming connection is handled
+/// synchronously on a dedicated thread (no async here — the PTY layer is
+/// already synchronous).
+pub fn run_accept_loop(
+    listener: UnixListener,
+    state: SharedState,
+    auto_exit_duration: Duration,
+) -> Result<()> {
+    listener.set_nonblocking(false)?;
+
+    // Idle-check thread: exits the process when conditions are met.
+    let idle_state = Arc::clone(&state);
+    std::thread::Builder::new()
+        .name("idle-checker".into())
+        .spawn(move || {
+            let check_interval = Duration::from_secs(60);
+            loop {
+                std::thread::sleep(check_interval);
+                let st = idle_state.lock();
+                let no_ptys = st.sessions.values().all(|s| !s.running);
+                let no_clients = !st.sessions.values().any(|s| s.has_client());
+                let idle_since = st.last_active.elapsed();
+                if no_ptys && no_clients && idle_since >= auto_exit_duration {
+                    info!("auto-exit: no live PTYs and no clients for {:?}", idle_since);
+                    std::process::exit(0);
+                }
+                if st.shutdown {
+                    break;
+                }
+            }
+        })?;
+
+    info!("accepting connections");
+    for stream in listener.incoming() {
+        match stream {
+            Ok(s) => {
+                let st = Arc::clone(&state);
+                {
+                    let guard = st.lock();
+                    if guard.shutdown {
+                        break;
+                    }
+                }
+                std::thread::Builder::new()
+                    .name("client-conn".into())
+                    .spawn(move || {
+                        if let Err(e) = handle_connection(s, st) {
+                            debug!("connection ended: {e}");
+                        }
+                    })?;
+            }
+            Err(e) => {
+                // Non-fatal — log and continue.
+                warn!("accept error: {e}");
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Per-connection handler
+// ---------------------------------------------------------------------------
+
+fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
+    let peer_write = stream.try_clone()?;
+    let reader = BufReader::new(stream);
+    let writer = Arc::new(Mutex::new(peer_write));
+
+    // Per-client write channel — used by streaming push thread.
+    let (tx, mut rx): (ClientSender, _) = mpsc::unbounded_channel();
+    {
+        // Background thread: drain the channel and write to the socket.
+        let writer2 = Arc::clone(&writer);
+        std::thread::Builder::new()
+            .name("client-writer".into())
+            .spawn(move || {
+                // We can't use async here cleanly; use a blocking receive loop.
+                loop {
+                    match rx.blocking_recv() {
+                        Some(line) => {
+                            let mut w = writer2.lock();
+                            if w.write_all(&line).is_err() {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+            })?;
+    }
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                debug!("read error from client: {e}");
+                break;
+            }
+        };
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+
+        let req: Request = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(e) => {
+                let resp = Response::Error {
+                    message: format!("parse error: {e}"),
+                };
+                let _ = tx.send(resp.to_line());
+                continue;
+            }
+        };
+
+        let is_shutdown = matches!(req, Request::Shutdown);
+        let resp = dispatch(req, &state, tx.clone());
+        // SentDirectly means the handler already queued its own response.
+        if !matches!(resp, Response::SentDirectly) {
+            let _ = tx.send(resp.to_line());
+        }
+
+        if is_shutdown {
+            break;
+        }
+    }
+
+    // Clean up any sessions this client was attached to.
+    {
+        let mut st = state.lock();
+        for sess in st.sessions.values_mut() {
+            // The ClientSender clone we gave sessions is the same `tx`;
+            // once the connection loop exits, `tx` is dropped (all clones
+            // including ones given to sessions via attach will be invalid).
+            // Force-detach any session that references a now-dead sender.
+            if sess.has_client() {
+                sess.detach();
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Request dispatch
+// ---------------------------------------------------------------------------
+
+fn dispatch(req: Request, state: &SharedState, tx: ClientSender) -> Response {
+    match req {
+        Request::ListTerminals => cmd_list_terminals(state),
+        Request::Spawn(p) => cmd_spawn(p, state, tx),
+        Request::Attach(p) => cmd_attach(p, state, tx),
+        Request::Detach(p) => cmd_detach(p, state),
+        Request::Write(p) => cmd_write(p, state),
+        Request::Resize(p) => cmd_resize(p, state),
+        Request::Kill(p) => cmd_kill(p, state),
+        Request::Shutdown => cmd_shutdown(state),
+    }
+}
+
+fn cmd_list_terminals(state: &SharedState) -> Response {
+    let st = state.lock();
+    let terminals = st
+        .sessions
+        .values()
+        .map(|s| TerminalInfo {
+            id: s.id.clone(),
+            label: s.label.clone(),
+            running: s.running,
+            cwd: s.cwd.clone(),
+            started_at: s.started_at,
+        })
+        .collect();
+    Response::Terminals { terminals }
+}
+
+fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Response {
+    let SpawnParams {
+        id,
+        cwd,
+        env,
+        shell,
+        rows,
+        cols,
+    } = params;
+
+    // Refuse duplicate id.
+    {
+        let st = state.lock();
+        if st.sessions.contains_key(&id) {
+            return Response::Error {
+                message: format!("terminal {id} already exists"),
+            };
+        }
+    }
+
+    let pty_system = native_pty_system();
+    let pair = match pty_system.openpty(PtySize {
+        rows: rows.max(1),
+        cols: cols.max(1),
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(p) => p,
+        Err(e) => {
+            return Response::Error {
+                message: format!("openpty: {e}"),
+            }
+        }
+    };
+
+    let shell = shell
+        .or_else(|| std::env::var("SHELL").ok())
+        .unwrap_or_else(|| "/bin/zsh".to_string());
+
+    let mut cmd = CommandBuilder::new(&shell);
+    cmd.arg("-l");
+    cmd.cwd(&cwd);
+    for key in [
+        "HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "SHELL", "TMPDIR",
+        "SSH_AUTH_SOCK",
+    ] {
+        if let Ok(v) = std::env::var(key) {
+            cmd.env(key, v);
+        }
+    }
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    for (k, v) in &env {
+        cmd.env(k, v);
+    }
+
+    let child = match pair.slave.spawn_command(cmd) {
+        Ok(c) => c,
+        Err(e) => {
+            return Response::Error {
+                message: format!("spawn: {e}"),
+            }
+        }
+    };
+    drop(pair.slave);
+
+    let pid = child.process_id().unwrap_or(0);
+
+    let mut reader = match pair.master.try_clone_reader() {
+        Ok(r) => r,
+        Err(e) => {
+            return Response::Error {
+                message: format!("clone_reader: {e}"),
+            }
+        }
+    };
+    let writer = match pair.master.take_writer() {
+        Ok(w) => w,
+        Err(e) => {
+            return Response::Error {
+                message: format!("take_writer: {e}"),
+            }
+        }
+    };
+
+    let handles = Arc::new(Mutex::new(PtyHandles {
+        master: pair.master,
+        writer,
+        child,
+    }));
+
+    let started_at = Utc::now().timestamp();
+    let mut sess = Session::new(id.clone(), id.clone(), cwd, started_at);
+    sess.pid = Some(pid);
+
+    {
+        let mut st = state.lock();
+        st.sessions.insert(id.clone(), sess);
+        st.handles.insert(id.clone(), Arc::clone(&handles));
+        st.touch();
+    }
+
+    // Reader thread: blocks on PTY reads, pushes output to session.
+    let reader_id = id.clone();
+    let reader_state = Arc::clone(state);
+    std::thread::Builder::new()
+        .name(format!("pty-reader-{id}"))
+        .spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let mut st = reader_state.lock();
+                        if let Some(sess) = st.sessions.get_mut(&reader_id) {
+                            sess.push_output(&buf[..n]);
+                        }
+                        st.touch();
+                    }
+                    Err(e) => {
+                        debug!(id = %reader_id, error = %e, "pty read error");
+                        break;
+                    }
+                }
+            }
+            // PTY EOF — determine exit code.
+            let code = {
+                let mut st = reader_state.lock();
+                let code = if let Some(h) = st.handles.get(&reader_id) {
+                    let mut hg = h.lock();
+                    hg.child.wait().ok().map(|s| s.exit_code() as i32)
+                } else {
+                    None
+                };
+                if let Some(sess) = st.sessions.get_mut(&reader_id) {
+                    sess.mark_exit(code);
+                }
+                code
+            };
+            info!(id = %reader_id, code = ?code, "pty exited");
+        })
+        .ok();
+
+    info!(id = %id, pid = pid, "spawned PTY");
+    Response::Spawned { id, pid }
+}
+
+fn cmd_attach(params: AttachParams, state: &SharedState, tx: ClientSender) -> Response {
+    let AttachParams { id, since_seq } = params;
+    let since = since_seq.unwrap_or(0);
+
+    // Clone tx for replaying backlog; the original is given to the session.
+    let replay_tx = tx.clone();
+
+    let (backlog, use_disk) = {
+        let mut st = state.lock();
+        st.touch();
+        match st.sessions.get_mut(&id) {
+            None => {
+                return Response::Error {
+                    message: format!("terminal {id} not found"),
+                }
+            }
+            Some(sess) => {
+                let disk_needed = since < sess.ring_oldest_seq();
+                let backlog = sess.attach(tx, since);
+                (backlog, disk_needed)
+            }
+        }
+    };
+
+    // Send Ok{} FIRST so the client's send_recv call sees it before any events.
+    let _ = replay_tx.send(Response::Ok {}.to_line());
+
+    // Then send backlog (from disk or ring).
+    if use_disk {
+        match read_pty_log(&id) {
+            Ok(bytes) if !bytes.is_empty() => {
+                let ev = crate::protocol::Event::Data {
+                    id: id.clone(),
+                    seq: 0,
+                    bytes: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                };
+                let _ = replay_tx.send(ev.to_line());
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!(id = %id, error = %e, "failed to read disk log for replay");
+            }
+        }
+    } else {
+        for (seq, data) in backlog {
+            let ev = crate::protocol::Event::Data {
+                id: id.clone(),
+                seq,
+                bytes: base64::engine::general_purpose::STANDARD.encode(&data),
+            };
+            let _ = replay_tx.send(ev.to_line());
+        }
+    }
+
+    // Return SentDirectly so handle_connection doesn't send a duplicate Ok{}.
+    Response::SentDirectly
+}
+
+fn cmd_detach(params: DetachParams, state: &SharedState) -> Response {
+    let mut st = state.lock();
+    st.touch();
+    if let Some(sess) = st.sessions.get_mut(&params.id) {
+        sess.detach();
+        Response::Ok {}
+    } else {
+        Response::Error {
+            message: format!("terminal {} not found", params.id),
+        }
+    }
+}
+
+fn cmd_write(params: WriteParams, state: &SharedState) -> Response {
+    let data = match base64::engine::general_purpose::STANDARD.decode(&params.data) {
+        Ok(d) => d,
+        Err(e) => {
+            return Response::Error {
+                message: format!("base64 decode: {e}"),
+            }
+        }
+    };
+
+    let st = state.lock();
+    match st.handles.get(&params.id) {
+        None => Response::Error {
+            message: format!("terminal {} not found", params.id),
+        },
+        Some(h) => {
+            let mut hg = h.lock();
+            if let Err(e) = hg.writer.write_all(&data) {
+                Response::Error {
+                    message: format!("write: {e}"),
+                }
+            } else {
+                let _ = hg.writer.flush();
+                Response::Ok {}
+            }
+        }
+    }
+}
+
+fn cmd_resize(params: ResizeParams, state: &SharedState) -> Response {
+    let st = state.lock();
+    match st.handles.get(&params.id) {
+        None => Response::Error {
+            message: format!("terminal {} not found", params.id),
+        },
+        Some(h) => match h.lock().resize(params.rows, params.cols) {
+            Ok(_) => Response::Ok {},
+            Err(e) => Response::Error {
+                message: format!("resize: {e}"),
+            },
+        },
+    }
+}
+
+fn cmd_kill(params: KillParams, state: &SharedState) -> Response {
+    let sigkill = params.signal.as_deref() == Some("KILL");
+
+    let mut st = state.lock();
+    match st.handles.get(&params.id) {
+        None => Response::Error {
+            message: format!("terminal {} not found", params.id),
+        },
+        Some(h) => {
+            let hg = h.lock();
+            let pid = hg.child.process_id();
+            drop(hg); // release lock before sending signal
+            if let Some(pid) = pid {
+                #[cfg(unix)]
+                {
+                    let sig = if sigkill {
+                        libc::SIGKILL
+                    } else {
+                        libc::SIGTERM
+                    };
+                    unsafe {
+                        libc::kill(pid as i32, sig);
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let mut hg2 = st.handles.get(&params.id).unwrap().lock();
+                    let _ = hg2.child.kill();
+                }
+            }
+            if let Some(sess) = st.sessions.get_mut(&params.id) {
+                sess.mark_exit(None);
+            }
+            Response::Ok {}
+        }
+    }
+}
+
+fn cmd_shutdown(state: &SharedState) -> Response {
+    let mut st = state.lock();
+    st.shutdown = true;
+    info!("shutdown requested");
+    Response::Ok {}
+}
