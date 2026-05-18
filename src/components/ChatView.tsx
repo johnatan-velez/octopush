@@ -41,6 +41,8 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
         } catch {
           items.push({ kind: "message", message: msg });
         }
+      } else if (role === "error") {
+        items.push({ kind: "error", message: msg });
       } else {
         items.push({ kind: "message", message: msg });
       }
@@ -48,17 +50,26 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
     return items;
   }, [messages]);
 
-  const [input, setInput] = useState("");
-  const [history, setHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState<number>(-1); // -1 = not navigating
+  const [input, setInputState] = useState("");
+  // Keep a ref in sync with input so event handlers always read the latest
+  // value without depending on React's render cycle (avoids stale closures).
+  const inputRef = useRef("");
+  function setInput(val: string) {
+    inputRef.current = val;
+    setInputState(val);
+  }
+  // Prompt history — use refs so handleKeyDown always sees current values
+  // without needing to be recreated on every render.
+  const historyRef = useRef<string[]>([]);
+  const historyIdxRef = useRef<number>(-1); // -1 = not navigating
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     loadHistory(workspaceId);
     // Reset per-workspace prompt history when switching workspaces.
-    setHistory([]);
-    setHistoryIndex(-1);
+    historyRef.current = [];
+    historyIdxRef.current = -1;
   }, [workspaceId, loadHistory]);
 
   useEffect(() => {
@@ -72,7 +83,7 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
     const val = e.target.value;
     setInput(val);
     // Any manual edit exits history navigation.
-    setHistoryIndex(-1);
+    historyIdxRef.current = -1;
     const ta = e.target;
     ta.style.height = "auto";
     const lineHeight = 20;
@@ -81,52 +92,50 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
   }
 
   const handleSend = useCallback(() => {
-    const trimmed = input.trim();
+    const trimmed = inputRef.current.trim();
     if (!trimmed || streaming) return;
     setInput("");
-    setHistoryIndex(-1);
+    historyIdxRef.current = -1;
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
     // Prepend to history, deduplicate consecutive duplicates.
-    setHistory((prev) => {
-      if (prev[0] === trimmed) return prev;
-      return [trimmed, ...prev];
-    });
+    if (historyRef.current[0] !== trimmed) {
+      historyRef.current = [trimmed, ...historyRef.current];
+    }
     send(workspaceId, workspacePath, trimmed);
-  }, [input, streaming, send, workspaceId, workspacePath]);
+  }, [streaming, send, workspaceId, workspacePath]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    const hist = historyRef.current;
+    const idx = historyIdxRef.current;
+
     // ── Arrow-key prompt history ──────────────────────────────────
     if (e.key === "ArrowUp" && !e.shiftKey) {
       // Navigate back: only when input is empty OR already navigating.
-      if (input === "" || historyIndex >= 0) {
+      if (inputRef.current === "" || idx >= 0) {
         e.preventDefault();
-        setHistoryIndex((prev) => {
-          const next = Math.min(history.length - 1, prev + 1);
-          if (next >= 0) setInput(history[next] ?? "");
-          return next;
-        });
+        const next = Math.min(hist.length - 1, idx + 1);
+        historyIdxRef.current = next;
+        if (next >= 0) setInput(hist[next] ?? "");
         return;
       }
     }
-    if (e.key === "ArrowDown" && !e.shiftKey && historyIndex >= 0) {
+    if (e.key === "ArrowDown" && !e.shiftKey && idx >= 0) {
       e.preventDefault();
-      setHistoryIndex((prev) => {
-        const next = prev - 1;
-        if (next < 0) {
-          setInput("");
-          return -1;
-        }
-        setInput(history[next] ?? "");
-        return next;
-      });
+      const next = idx - 1;
+      historyIdxRef.current = next;
+      if (next < 0) {
+        setInput("");
+      } else {
+        setInput(hist[next] ?? "");
+      }
       return;
     }
-    if (e.key === "Escape" && historyIndex >= 0) {
+    if (e.key === "Escape" && idx >= 0) {
       e.preventDefault();
       setInput("");
-      setHistoryIndex(-1);
+      historyIdxRef.current = -1;
       return;
     }
     // ── Regular send ─────────────────────────────────────────────
@@ -148,17 +157,33 @@ export function ChatView({ workspaceId, workspacePath, onOpenSettings }: Props) 
           <EmptyState />
         ) : (
           <>
-            {timeline.map((item) =>
-              item.kind === "tool" ? (
-                <ToolCallCard
-                  key={`tool-${item.id}`}
-                  tool={item.tool}
-                  workspacePath={workspacePath}
-                />
-              ) : (
-                <ChatMessage key={item.message.id} message={item.message} />
-              ),
-            )}
+            {timeline.map((item) => {
+              if (item.kind === "tool") {
+                return (
+                  <ToolCallCard
+                    key={`tool-${item.id}`}
+                    tool={item.tool}
+                    workspacePath={workspacePath}
+                  />
+                );
+              }
+              if (item.kind === "error") {
+                return (
+                  <ErrorBlock
+                    key={`error-${item.message.id}`}
+                    error={item.message.content}
+                    onConfigureApiKey={
+                      onOpenSettings
+                        ? () => {
+                            onOpenSettings();
+                          }
+                        : null
+                    }
+                  />
+                );
+              }
+              return <ChatMessage key={item.message.id} message={item.message} />;
+            })}
 
             {streaming && streamBuffer && (
               <ChatMessage

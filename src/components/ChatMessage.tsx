@@ -4,7 +4,7 @@ import type { Components } from "react-markdown";
 import { parseKeyPhrase } from "../lib/parseKeyPhrase";
 
 interface MessageProps {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool" | "error" | string;
   content: string;
   model?: string | null;
   inputTokens?: number | null;

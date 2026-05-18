@@ -193,6 +193,38 @@ mod workspace_tests {
         assert_eq!(workspaces[0].glyph, None);
         assert_eq!(workspaces[0].tint, None);
     }
+
+    #[test]
+    fn insert_and_list_error_message() {
+        let db = test_db();
+        db.insert_project("proj-err", "Test Project", "/tmp/proj-err")
+            .unwrap();
+        db.insert_workspace("ws-err", "proj-err", "ws", "", "main", None, "")
+            .unwrap();
+
+        db.insert_chat_message("ws-err", "user", "hello", None, None, None, None)
+            .unwrap();
+        db.insert_chat_message(
+            "ws-err",
+            "error",
+            "401 unauthorized — API key not configured",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let messages = db.list_chat_messages("ws-err").unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(
+            messages.iter().any(|m| m.role == "error"),
+            "expected a row with role=error, got: {:?}",
+            messages.iter().map(|m| &m.role).collect::<Vec<_>>()
+        );
+        let err_msg = messages.iter().find(|m| m.role == "error").unwrap();
+        assert!(err_msg.content.contains("401 unauthorized"));
+    }
 }
 
 #[cfg(test)]

@@ -81,7 +81,7 @@ describe("ChatView — renders tool cards in the DOM", () => {
           {
             id: 2,
             workspaceId: "ws-1",
-            role: "tool" as "user" | "assistant",
+            role: "tool",
             content: JSON.stringify({
               toolName: "write_file",
               toolInput: { path: "index.html" },
@@ -232,21 +232,21 @@ describe("ChatView — renders tool cards in the DOM", () => {
           },
           {
             id: 2, workspaceId: "ws-1",
-            role: "tool" as "user" | "assistant",
+            role: "tool",
             content: JSON.stringify({ toolName: "list_files", toolInput: { path: "." }, result: "" }),
             model: null, inputTokens: null, outputTokens: null, costUsd: null,
             createdAt: "2026-05-17T10:00:01Z",
           },
           {
             id: 3, workspaceId: "ws-1",
-            role: "tool" as "user" | "assistant",
+            role: "tool",
             content: JSON.stringify({ toolName: "write_file", toolInput: { path: "a.ts" }, result: "" }),
             model: null, inputTokens: null, outputTokens: null, costUsd: null,
             createdAt: "2026-05-17T10:00:02Z",
           },
           {
             id: 4, workspaceId: "ws-1",
-            role: "tool" as "user" | "assistant",
+            role: "tool",
             content: JSON.stringify({ toolName: "run_command", toolInput: { command: "npm test" }, result: "" }),
             model: null, inputTokens: null, outputTokens: null, costUsd: null,
             createdAt: "2026-05-17T10:00:03Z",
@@ -268,6 +268,52 @@ describe("ChatView — renders tool cards in the DOM", () => {
     expect(screen.getByText("LIST")).toBeInTheDocument();
     expect(screen.getByText("WRITE")).toBeInTheDocument();
     expect(screen.getByText("RUN")).toBeInTheDocument();
+  });
+
+  it("renders persisted error rows as ErrorBlock in the timeline", async () => {
+    // Simulates a workspace loaded after relaunch where a prior turn failed.
+    // The DB returned a role="error" row alongside the user message.
+    const historicRows = [
+      {
+        id: 1,
+        workspaceId: "ws-1",
+        role: "user",
+        content: "Tell me a secret.",
+        model: null,
+        inputTokens: null,
+        outputTokens: null,
+        costUsd: null,
+        createdAt: "2026-05-17T10:00:00Z",
+      },
+      {
+        id: 2,
+        workspaceId: "ws-1",
+        role: "error",
+        content: "Anthropic API key not configured. Open Settings · Models & Providers.",
+        model: null,
+        inputTokens: null,
+        outputTokens: null,
+        costUsd: null,
+        createdAt: "2026-05-17T10:00:01Z",
+      },
+    ];
+    listChatMessagesMock.mockResolvedValueOnce(historicRows);
+
+    render(<ChatView workspaceId="ws-1" workspacePath="/tmp" onOpenSettings={() => {}} />);
+    // Wait for loadHistory to resolve.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The error content should appear in the DOM via ErrorBlock.
+    expect(screen.getByText(/API key not configured/i)).toBeInTheDocument();
+    // The "Something went wrong." heading from ErrorBlock.
+    expect(screen.getByText(/Something went wrong/i)).toBeInTheDocument();
+    // Since content includes "API key" and onOpenSettings is provided, the button appears.
+    expect(screen.getByText(/Configure API key/i)).toBeInTheDocument();
+    // User message still renders.
+    expect(screen.getByText("Tell me a secret.")).toBeInTheDocument();
   });
 
   it("survives the done event: tool cards remain after streaming finishes", async () => {
@@ -341,6 +387,27 @@ describe("ChatView — arrow-key prompt history", () => {
     return screen.getByPlaceholderText(/Ask Octopus anything/i) as HTMLTextAreaElement;
   }
 
+  // Helper: type text, press Enter, then emit the `done` stream event so
+  // the chatStore resets streaming=false (otherwise subsequent sends are blocked).
+  async function sendMessage(ta: HTMLTextAreaElement, text: string) {
+    await act(async () => {
+      fireEvent.change(ta, { target: { value: text } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      // Let the `send` async fn run and set streaming=true.
+      await Promise.resolve();
+    });
+    // Reset streaming so the next send isn't blocked.
+    await act(async () => {
+      emit("chat://stream", {
+        workspaceId: "ws-1",
+        delta: "",
+        done: true,
+        inputTokens: null,
+        outputTokens: null,
+      });
+    });
+  }
+
   it("input clears after sending a message", async () => {
     render(<ChatView workspaceId="ws-1" workspacePath="/tmp" />);
     await act(async () => { await Promise.resolve(); });
@@ -349,7 +416,7 @@ describe("ChatView — arrow-key prompt history", () => {
     fireEvent.change(ta, { target: { value: "hello" } });
     expect(ta.value).toBe("hello");
 
-    fireEvent.keyDown(ta, { key: "Enter" });
+    await sendMessage(ta, "hello");
     expect(ta.value).toBe("");
   });
 
@@ -359,9 +426,7 @@ describe("ChatView — arrow-key prompt history", () => {
 
     const ta = getTextarea();
 
-    // Type and send "hello".
-    fireEvent.change(ta, { target: { value: "hello" } });
-    fireEvent.keyDown(ta, { key: "Enter" });
+    await sendMessage(ta, "hello");
     expect(ta.value).toBe("");
 
     // ArrowUp should recall "hello".
@@ -375,13 +440,8 @@ describe("ChatView — arrow-key prompt history", () => {
 
     const ta = getTextarea();
 
-    // Send "first".
-    fireEvent.change(ta, { target: { value: "first" } });
-    fireEvent.keyDown(ta, { key: "Enter" });
-
-    // Send "second".
-    fireEvent.change(ta, { target: { value: "second" } });
-    fireEvent.keyDown(ta, { key: "Enter" });
+    await sendMessage(ta, "first");
+    await sendMessage(ta, "second");
 
     // First ArrowUp → "second" (most recent).
     fireEvent.keyDown(ta, { key: "ArrowUp" });
@@ -398,11 +458,8 @@ describe("ChatView — arrow-key prompt history", () => {
 
     const ta = getTextarea();
 
-    // Send "alpha" then "beta".
-    fireEvent.change(ta, { target: { value: "alpha" } });
-    fireEvent.keyDown(ta, { key: "Enter" });
-    fireEvent.change(ta, { target: { value: "beta" } });
-    fireEvent.keyDown(ta, { key: "Enter" });
+    await sendMessage(ta, "alpha");
+    await sendMessage(ta, "beta");
 
     // Navigate back twice.
     fireEvent.keyDown(ta, { key: "ArrowUp" }); // → "beta"
@@ -422,8 +479,7 @@ describe("ChatView — arrow-key prompt history", () => {
 
     const ta = getTextarea();
 
-    fireEvent.change(ta, { target: { value: "escape-me" } });
-    fireEvent.keyDown(ta, { key: "Enter" });
+    await sendMessage(ta, "escape-me");
 
     fireEvent.keyDown(ta, { key: "ArrowUp" }); // → "escape-me"
     expect(ta.value).toBe("escape-me");
@@ -442,13 +498,10 @@ describe("ChatView — arrow-key prompt history", () => {
 
     const ta = getTextarea();
 
-    // Send "a", "b", "a" — "b" breaks the run so "a" should appear at 0 and 2.
-    fireEvent.change(ta, { target: { value: "a" } });
-    fireEvent.keyDown(ta, { key: "Enter" });
-    fireEvent.change(ta, { target: { value: "b" } });
-    fireEvent.keyDown(ta, { key: "Enter" });
-    fireEvent.change(ta, { target: { value: "a" } });
-    fireEvent.keyDown(ta, { key: "Enter" });
+    // Send "a", "b", "a" — "b" breaks the run so "a" appears at idx 0 and 2.
+    await sendMessage(ta, "a");
+    await sendMessage(ta, "b");
+    await sendMessage(ta, "a");
 
     // History is ["a", "b", "a"]. ArrowUp x3 should yield "a" → "b" → "a".
     fireEvent.keyDown(ta, { key: "ArrowUp" }); expect(ta.value).toBe("a");

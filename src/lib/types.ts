@@ -143,7 +143,7 @@ export interface Workspace {
 export interface ChatMessage {
   id: number;
   workspaceId: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool" | "error";
   content: string;
   model: string | null;
   inputTokens: number | null;

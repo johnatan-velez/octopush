@@ -10,10 +10,11 @@ export interface ToolExecution {
   result: string;
 }
 
-/** A display item in the conversation — either a regular message or a tool execution. */
+/** A display item in the conversation — either a regular message, tool execution, or persisted error. */
 export type ConversationItem =
   | { kind: "message"; message: ChatMessage }
-  | { kind: "tool"; tool: ToolExecution; id: number };
+  | { kind: "tool"; tool: ToolExecution; id: number }
+  | { kind: "error"; message: ChatMessage };
 
 export interface MessageAddedEvent {
   workspaceId: string;
@@ -81,7 +82,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       const newMessage: ChatMessage = {
         id: payload.id,
         workspaceId: payload.workspaceId,
-        role: payload.role as "user" | "assistant",
+        role: payload.role as "user" | "assistant" | "tool" | "error",
         content: payload.content,
         model: payload.model,
         inputTokens: payload.inputTokens,
@@ -151,6 +152,8 @@ export const useChatStore = create<ChatState>((set, get) => {
           } catch {
             items.push({ kind: "message", message: msg });
           }
+        } else if (role === "error") {
+          items.push({ kind: "error", message: msg });
         } else {
           items.push({ kind: "message", message: msg });
         }

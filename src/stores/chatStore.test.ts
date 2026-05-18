@@ -180,6 +180,38 @@ describe("chatStore — single workspace tool-card persistence", () => {
     expect(timeline[1].kind).toBe("tool");
     expect(timeline[2].kind).toBe("message");
   });
+
+  it("error message received via chat://message-added is stored in messagesByWs", () => {
+    emit("chat://message-added", makeMsg({ id: 1, role: "user", content: "hi" }));
+    emit("chat://message-added", makeMsg({
+      id: 2,
+      role: "error",
+      content: "401 unauthorized — API key not configured",
+    }));
+
+    const messages = useChatStore.getState().getMessages("ws-1");
+    expect(messages).toHaveLength(2);
+    const errMsg = messages.find((m) => (m.role as string) === "error");
+    expect(errMsg).toBeDefined();
+    expect(errMsg!.content).toContain("API key not configured");
+  });
+
+  it("getTimeline emits an error kind for role=error messages", () => {
+    emit("chat://message-added", makeMsg({ id: 1, role: "user", content: "go" }));
+    emit("chat://message-added", makeMsg({
+      id: 2,
+      role: "error",
+      content: "Network timeout",
+    }));
+
+    const timeline = useChatStore.getState().getTimeline("ws-1");
+    expect(timeline).toHaveLength(2);
+    expect(timeline[0].kind).toBe("message");
+    expect(timeline[1].kind).toBe("error");
+    if (timeline[1].kind === "error") {
+      expect(timeline[1].message.content).toBe("Network timeout");
+    }
+  });
 });
 
 describe("chatStore — workspace isolation", () => {

@@ -432,9 +432,25 @@ impl ChatEngine {
                 tools: tools.clone(),
             };
 
-            let response = provider
+            let response = match provider
                 .complete(&api_base, api_key.as_deref(), &llm_req, &self.client)
-                .await?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let error_text = format!("{e}");
+                    if let Err(persist_err) = self.insert_and_emit_message(
+                        &app,
+                        &request.workspace_id,
+                        "error",
+                        &error_text,
+                        None, None, None, None,
+                    ) {
+                        tracing::error!(error = %persist_err, "failed to persist error message");
+                    }
+                    return Err(e);
+                }
+            };
 
             total_input += response.input_tokens;
             total_output += response.output_tokens;
@@ -590,8 +606,20 @@ impl ChatEngine {
             );
         }
 
-        Err(AppError::Other(format!(
+        let loop_err = AppError::Other(format!(
             "Agentic loop exceeded max iterations ({MAX_TOOL_ITERATIONS})"
-        )))
+        ));
+        // Persist the error so it survives a relaunch.
+        let error_text = format!("{loop_err}");
+        if let Err(persist_err) = self.insert_and_emit_message(
+            &app,
+            &request.workspace_id,
+            "error",
+            &error_text,
+            None, None, None, None,
+        ) {
+            tracing::error!(error = %persist_err, "failed to persist error message");
+        }
+        Err(loop_err)
     }
 }
