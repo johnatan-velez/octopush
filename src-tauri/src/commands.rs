@@ -405,6 +405,9 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
     let db = state.db.lock();
     if let Some((id, name, p)) = db.get_project_by_path(&path)? {
         db.touch_project(&id)?;
+        // Heal projects opened by older Octopush versions that didn't auto-
+        // create a main workspace.
+        ensure_main_workspace(&db, &id, &p)?;
         Ok(ProjectInfo { id, name, path: p })
     } else {
         let id = uuid::Uuid::new_v4().to_string();
@@ -412,6 +415,7 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.clone());
         db.insert_project(&id, &name, &path)?;
+        ensure_main_workspace(&db, &id, &path)?;
         Ok(ProjectInfo { id, name, path })
     }
 }
@@ -422,15 +426,50 @@ pub async fn list_recent_projects(state: State<'_, AppState>) -> AppResult<Vec<P
     Ok(rows.into_iter().map(|(id, name, path, _)| ProjectInfo { id, name, path }).collect())
 }
 
+/// Auto-creates a workspace pointing at the project's default branch and root
+/// path, so every newly opened/created project starts with a usable "main"
+/// workspace instead of dropping the user into the empty-project state.
+///
+/// Idempotent: does nothing if the project already has at least one workspace.
+/// The workspace's worktree_path equals the project root — git doesn't allow
+/// the default branch to be checked out in two places, so the project root
+/// IS the main worktree. Other workspaces get their own paths under
+/// `.octopus-worktrees/`.
+fn ensure_main_workspace(
+    db: &crate::db::Db,
+    project_id: &str,
+    project_path: &str,
+) -> AppResult<()> {
+    let existing = db.list_workspaces(project_id)?;
+    if !existing.is_empty() {
+        return Ok(());
+    }
+    let branch = crate::git_ops::default_branch(std::path::Path::new(project_path))
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "main".into());
+    let id = uuid::Uuid::new_v4().to_string();
+    // name = branch name so the rail shows "main" / "master" / whatever the
+    // user's default branch is.
+    db.insert_workspace(&id, project_id, &branch, "", &branch, Some(project_path), "")?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn create_project(state: State<'_, AppState>, path: String, name: String) -> AppResult<ProjectInfo> {
     let path = expand_tilde(&path);
     let full_path = std::path::Path::new(&path).join(&name);
     std::fs::create_dir_all(&full_path)?;
     crate::git_ops::init_repo(&full_path)?;
+    // Commit a baseline so the default branch has a tree (otherwise the main
+    // workspace we create below would also be empty).
+    crate::git_ops::ensure_initial_commit(&full_path)?;
     let id = uuid::Uuid::new_v4().to_string();
-    state.db.lock().insert_project(&id, &name, &full_path.to_string_lossy())?;
-    Ok(ProjectInfo { id, name, path: full_path.to_string_lossy().to_string() })
+    let full_path_str = full_path.to_string_lossy().to_string();
+    let db = state.db.lock();
+    db.insert_project(&id, &name, &full_path_str)?;
+    ensure_main_workspace(&db, &id, &full_path_str)?;
+    Ok(ProjectInfo { id, name, path: full_path_str })
 }
 
 // ─── Workspace commands ───────────────────────────────────────────
@@ -497,16 +536,34 @@ pub async fn delete_workspace(
     worktree_path: Option<String>,
 ) -> AppResult<()> {
     let project_path = expand_tilde(&project_path);
-    // Remove worktree directory
-    if let Some(wt) = &worktree_path {
-        let wt_path = std::path::Path::new(wt);
-        if wt_path.exists() {
-            let _ = std::fs::remove_dir_all(wt_path);
+    let project_path_abs = std::fs::canonicalize(&project_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from(&project_path));
+
+    // The "main" workspace points at the project root itself. Deleting that
+    // would `rm -rf` the user's project — refuse to touch the disk or the
+    // branch, just remove the DB row. (The user can still recreate the main
+    // workspace via ensure_main_workspace on next open_project.)
+    let is_main_workspace = worktree_path
+        .as_deref()
+        .map(|wt| {
+            let wt_abs = std::fs::canonicalize(wt)
+                .unwrap_or_else(|_| std::path::PathBuf::from(wt));
+            wt_abs == project_path_abs
+        })
+        .unwrap_or(false);
+
+    if !is_main_workspace {
+        // Remove worktree directory
+        if let Some(wt) = &worktree_path {
+            let wt_path = std::path::Path::new(wt);
+            if wt_path.exists() {
+                let _ = std::fs::remove_dir_all(wt_path);
+            }
         }
+        // Prune worktree ref and delete branch
+        let _ = crate::git_ops::delete_worktree(std::path::Path::new(&project_path), &branch);
+        let _ = crate::git_ops::delete_branch(std::path::Path::new(&project_path), &branch);
     }
-    // Prune worktree ref and delete branch
-    let _ = crate::git_ops::delete_worktree(std::path::Path::new(&project_path), &branch);
-    let _ = crate::git_ops::delete_branch(std::path::Path::new(&project_path), &branch);
     // Remove from DB
     state.db.lock().delete_workspace(&workspace_id)?;
     Ok(())
