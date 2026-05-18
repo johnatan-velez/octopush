@@ -1,5 +1,5 @@
 //! Session templates — pre-configured session blueprints stored as JSON
-//! files under `~/.octopus-sh/templates/`.
+//! files under `~/.octopush/templates/`.
 
 use crate::error::AppResult;
 use crate::session::AgentConfig;
@@ -88,11 +88,11 @@ impl TemplateBody {
 fn templates_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".octopus-sh")
+        .join(".octopush")
         .join("templates")
 }
 
-/// Load all templates from `~/.octopus-sh/templates/*.json`.
+/// Load all templates from `~/.octopush/templates/*.json`.
 pub fn list_templates() -> AppResult<Vec<SessionTemplate>> {
     let dir = templates_dir();
     if !dir.exists() {
@@ -127,7 +127,7 @@ fn load_file(path: &Path) -> AppResult<Vec<SessionTemplate>> {
     }
 }
 
-/// Save a single template as `~/.octopus-sh/templates/<name>.json`.
+/// Save a single template as `~/.octopush/templates/<name>.json`.
 pub fn save_template(template: &SessionTemplate) -> AppResult<()> {
     let dir = templates_dir();
     std::fs::create_dir_all(&dir)?;

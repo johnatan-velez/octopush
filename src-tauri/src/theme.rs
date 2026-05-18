@@ -1,6 +1,6 @@
 //! Theme configuration — load/save/list themes.
 //!
-//! Themes are stored as `~/.octopus-sh/theme.json`. If absent, defaults
+//! Themes are stored as `~/.octopush/theme.json`. If absent, defaults
 //! to the built-in "atelier" theme.
 
 use crate::error::AppResult;
@@ -94,7 +94,7 @@ pub fn builtin_themes() -> Vec<ThemeConfig> {
 fn config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".octopus-sh")
+        .join(".octopush")
         .join("theme.json")
 }
 

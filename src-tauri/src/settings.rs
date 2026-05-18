@@ -1,4 +1,4 @@
-//! App settings persisted to ~/.octopus-sh/settings.json
+//! App settings persisted to ~/.octopush/settings.json
 
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub struct AppSettings {
 fn settings_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".octopus-sh")
+        .join(".octopush")
         .join("settings.json")
 }
 

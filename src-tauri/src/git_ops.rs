@@ -57,7 +57,7 @@ pub fn ensure_initial_commit(path: &Path) -> AppResult<()> {
     }
     // Create an initial empty commit
     let sig = repo.signature()
-        .or_else(|_| git2::Signature::now("Octopus sh", "octopus@localhost"))
+        .or_else(|_| git2::Signature::now("Octopush", "octopush@localhost"))
         .map_err(|e| AppError::Other(format!("git signature: {e}")))?;
     let tree_id = repo.index()
         .and_then(|mut idx| { idx.write()?; idx.write_tree() })

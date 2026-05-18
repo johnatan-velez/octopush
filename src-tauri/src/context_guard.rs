@@ -83,7 +83,7 @@ impl ContextGuard {
 fn data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("octopus-sh")
+        .join("octopush")
 }
 
 fn detect_context_files(root: &Path) -> Vec<PathBuf> {

@@ -87,13 +87,13 @@ export function NewProjectFlow({ onBack }: Props) {
 
   // Empty-project fields
   const [repoName, setRepoName] = useState("");
-  const [location, setLocation] = useState("~/.octopus-sh/projects");
+  const [location, setLocation] = useState("~/.octopush/projects");
 
   // Clone fields
   const [cloneUrl, setCloneUrl] = useState("");
   const [cloneName, setCloneName] = useState("");
   const [cloneNameManual, setCloneNameManual] = useState(false); // true = user edited name manually
-  const [cloneLocation, setCloneLocation] = useState("~/.octopus-sh/projects");
+  const [cloneLocation, setCloneLocation] = useState("~/.octopush/projects");
 
   // Clone operation state
   const [cloning, setCloning] = useState(false);
@@ -363,7 +363,7 @@ export function NewProjectFlow({ onBack }: Props) {
                 <input
                   value={cloneLocation}
                   onChange={(e) => setCloneLocation(e.target.value)}
-                  placeholder="~/.octopus-sh/projects"
+                  placeholder="~/.octopush/projects"
                   className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
                 />
               </Field>
@@ -559,7 +559,7 @@ export function NewProjectFlow({ onBack }: Props) {
                 <input
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
-                  placeholder="~/.octopus-sh/projects"
+                  placeholder="~/.octopush/projects"
                   className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
                 />
               </Field>

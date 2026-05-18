@@ -1,6 +1,6 @@
 //! Provider and model registry with intelligent routing.
 //!
-//! Providers are loaded from `~/.octopus-sh/providers.json`. If the file
+//! Providers are loaded from `~/.octopush/providers.json`. If the file
 //! doesn't exist, a set of built-in defaults (Anthropic, OpenAI, Ollama)
 //! is used and persisted on first run.
 
@@ -228,7 +228,7 @@ pub struct ModelWithProvider {
 fn config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".octopus-sh")
+        .join(".octopush")
         .join("providers.json")
 }
 

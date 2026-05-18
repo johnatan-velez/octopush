@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Octopus sh",
+  "productName": "Octopush",
   "version": "0.1.0",
-  "identifier": "sh.octopus.app",
+  "identifier": "com.octopush.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Octopus sh",
+        "title": "Octopush",
         "width": 1400,
         "height": 900,
         "minWidth": 960,
@@ -42,6 +42,6 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "The IDE for Agentic Developers",
-    "longDescription": "Octopus sh — eight arms, zero wasted tokens. A native IDE that treats agentic coding sessions as first-class citizens with real PTY terminals, token budgets, and multi-agent orchestration."
+    "longDescription": "Octopush — eight arms, zero wasted tokens. A native IDE that treats agentic coding sessions as first-class citizens with real PTY terminals, token budgets, and multi-agent orchestration."
   }
 }

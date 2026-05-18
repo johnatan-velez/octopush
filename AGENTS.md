@@ -1,14 +1,14 @@
-# Octopus · AI assistant guidelines
+# Octopush · AI assistant guidelines
 
 This file is a mirror of [`CLAUDE.md`](CLAUDE.md) for AI tools that read `AGENTS.md` (Copilot CLI, Codex, Gemini CLI, etc.). The two files have identical content; if you edit one, edit the other.
 
-**Octopus** is a Tauri 2 desktop app (React 19 + TypeScript frontend, Rust backend) — "The IDE for Agentic Developers". Workspaces are git worktrees. The backend lives in `src-tauri/src/`, the frontend in `src/`.
+**Octopush** is a Tauri 2 desktop app (React 19 + TypeScript frontend, Rust backend) — "The IDE for Agentic Developers". Workspaces are git worktrees. The backend lives in `src-tauri/src/`, the frontend in `src/`.
 
 ---
 
 ## Design system — read this before touching any UI
 
-Octopus has a deliberate visual identity called **Atelier in Onyx & Brass**. The source of truth is:
+Octopush has a deliberate visual identity called **Atelier in Onyx & Brass**. The source of truth is:
 
 - **Canonical spec:** [`docs/superpowers/specs/2026-05-16-octopus-ux-redesign-design.md`](docs/superpowers/specs/2026-05-16-octopus-ux-redesign-design.md) — full design, motion, rollout phases.
 - **Quick reference:** [`docs/design-system.md`](docs/design-system.md) — tokens, type roles, signature patterns, copy-paste snippets.
@@ -85,4 +85,4 @@ If you're adding or modifying a frontend surface, **read at least the cheatsheet
 ## Memory & ongoing initiatives
 
 - The full UX redesign (Atelier in Onyx & Brass) is being rolled out in 7 incremental phases. Phase 1 is "Foundations" (tokens + fonts + theme). See the spec for the rollout plan.
-- The user prefers bold, distinctive choices over generic AI-tool aesthetics. Treat similarity to Cursor, Linear, Superset, etc. as a negative signal — Octopus should feel like itself.
+- The user prefers bold, distinctive choices over generic AI-tool aesthetics. Treat similarity to Cursor, Linear, Superset, etc. as a negative signal — Octopush should feel like itself.

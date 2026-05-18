@@ -1,4 +1,4 @@
-//! Octopus sh — native core.
+//! Octopush — native core.
 
 pub mod agent_adapter;
 pub mod chat_engine;
@@ -26,6 +26,46 @@ use state::AppState;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
+/// One-time idempotent migration: moves data from the old `octopus-sh`
+/// directories to the new `octopush` directories so existing users don't
+/// lose their settings, providers, themes, or database.
+fn migrate_legacy_data_dir() {
+    // 1) Home config dir: ~/.octopus-sh → ~/.octopush
+    if let Some(home) = dirs::home_dir() {
+        let old = home.join(".octopus-sh");
+        let new = home.join(".octopush");
+        if old.exists() && !new.exists() {
+            if let Err(e) = std::fs::rename(&old, &new) {
+                tracing::warn!(error = %e, "failed to migrate ~/.octopus-sh -> ~/.octopush");
+            } else {
+                tracing::info!("migrated ~/.octopus-sh -> ~/.octopush");
+            }
+        }
+    }
+    // 2) Application Support dir: octopus-sh → octopush
+    if let Some(data) = dirs::data_dir() {
+        let old = data.join("octopus-sh");
+        let new = data.join("octopush");
+        if old.exists() && !new.exists() {
+            if let Err(e) = std::fs::rename(&old, &new) {
+                tracing::warn!(error = %e, "failed to migrate Application Support/octopus-sh -> octopush");
+            } else {
+                tracing::info!("migrated Application Support/octopus-sh -> octopush");
+            }
+        }
+        // 3) DB file inside the data dir: octopus.db → octopush.db
+        let old_db = data.join("octopush").join("octopus.db");
+        let new_db = data.join("octopush").join("octopush.db");
+        if old_db.exists() && !new_db.exists() {
+            if let Err(e) = std::fs::rename(&old_db, &new_db) {
+                tracing::warn!(error = %e, "failed to rename octopus.db -> octopush.db");
+            } else {
+                tracing::info!("renamed octopus.db -> octopush.db");
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -33,6 +73,8 @@ pub fn run() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .try_init();
+
+    migrate_legacy_data_dir();
 
     let app_state = AppState::init().expect("failed to initialize app state");
 

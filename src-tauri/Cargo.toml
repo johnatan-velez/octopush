@@ -1,13 +1,13 @@
 [package]
-name = "octopus-sh"
+name = "octopush"
 version = "0.1.0"
 description = "The IDE for Agentic Developers"
-authors = ["Octopus sh contributors"]
+authors = ["Octopush contributors"]
 edition = "2021"
 rust-version = "1.77.2"
 
 [lib]
-name = "octopus_sh_lib"
+name = "octopush_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

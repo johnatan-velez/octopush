@@ -1,4 +1,4 @@
-//! Unit tests for the Octopus sh core.
+//! Unit tests for the Octopush core.
 //!
 //! Run with `cargo test` from `src-tauri/`.
 

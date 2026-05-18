@@ -225,7 +225,7 @@ function ModelsPane() {
       <PaneHeader
         eyebrow="Models & Providers"
         title="Choose where your tokens go."
-        subtitle="API keys live on this machine in ~/.octopus-sh/settings.json. They never leave the device except in requests to the providers themselves."
+        subtitle="API keys live on this machine in ~/.octopush/settings.json. They never leave the device except in requests to the providers themselves."
       />
 
       <div className="max-w-[680px] space-y-7">
@@ -341,7 +341,7 @@ function AppearancePane() {
       <PaneHeader
         eyebrow="Appearance"
         title="A palette to live in."
-        subtitle="Octopus ships with Atelier (Onyx & Brass). Legacy themes remain available for power users."
+        subtitle="Octopush ships with Atelier (Onyx & Brass). Legacy themes remain available for power users."
       />
 
       <SectionLabel>Theme</SectionLabel>
@@ -675,8 +675,8 @@ function PrivacyPane() {
       />
 
       <ul className="max-w-[640px] space-y-2 text-[13px] leading-[1.6] text-octo-sage">
-        <li>· <span className="font-serif italic text-octo-ivory">Local-only data:</span> projects, workspaces, chat messages, tool executions, token usage. Stored in <span className="font-mono text-octo-brass">~/Library/Application Support/octopus-sh/octopus.db</span>.</li>
-        <li>· <span className="font-serif italic text-octo-ivory">API keys:</span> stored in <span className="font-mono text-octo-brass">~/.octopus-sh/settings.json</span>.</li>
+        <li>· <span className="font-serif italic text-octo-ivory">Local-only data:</span> projects, workspaces, chat messages, tool executions, token usage. Stored in <span className="font-mono text-octo-brass">~/Library/Application Support/octopush/octopush.db</span>.</li>
+        <li>· <span className="font-serif italic text-octo-ivory">API keys:</span> stored in <span className="font-mono text-octo-brass">~/.octopush/settings.json</span>.</li>
         <li>· <span className="font-serif italic text-octo-ivory">Outbound traffic:</span> only to providers you configure (Anthropic, OpenAI). No analytics, no telemetry.</li>
       </ul>
     </>

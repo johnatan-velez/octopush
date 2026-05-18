@@ -46,7 +46,7 @@ export function SessionSidebar({ onNewSession }: Props) {
       <header className="flex items-center justify-between border-b border-octo-border px-4 py-3">
         <div className="flex items-center gap-2">
           <span className="text-lg">🐙</span>
-          <span className="font-semibold tracking-tight">Octopus sh</span>
+          <span className="font-semibold tracking-tight">Octopush</span>
         </div>
         <button
           onClick={onNewSession}

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    octopus_sh_lib::run()
+    octopush_lib::run()
 }

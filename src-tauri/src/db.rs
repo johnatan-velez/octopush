@@ -38,8 +38,8 @@ impl Db {
     pub fn default_path() -> PathBuf {
         let base = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("octopus-sh");
-        base.join("octopus.db")
+            .join("octopush");
+        base.join("octopush.db")
     }
 
     fn migrate(&self) -> AppResult<()> {
