@@ -243,6 +243,16 @@ export interface ModelSuggestion {
   estimatedCostTier: "low" | "medium" | "high";
 }
 
+export interface ProviderConfig {
+  name: string;
+  apiBase: string;
+  apiKeyEnv: string;
+  models: ModelInfo[];
+  enabled: boolean;
+  protocol: string;
+  local: boolean;
+}
+
 export type TaskType =
   | "code_review"
   | "architecture"

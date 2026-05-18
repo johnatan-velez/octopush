@@ -11,6 +11,7 @@ import {
   SETTINGS_TAB_LABELS,
   type SettingsTab,
 } from "../lib/settingsTabs";
+import type { ProviderConfig } from "../lib/types";
 
 interface Props {
   open: boolean;
@@ -188,30 +189,30 @@ function GeneralPane() {
 // ─── Tab: Models & Providers ──────────────────────────────────────────
 
 function ModelsPane() {
-  const [anthropicKey, setAnthropicKey] = useState("");
-  const [openaiKey, setOpenaiKey] = useState("");
-  const [showAnthropic, setShowAnthropic] = useState(false);
-  const [showOpenai, setShowOpenai] = useState(false);
+  const [providers, setProviders] = useState<ProviderConfig[]>([]);
+  const [keys, setKeys] = useState<Record<string, string>>({});
+  const [baseUrls, setBaseUrls] = useState<Record<string, string>>({});
+  const [shown, setShown] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    ipc.getSettings().then((s) => {
-      // Read from new providerKeys map; fall back to legacy fields for old settings files.
-      setAnthropicKey(s.providerKeys?.["anthropic"] ?? s.anthropicApiKey ?? "");
-      setOpenaiKey(s.providerKeys?.["openai"] ?? s.openaiApiKey ?? "");
-      setSaved(false);
+    Promise.all([ipc.listProviders(), ipc.getSettings()]).then(([provs, settings]) => {
+      setProviders(provs);
+      setKeys(settings.providerKeys ?? {});
+      setBaseUrls(settings.providerBaseUrls ?? {});
     });
   }, []);
 
   async function handleSave() {
     setSaving(true);
     await ipc.saveSettings({
-      providerKeys: {
-        ...(anthropicKey ? { anthropic: anthropicKey } : {}),
-        ...(openaiKey ? { openai: openaiKey } : {}),
-      },
-      providerBaseUrls: {},
+      providerKeys: Object.fromEntries(
+        Object.entries(keys).filter(([_, v]) => v && v.length > 0),
+      ),
+      providerBaseUrls: Object.fromEntries(
+        Object.entries(baseUrls).filter(([_, v]) => v && v.length > 0),
+      ),
     });
     setSaving(false);
     setSaved(true);
@@ -223,28 +224,22 @@ function ModelsPane() {
       <PaneHeader
         eyebrow="Models & Providers"
         title="Choose where your tokens go."
-        subtitle="API keys live on this machine in ~/.octopus-sh/settings.json. They never leave the device except in requests to the providers."
+        subtitle="API keys live on this machine in ~/.octopus-sh/settings.json. They never leave the device except in requests to the providers themselves."
       />
 
-      <div className="max-w-[600px] space-y-6">
-        <ProviderRow
-          name="Anthropic"
-          description="Required for Claude (Sonnet, Opus, Haiku)."
-          link="console.anthropic.com"
-          value={anthropicKey}
-          show={showAnthropic}
-          onChange={setAnthropicKey}
-          onToggleShow={() => setShowAnthropic((v) => !v)}
-        />
-        <ProviderRow
-          name="OpenAI"
-          description="Optional. Required for GPT-4o."
-          link="platform.openai.com"
-          value={openaiKey}
-          show={showOpenai}
-          onChange={setOpenaiKey}
-          onToggleShow={() => setShowOpenai((v) => !v)}
-        />
+      <div className="max-w-[680px] space-y-7">
+        {providers.map((p) => (
+          <ProviderRow
+            key={p.name}
+            provider={p}
+            value={keys[p.name] ?? ""}
+            baseUrl={baseUrls[p.name] ?? ""}
+            show={shown[p.name] ?? false}
+            onChange={(v) => setKeys((s) => ({ ...s, [p.name]: v }))}
+            onChangeBaseUrl={(v) => setBaseUrls((s) => ({ ...s, [p.name]: v }))}
+            onToggleShow={() => setShown((s) => ({ ...s, [p.name]: !s[p.name] }))}
+          />
+        ))}
 
         <div className="flex items-center gap-3 pt-2">
           <button
@@ -268,48 +263,71 @@ function ModelsPane() {
 }
 
 function ProviderRow({
-  name, description, link, value, show, onChange, onToggleShow,
+  provider, value, baseUrl, show, onChange, onChangeBaseUrl, onToggleShow,
 }: {
-  name: string;
-  description: string;
-  link: string;
+  provider: ProviderConfig;
   value: string;
+  baseUrl: string;
   show: boolean;
   onChange: (v: string) => void;
+  onChangeBaseUrl: (v: string) => void;
   onToggleShow: () => void;
 }) {
+  const displayName = provider.name[0].toUpperCase() + provider.name.slice(1);
   return (
     <div>
       <div className="flex items-baseline justify-between">
-        <span className="font-serif italic text-[16px] text-octo-ivory">{name}</span>
-        <a
-          href={`https://${link}`}
-          target="_blank"
-          rel="noopener"
-          className="font-mono text-[10px] uppercase tracking-[0.2em] text-octo-mute hover:text-octo-brass"
-        >
-          {link} ↗
-        </a>
+        <span className="font-serif italic text-[16px] text-octo-ivory">{displayName}</span>
+        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-octo-mute">
+          {provider.models.length} models · {provider.local ? "local" : "cloud"}
+        </span>
       </div>
-      <div className="mt-1 text-[12px] text-octo-sage">{description}</div>
-      <div className="relative mt-3">
+      <div className="mt-1 text-[12px] text-octo-sage">
+        {providerDescription(provider)}
+      </div>
+
+      {!provider.local && (
+        <div className="relative mt-3">
+          <input
+            type={show ? "text" : "password"}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="API key"
+            className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 pr-10 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+          />
+          <button
+            type="button"
+            onClick={onToggleShow}
+            className="absolute right-2 top-1/2 -translate-y-1/2 px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-octo-mute hover:text-octo-brass"
+          >
+            {show ? "Hide" : "Show"}
+          </button>
+        </div>
+      )}
+
+      <div className="mt-2">
+        <div className="mb-1 font-mono text-[8px] uppercase tracking-[0.25em] text-octo-mute">
+          BASE URL {provider.local ? "(required)" : "(optional override)"}
+        </div>
         <input
-          type={show ? "text" : "password"}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="sk-..."
-          className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 pr-10 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+          value={baseUrl}
+          onChange={(e) => onChangeBaseUrl(e.target.value)}
+          placeholder={provider.apiBase}
+          className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[11px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
         />
-        <button
-          type="button"
-          onClick={onToggleShow}
-          className="absolute right-2 top-1/2 -translate-y-1/2 px-1 font-mono text-[10px] uppercase tracking-[0.15em] text-octo-mute hover:text-octo-brass"
-        >
-          {show ? "Hide" : "Show"}
-        </button>
       </div>
     </div>
   );
+}
+
+function providerDescription(p: ProviderConfig): string {
+  switch (p.name) {
+    case "anthropic": return "Claude models (Opus, Sonnet, Haiku). Get your key at console.anthropic.com.";
+    case "openai": return "GPT-4o and friends. Get your key at platform.openai.com.";
+    case "deepseek": return "Cheaper alternative with strong code performance. platform.deepseek.com.";
+    case "ollama": return "Local models running on this machine. Install via ollama.com — no key required.";
+    default: return `${p.protocol} provider at ${p.apiBase}.`;
+  }
 }
 
 // ─── Tab: Appearance ──────────────────────────────────────────────────

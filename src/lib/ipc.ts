@@ -11,6 +11,7 @@ import type {
   ModelSuggestion,
   ModelWithProvider,
   ProjectInfo,
+  ProviderConfig,
   Session,
   SessionRecap,
   SessionTemplate,
@@ -70,6 +71,8 @@ export const ipc = {
     invoke<void>("delete_template", { name }),
 
   // ─── Providers / Agents ───────────────────────────────────────
+  listProviders: () => invoke<ProviderConfig[]>("list_providers"),
+
   listModels: () => invoke<ModelWithProvider[]>("list_models"),
 
   suggestModel: (taskType: TaskType) =>
