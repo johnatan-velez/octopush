@@ -395,6 +395,12 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
     if !crate::git_ops::is_git_repo(&path_buf) {
         crate::git_ops::init_repo(&path_buf)?;
     }
+    // Make sure `main` actually contains the files on disk. This is a no-op
+    // for healthy repos. It (a) creates the first commit when we just
+    // init_repo'd, and (b) heals projects opened with a previous Octopush
+    // version that left an empty initial commit — those projects' main
+    // branch had no tree, so worktrees came out empty.
+    crate::git_ops::ensure_initial_commit(&path_buf)?;
 
     let db = state.db.lock();
     if let Some((id, name, p)) = db.get_project_by_path(&path)? {

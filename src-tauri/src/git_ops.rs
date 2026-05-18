@@ -48,17 +48,45 @@ pub fn default_branch(path: &Path) -> AppResult<Option<String>> {
     Ok(result)
 }
 
-/// Ensure the repo has at least one commit (needed before creating branches).
-/// If the repo is empty, creates an initial commit. If the working tree
-/// contains files, they are staged and committed — otherwise the commit is
-/// empty. This matters for "Open existing folder": auto-initialized folders
-/// must carry their existing files into the initial commit, so worktrees
-/// branched off `main` actually contain those files instead of being empty.
+/// Ensure the repo has at least one commit AND that commit captures whatever
+/// files live in the working tree. Handles three scenarios:
+///   (a) No HEAD yet → stage everything, create the initial commit.
+///   (b) HEAD exists but its tree is empty (e.g. left over from an older
+///       Octopush bug that ran an empty initial commit on `open_project`)
+///       AND files are sitting on disk → amend the HEAD commit so it
+///       contains those files. Worktrees branched off `main` then inherit
+///       them.
+///   (c) HEAD exists with a non-empty tree → do nothing. We never touch a
+///       real codebase's history.
 pub fn ensure_initial_commit(path: &Path) -> AppResult<()> {
     let repo = open_repo(path)?;
-    if repo.head().is_ok() {
-        return Ok(()); // Already has commits
+
+    // Decide whether we need to write/amend an initial commit.
+    enum Action {
+        Skip,
+        FreshCommit,
+        AmendEmptyHead,
     }
+    let action = match repo.head() {
+        Err(_) => Action::FreshCommit,
+        Ok(head_ref) => {
+            let head_commit = head_ref
+                .peel_to_commit()
+                .map_err(|e| AppError::Other(format!("peel HEAD: {e}")))?;
+            let head_tree = head_commit
+                .tree()
+                .map_err(|e| AppError::Other(format!("HEAD tree: {e}")))?;
+            if head_tree.len() == 0 {
+                Action::AmendEmptyHead
+            } else {
+                Action::Skip
+            }
+        }
+    };
+    if matches!(action, Action::Skip) {
+        return Ok(());
+    }
+
     let sig = repo
         .signature()
         .or_else(|_| git2::Signature::now("Octopush", "octopush@localhost"))
@@ -81,8 +109,33 @@ pub fn ensure_initial_commit(path: &Path) -> AppResult<()> {
     let tree = repo
         .find_tree(tree_id)
         .map_err(|e| AppError::Other(format!("find tree: {e}")))?;
-    repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-        .map_err(|e| AppError::Other(format!("initial commit: {e}")))?;
+
+    match action {
+        Action::FreshCommit => {
+            repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+                .map_err(|e| AppError::Other(format!("initial commit: {e}")))?;
+        }
+        Action::AmendEmptyHead => {
+            let head = repo
+                .head()
+                .map_err(|e| AppError::Other(format!("head: {e}")))?;
+            let head_commit = head
+                .peel_to_commit()
+                .map_err(|e| AppError::Other(format!("peel HEAD: {e}")))?;
+            head_commit
+                .amend(
+                    Some("HEAD"),
+                    Some(&sig),
+                    Some(&sig),
+                    None,
+                    Some("Initial commit"),
+                    Some(&tree),
+                )
+                .map_err(|e| AppError::Other(format!("amend HEAD: {e}")))?;
+        }
+        Action::Skip => unreachable!(),
+    }
+
     Ok(())
 }
 
