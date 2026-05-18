@@ -1,11 +1,20 @@
-//! Agentic chat engine — tool-use loop with the Anthropic Messages API.
+//! Agentic chat engine — tool-use loop dispatched via the `LlmProvider` trait.
 //!
 //! The engine defines tools (run_command, read_file, write_file, list_files)
-//! and runs an agentic loop: send messages → Claude responds with tool_use →
-//! execute tool → send result back → repeat until Claude responds with text only.
+//! and runs an agentic loop: send messages → provider responds with tool_use →
+//! execute tool → send result back → repeat until provider gives a final text answer.
+//! The loop is provider-agnostic: AnthropicProvider or OpenAICompatibleProvider
+//! is selected at runtime via `resolve_provider()`.
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::providers::{
+    anthropic::AnthropicProvider,
+    openai_compat::OpenAICompatibleProvider,
+    LlmContent, LlmMessage, LlmProvider, LlmRequest, LlmRole,
+    LlmStopReason, LlmTool, LlmToolResult,
+};
+use crate::provider_router::ProviderRouter;
 use crate::token_engine;
 use parking_lot::Mutex;
 use reqwest::Client;
@@ -236,6 +245,50 @@ fn execute_tool(workspace_path: &Path, name: &str, input: &serde_json::Value) ->
     }
 }
 
+// ─── Provider helpers ─────────────────────────────────────────────
+
+/// Build the static tool list as normalized `LlmTool[]`.
+fn build_llm_tools() -> Vec<LlmTool> {
+    let defs = tool_definitions();
+    let arr = defs.as_array().cloned().unwrap_or_default();
+    arr.into_iter().map(|t| LlmTool {
+        name: t.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        description: t.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        input_schema: t.get("input_schema").cloned().unwrap_or(serde_json::json!({})),
+    }).collect()
+}
+
+/// Resolve which provider implementation handles this model.
+/// Returns `(provider_impl, api_base, optional_api_key)`.
+fn resolve_provider(model: &str) -> AppResult<(Box<dyn LlmProvider>, String, Option<String>)> {
+    let router = ProviderRouter::load()?;
+    let (provider_cfg, _model_info) = router.find_model(model)
+        .ok_or_else(|| AppError::Other(format!(
+            "Unknown model: {model}. Configure it in Settings · Models & Providers."
+        )))?;
+
+    let key = crate::settings::get_provider_key(&provider_cfg.name);
+    // Allow base URL override (Ollama, custom self-hosted).
+    let api_base = crate::settings::get_provider_base_url(&provider_cfg.name)
+        .unwrap_or_else(|| provider_cfg.api_base.clone());
+
+    // Require key for non-local providers.
+    if !provider_cfg.local && key.is_none() {
+        return Err(AppError::Other(format!(
+            "{} API key not configured. Open Settings · Models & Providers.",
+            provider_cfg.name
+        )));
+    }
+
+    let impl_: Box<dyn LlmProvider> = match provider_cfg.protocol.as_str() {
+        "anthropic" => Box::new(AnthropicProvider),
+        "openai-compatible" => Box::new(OpenAICompatibleProvider),
+        other => return Err(AppError::Other(format!("Unsupported protocol: {other}"))),
+    };
+
+    Ok((impl_, api_base, key))
+}
+
 // ─── Engine ───────────────────────────────────────────────────────
 
 pub struct ChatEngine {
@@ -283,17 +336,14 @@ impl ChatEngine {
     }
 
     /// Run the agentic loop: send messages with tools, execute tool calls,
-    /// feed results back, repeat until Claude gives a final text answer.
+    /// feed results back, repeat until the provider gives a final text answer.
+    /// Dispatches to the right LlmProvider impl via `resolve_provider()`.
     pub async fn send_agentic(
         &self,
         app: AppHandle,
         request: ChatRequest,
     ) -> AppResult<()> {
-        let api_key = crate::settings::get_anthropic_key().ok_or_else(|| {
-            AppError::Other(
-                "Anthropic API key not configured. Go to Settings to add your key.".to_string(),
-            )
-        })?;
+        let (provider, api_base, api_key) = resolve_provider(&request.model)?;
 
         let workspace_path = std::path::PathBuf::from(&request.workspace_path);
 
@@ -306,11 +356,11 @@ impl ChatEngine {
             None, None, None, None,
         )?;
 
-        // Build conversation history from DB.
+        // Build conversation history as normalized LlmMessage[].
         // We include user + assistant messages for the API, and inject tool
-        // summaries into assistant messages so Claude remembers what it did.
+        // summaries into assistant messages so the model remembers what it did.
         let history = self.db.lock().list_chat_messages(&request.workspace_id)?;
-        let mut messages: Vec<serde_json::Value> = Vec::new();
+        let mut messages: Vec<LlmMessage> = Vec::new();
         let mut pending_tool_summary = Vec::new();
 
         for msg in &history {
@@ -336,7 +386,7 @@ impl ChatEngine {
                 }
             } else if msg.role == "assistant" {
                 // Prepend any accumulated tool summaries to the assistant message
-                // so Claude knows what actions it took.
+                // so the model knows what actions it took.
                 let mut content = String::new();
                 if !pending_tool_summary.is_empty() {
                     content.push_str(&pending_tool_summary.join("\n"));
@@ -344,20 +394,17 @@ impl ChatEngine {
                     pending_tool_summary.clear();
                 }
                 content.push_str(&msg.content);
-                messages.push(serde_json::json!({
-                    "role": "assistant",
-                    "content": content,
-                }));
+                messages.push(LlmMessage {
+                    role: LlmRole::Assistant,
+                    content: LlmContent::Text(content),
+                });
             } else if msg.role == "user" {
-                // Flush any orphaned tool summaries as a user context note.
-                if !pending_tool_summary.is_empty() {
-                    // This shouldn't happen normally, but safety net.
-                    pending_tool_summary.clear();
-                }
-                messages.push(serde_json::json!({
-                    "role": "user",
-                    "content": msg.content,
-                }));
+                // Flush any orphaned tool summaries.
+                pending_tool_summary.clear();
+                messages.push(LlmMessage {
+                    role: LlmRole::User,
+                    content: LlmContent::Text(msg.content.clone()),
+                });
             }
         }
 
@@ -371,87 +418,47 @@ impl ChatEngine {
             )
         });
 
+        let tools = build_llm_tools();
         let mut total_input: u64 = 0;
         let mut total_output: u64 = 0;
 
         // ─── Agentic loop ─────────────────────────────────────────
         for iteration in 0..MAX_TOOL_ITERATIONS {
-            let body = serde_json::json!({
-                "model": &request.model,
-                "max_tokens": 32768_u32.max(request.max_tokens),
-                "system": &system_prompt,
-                "tools": tool_definitions(),
-                "messages": &messages,
-            });
+            let llm_req = LlmRequest {
+                model: request.model.clone(),
+                max_tokens: 32768_u32.max(request.max_tokens),
+                system: system_prompt.clone(),
+                messages: messages.clone(),
+                tools: tools.clone(),
+            };
 
-            let resp = self.client
-                .post("https://api.anthropic.com/v1/messages")
-                .header("x-api-key", &api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("anthropic-beta", "output-128k-2025-02-19")
-                .header("content-type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| AppError::Other(format!("Anthropic request failed: {e}")))?;
+            let response = provider
+                .complete(&api_base, api_key.as_deref(), &llm_req, &self.client)
+                .await?;
 
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                return Err(AppError::Other(format!("Anthropic API error {status}: {text}")));
-            }
-
-            let response: serde_json::Value = resp.json().await
-                .map_err(|e| AppError::Other(format!("JSON parse error: {e}")))?;
-
-            // Track tokens.
-            if let Some(usage) = response.get("usage") {
-                total_input += usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                total_output += usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            }
-
-            let content = response.get("content").and_then(|c| c.as_array()).cloned().unwrap_or_default();
-            let stop_reason = response.get("stop_reason").and_then(|s| s.as_str()).unwrap_or("");
-
-            // Extract text and tool_use blocks.
-            let mut text_parts = String::new();
-            let mut tool_uses: Vec<(String, String, serde_json::Value)> = Vec::new(); // (id, name, input)
-
-            for block in &content {
-                match block.get("type").and_then(|t| t.as_str()) {
-                    Some("text") => {
-                        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                            text_parts.push_str(text);
-                        }
-                    }
-                    Some("tool_use") => {
-                        let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-                        let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
-                        let input = block.get("input").cloned().unwrap_or(serde_json::json!({}));
-                        tool_uses.push((id, name, input));
-                    }
-                    _ => {}
-                }
-            }
+            total_input += response.input_tokens;
+            total_output += response.output_tokens;
 
             tracing::info!(
                 iteration = iteration,
-                stop_reason = stop_reason,
-                text_len = text_parts.len(),
-                tool_count = tool_uses.len(),
+                stop_reason = ?response.stop_reason,
+                text_len = response.text.len(),
+                tool_count = response.tool_uses.len(),
                 "agentic loop iteration"
             );
 
+            let is_final = response.stop_reason != LlmStopReason::ToolUse
+                || response.tool_uses.is_empty();
+
             // Only emit text as a stream delta for the FINAL response
-            // (when Claude is done with tools). Intermediate text (said
+            // (when the model is done with tools). Intermediate text (said
             // before tool calls) would concatenate with the final text
             // in the frontend's streamBuffer, creating a garbled message.
-            // Tool cards already show what Claude is doing.
-            let is_final = stop_reason != "tool_use" || tool_uses.is_empty();
-            if is_final && !text_parts.is_empty() {
+            // Tool cards already show what the model is doing.
+            if is_final && !response.text.is_empty() {
                 let _ = app.emit("chat://stream", &ChatStreamEvent {
                     workspace_id: request.workspace_id.clone(),
-                    delta: text_parts.clone(),
+                    delta: response.text.clone(),
                     done: false,
                     input_tokens: None,
                     output_tokens: None,
@@ -459,32 +466,32 @@ impl ChatEngine {
             }
 
             // Handle max_tokens truncation during tool use.
-            if stop_reason == "max_tokens" && !tool_uses.is_empty() {
+            if matches!(response.stop_reason, LlmStopReason::MaxTokens) && !response.tool_uses.is_empty() {
                 tracing::warn!("Response truncated at max_tokens during tool_use — providing error tool_results and retrying");
                 // Add the truncated assistant message to history.
-                messages.push(serde_json::json!({
-                    "role": "assistant",
-                    "content": content,
-                }));
+                messages.push(LlmMessage {
+                    role: LlmRole::Assistant,
+                    content: LlmContent::AssistantWithTools {
+                        text: response.text.clone(),
+                        tool_uses: response.tool_uses.clone(),
+                    },
+                });
                 // Provide error tool_results for each tool_use (API requires matching pairs).
-                let error_results: Vec<serde_json::Value> = tool_uses.iter().map(|(id, _, _)| {
-                    serde_json::json!({
-                        "type": "tool_result",
-                        "tool_use_id": id,
-                        "is_error": true,
-                        "content": "ERROR: Your response was truncated because it exceeded the output token limit. The file content was cut off and NOT written. Please retry with smaller files — split into multiple files or keep each under 200 lines. Write one file at a time.",
-                    })
+                let error_results: Vec<LlmToolResult> = response.tool_uses.iter().map(|u| LlmToolResult {
+                    tool_use_id: u.id.clone(),
+                    content: "ERROR: Your response was truncated because it exceeded the output token limit. The file content was cut off and NOT written. Please retry with smaller files — split into multiple files or keep each under 200 lines. Write one file at a time.".to_string(),
+                    is_error: true,
                 }).collect();
-                messages.push(serde_json::json!({
-                    "role": "user",
-                    "content": error_results,
-                }));
+                messages.push(LlmMessage {
+                    role: LlmRole::User,
+                    content: LlmContent::ToolResults(error_results),
+                });
                 continue;
             }
 
             // If no tool use, we're done — this was the final response.
-            if stop_reason != "tool_use" || tool_uses.is_empty() {
-                let final_text = text_parts.trim().to_string();
+            if is_final {
+                let final_text = response.text.trim().to_string();
 
                 // Persist final assistant message and emit message-added. Order matters:
                 // this event must arrive before the done event so the frontend has the
@@ -517,35 +524,38 @@ impl ChatEngine {
             }
 
             // ─── Handle tool use ──────────────────────────────────
-            // Add assistant message with content blocks to conversation.
-            messages.push(serde_json::json!({
-                "role": "assistant",
-                "content": content,
-            }));
+            // Add assistant message with tool_use content to conversation.
+            messages.push(LlmMessage {
+                role: LlmRole::Assistant,
+                content: LlmContent::AssistantWithTools {
+                    text: response.text.clone(),
+                    tool_uses: response.tool_uses.clone(),
+                },
+            });
 
             // Execute each tool, persist to DB, and collect results.
-            let mut tool_results: Vec<serde_json::Value> = Vec::new();
-            for (tool_id, tool_name, tool_input) in &tool_uses {
-                tracing::info!(tool = %tool_name, "executing tool");
-                let result = execute_tool(&workspace_path, tool_name, tool_input);
+            let mut tool_results: Vec<LlmToolResult> = Vec::new();
+            for u in &response.tool_uses {
+                tracing::info!(tool = %u.name, "executing tool");
+                let result = execute_tool(&workspace_path, &u.name, &u.input);
 
                 // For persistence and events, strip large file contents from
                 // the input (the file is already on disk). This prevents
                 // multi-KB JSON payloads that slow down events and DB.
-                let input_for_display = if tool_name == "write_file" {
-                    let mut display = tool_input.clone();
+                let input_for_display = if u.name == "write_file" {
+                    let mut display = u.input.clone();
                     if let Some(content) = display.get("content").and_then(|c| c.as_str()) {
                         let len = content.len();
                         display["content"] = serde_json::json!(format!("({len} chars, written to disk)"));
                     }
                     display
                 } else {
-                    tool_input.clone()
+                    u.input.clone()
                 };
 
                 // Persist tool execution as role="tool" and emit message-added.
                 let tool_record = serde_json::json!({
-                    "toolName": tool_name,
+                    "toolName": u.name,
                     "toolInput": input_for_display,
                     "result": result,
                 });
@@ -556,27 +566,27 @@ impl ChatEngine {
                     &tool_record.to_string(),
                     None, None, None, None,
                 ) {
-                    tracing::error!(tool = %tool_name, error = %e, "failed to persist tool execution");
+                    tracing::error!(tool = %u.name, error = %e, "failed to persist tool execution");
                 }
 
-                tool_results.push(serde_json::json!({
-                    "type": "tool_result",
-                    "tool_use_id": tool_id,
-                    "content": result,
-                }));
+                tool_results.push(LlmToolResult {
+                    tool_use_id: u.id.clone(),
+                    content: result,
+                    is_error: false,
+                });
             }
 
             // Add tool results as user message and continue the loop.
-            messages.push(serde_json::json!({
-                "role": "user",
-                "content": tool_results,
-            }));
+            messages.push(LlmMessage {
+                role: LlmRole::User,
+                content: LlmContent::ToolResults(tool_results),
+            });
 
             tracing::info!(
                 iteration = iteration,
-                tools = tool_uses.len(),
+                tools = response.tool_uses.len(),
                 "agentic loop: executed {} tool(s), continuing",
-                tool_uses.len()
+                response.tool_uses.len()
             );
         }
 
