@@ -97,6 +97,11 @@ function App() {
   const [showCreator, setShowCreator] = useState(false);
   const [customizingWorkspaceId, setCustomizingWorkspaceId] = useState<string | null>(null);
   const [showProjectSwitcher, setShowProjectSwitcher] = useState(false);
+  // When the user opens NewProjectFlow from the switcher (not from the welcome
+  // screen), we render it as an overlay on top of the current project — the
+  // !project early-return path doesn't fire and the create/clone form needs to
+  // live somewhere else.
+  const [showAddProject, setShowAddProject] = useState(false);
   // Context menu: which workspace and where
   const [contextMenu, setContextMenu] = useState<{ workspaceId: string; x: number; y: number } | null>(null);
   // Pending delete confirmation
@@ -145,6 +150,9 @@ function App() {
     if (project) {
       setAppView("project");
       setShowCreator(false);
+      // Close the "Add project" overlay automatically once the new project
+      // becomes active (NewProjectFlow's create/clone success sets it).
+      setShowAddProject(false);
       loadWorkspaces(project.id);
     } else {
       setShowCreator(false);
@@ -710,6 +718,14 @@ function App() {
       })()}
 
       {/* Project switcher sheet — overlaid without unmounting the canvas */}
+      {showAddProject && (
+        <div className="absolute inset-0 z-50 bg-octo-bg">
+          <NewProjectFlow
+            onBack={() => setShowAddProject(false)}
+          />
+        </div>
+      )}
+
       {showProjectSwitcher && project && (
         <div className="absolute inset-0 z-50">
           <ProjectSwitcher
@@ -721,7 +737,7 @@ function App() {
             }}
             onAddProject={() => {
               setShowProjectSwitcher(false);
-              setAppView("new-project");
+              setShowAddProject(true);
             }}
             onClose={() => setShowProjectSwitcher(false)}
           />
