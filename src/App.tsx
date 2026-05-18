@@ -15,7 +15,6 @@ import { useEditorStore } from "./stores/editorStore";
 import { TerminalPane } from "./components/TerminalPane";
 import { CommandPalette } from "./components/CommandPalette";
 import { ToastContainer } from "./components/Toasts";
-import { BrassRule } from "./components/BrassRule";
 import { Settings } from "./components/Settings";
 import { useProjectStore } from "./stores/projectStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
@@ -147,7 +146,12 @@ function App() {
     }).catch(console.error);
   }, [activeWorkspaceId, loadTerminals, createTerminal]);
 
-  // ── Refresh git status + diff on workspace change ──
+  // ── Refresh git status + diff on workspace change AND on a 3s interval ──
+  // The interval is necessary because the agentic loop in Talk mode can mutate
+  // files in the worktree without any UI event we can hook into. Without
+  // polling, the Review panel would show stale "Nothing to review" until the
+  // user toggled workspaces. 3s is the sweet spot — fast enough to feel live,
+  // not so often that we hammer git on huge repos.
   useEffect(() => {
     const ws = workspaces.find((w) => w.id === activeWorkspaceId);
     const path = ws?.worktreePath ?? project?.path;
@@ -157,17 +161,22 @@ function App() {
       return;
     }
     let cancelled = false;
-    Promise.all([
-      ipc.getGitStatus(path),
-      ipc.getGitDiff(path).catch(() => ""),
-    ]).then(([s, d]) => {
-      if (!cancelled) {
-        setGitStatus(s);
-        setGitDiff(d);
-      }
-    }).catch(() => {});
+    const refresh = () => {
+      Promise.all([
+        ipc.getGitStatus(path),
+        ipc.getGitDiff(path).catch(() => ""),
+      ]).then(([s, d]) => {
+        if (!cancelled) {
+          setGitStatus(s);
+          setGitDiff(d);
+        }
+      }).catch(() => {});
+    };
+    refresh();
+    const id = setInterval(refresh, 3_000);
     return () => {
       cancelled = true;
+      clearInterval(id);
     };
   }, [activeWorkspaceId, workspaces, project]);
 
@@ -467,28 +476,30 @@ function App() {
                         visibility: activeMode === "review" ? "visible" : "hidden",
                       }}
                     >
-                      {(gitStatus?.changedFiles.length ?? 0) > 0 ? (
-                        <div className="flex h-full min-h-0">
-                          {/* Left: Changes panel (fixed width) */}
+                      <div className="flex h-full min-h-0">
+                        {/* Left: Changes panel — only when there are unstaged changes.
+                            Otherwise we save the real estate for the editor + tree
+                            so the user can still browse and edit files. */}
+                        {(gitStatus?.changedFiles.length ?? 0) > 0 && (
                           <div className="w-[320px] shrink-0 border-r border-octo-hairline">
                             <ChangesPanel
                               projectPath={activeWorkspace.worktreePath || project.path}
                               diff={gitDiff}
                             />
                           </div>
-                          {/* Middle: Editor canvas */}
-                          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                            <EditorTabs workspaceId={activeWorkspaceId!} />
-                            <EditorPane
-                              workspaceId={activeWorkspaceId!}
-                              workspacePath={activeWorkspace.worktreePath || project.path}
-                              diffText={gitDiff}
-                            />
-                          </div>
+                        )}
+                        {/* Middle: Editor canvas — always available so clicking a
+                            file in the right-side tree opens it, even in clean
+                            repos. */}
+                        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                          <EditorTabs workspaceId={activeWorkspaceId!} />
+                          <EditorPane
+                            workspaceId={activeWorkspaceId!}
+                            workspacePath={activeWorkspace.worktreePath || project.path}
+                            diffText={gitDiff}
+                          />
                         </div>
-                      ) : (
-                        <ReviewEmptyState />
-                      )}
+                      </div>
                     </div>
                   </>
                 )}
@@ -573,23 +584,6 @@ function RunEmptyState({ onStart }: { onStart: () => Promise<void> | void }) {
       >
         Open terminal
       </button>
-    </div>
-  );
-}
-
-function ReviewEmptyState() {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
-      <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-octo-mute">
-        Review
-      </div>
-      <div className="font-serif italic text-[20px] leading-tight tracking-[-0.005em] text-octo-ivory">
-        Nothing to review yet.
-      </div>
-      <p className="max-w-md text-[12px] leading-[1.6] text-octo-sage">
-        When the workspace has uncommitted changes, the diff appears here.
-      </p>
-      <BrassRule className="mt-2 w-7" />
     </div>
   );
 }
