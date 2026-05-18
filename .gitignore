@@ -12,7 +12,9 @@ build/
 # Rust / Cargo
 src-tauri/target/
 src-tauri/gen/schemas/
-Cargo.lock
+# Octopush is a binary application — Cargo.lock is tracked so reproducible
+# builds across machines pin the exact dep tree (avoids the Tauri Rust/JS
+# minor-version mismatch the bundler refuses to build through).
 
 # Build-generated triple-suffixed sidecar binaries (created by build.rs)
 src-tauri/octopush-pty-server-*
