@@ -86,6 +86,13 @@ interface TreeNodeProps {
   onToggle: (path: string) => void;
 }
 
+/** Returns the label color class for a file/folder based on depth and changed state. */
+function depthColorClass(depth: number, isChanged: boolean): string {
+  if (isChanged) return "text-octo-ivory";
+  if (depth >= 4) return "text-octo-mute";
+  return "text-octo-sage";
+}
+
 function TreeNode({
   path,
   label,
@@ -104,7 +111,7 @@ function TreeNode({
     <div>
       {/* Row */}
       <div
-        className="group relative flex cursor-pointer items-center gap-1 rounded-sm py-[2px] pr-1 transition-colors duration-[220ms]"
+        className="group relative flex cursor-pointer items-center gap-1 rounded-sm py-1 pr-1 transition-colors duration-[220ms]"
         style={{
           paddingLeft: `${depth * 14 + 4}px`,
           background: "transparent",
@@ -125,12 +132,13 @@ function TreeNode({
           <IndentGuides depth={depth} />
         )}
 
-        {/* Chevron or dot indicator */}
+        {/* Chevron (dirs) or dot indicator (files) */}
         {isDir ? (
           <span
-            className="shrink-0 font-mono text-[9px] transition-colors duration-[220ms]"
+            className="shrink-0 font-mono text-[9px] group-hover:text-octo-brass"
+            data-testid={isExpanded ? "chevron-expanded" : "chevron-collapsed"}
             style={{
-              color: isExpanded || isRoot ? "var(--color-octo-brass)" : "var(--color-octo-sage)",
+              color: isExpanded ? "var(--color-octo-brass)" : "var(--color-octo-mute)",
               transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
               display: "inline-block",
               transition: "transform 220ms cubic-bezier(0.2,0.8,0.3,1), color 220ms",
@@ -149,6 +157,17 @@ function TreeNode({
           </span>
         )}
 
+        {/* § glyph for folders (quiet brand mark, not for root) */}
+        {isDir && !isRoot && (
+          <span
+            aria-hidden="true"
+            className="shrink-0 font-mono text-[10px]"
+            style={{ color: "rgba(212, 165, 116, 0.4)" }}
+          >
+            §
+          </span>
+        )}
+
         {/* Label */}
         {isRoot ? (
           <span
@@ -158,10 +177,7 @@ function TreeNode({
           </span>
         ) : (
           <span
-            className="min-w-0 truncate font-mono text-[11px]"
-            style={{
-              color: isChanged ? "var(--color-octo-ivory)" : "var(--color-octo-sage)",
-            }}
+            className={`min-w-0 truncate font-mono text-[11px] ${depthColorClass(depth, isChanged)}`}
           >
             {label}
           </span>
@@ -224,20 +240,31 @@ function TreeNode({
   );
 }
 
+/**
+ * Renders vertical indent guide lines, one per depth level.
+ * Ancestor guides are rendered at low opacity (~20%) to recede;
+ * the current row's own guide (last one) is highlighted at ~50% using brass-dim.
+ */
 function IndentGuides({ depth }: { depth: number }) {
   return (
     <>
-      {Array.from({ length: depth }, (_, i) => (
-        <span
-          key={i}
-          aria-hidden="true"
-          className="pointer-events-none absolute top-0 bottom-0 border-l"
-          style={{
-            left: `${i * 14 + 10}px`,
-            borderColor: "rgba(212, 165, 116, 0.4)", // --brass-dim
-          }}
-        />
-      ))}
+      {Array.from({ length: depth }, (_, i) => {
+        const isCurrentLevel = i === depth - 1;
+        return (
+          <span
+            key={i}
+            aria-hidden="true"
+            className="pointer-events-none absolute top-0 bottom-0 border-l"
+            style={{
+              left: `${i * 14 + 10}px`,
+              borderColor: isCurrentLevel
+                ? "rgba(212, 165, 116, 0.5)" // current row's guide: brass-dim at ~50%
+                : "var(--color-octo-hairline)", // ancestor guides: hairline at ~20% via rgba
+              opacity: isCurrentLevel ? 1 : 0.2,
+            }}
+          />
+        );
+      })}
     </>
   );
 }

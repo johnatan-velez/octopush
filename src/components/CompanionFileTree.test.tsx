@@ -149,4 +149,47 @@ describe("CompanionFileTree", () => {
     await userEvent.click(screen.getByText("my-project"));
     await waitFor(() => expect(screen.queryByText("src")).not.toBeInTheDocument());
   });
+
+  it("renders depth ≥ 4 file rows with text-octo-mute (unless changed)", async () => {
+    // Build a 5-level deep tree: /r/a/b/c/d/deep.txt at depth=5
+    const DEEP_ROOT = "/r";
+    const deepPath = "/r/a/b/c/d/deep.txt";
+    const changedDeepPath = "/r/a/b/c/d/changed.txt";
+
+    mockReadDirectory.mockImplementation((path: string) => {
+      if (path === DEEP_ROOT)             return Promise.resolve([{ name: "a", path: "/r/a", isDir: true }]);
+      if (path === "/r/a")                return Promise.resolve([{ name: "b", path: "/r/a/b", isDir: true }]);
+      if (path === "/r/a/b")              return Promise.resolve([{ name: "c", path: "/r/a/b/c", isDir: true }]);
+      if (path === "/r/a/b/c")            return Promise.resolve([{ name: "d", path: "/r/a/b/c/d", isDir: true }]);
+      if (path === "/r/a/b/c/d")          return Promise.resolve([
+        { name: "deep.txt",    path: deepPath,        isDir: false },
+        { name: "changed.txt", path: changedDeepPath, isDir: false },
+      ]);
+      return Promise.resolve([]);
+    });
+
+    render(
+      <CompanionFileTree
+        rootPath={DEEP_ROOT}
+        rootLabel="deep-project"
+        changedPaths={new Set([changedDeepPath])}
+      />
+    );
+
+    // Expand each level down to depth 5
+    for (const name of ["a", "b", "c", "d"]) {
+      await waitFor(() => expect(screen.getByText(name)).toBeInTheDocument());
+      await userEvent.click(screen.getByText(name));
+    }
+
+    await waitFor(() => expect(screen.getByText("deep.txt")).toBeInTheDocument());
+
+    // deep.txt is at depth 5 (≥4) and NOT changed → should carry text-octo-mute
+    const deepLabel = screen.getByText("deep.txt");
+    expect(deepLabel.className).toContain("text-octo-mute");
+
+    // changed.txt is at depth 5 but IS changed → should carry text-octo-ivory
+    const changedLabel = screen.getByText("changed.txt");
+    expect(changedLabel.className).toContain("text-octo-ivory");
+  });
 });
