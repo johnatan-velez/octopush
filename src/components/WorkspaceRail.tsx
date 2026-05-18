@@ -6,6 +6,8 @@ interface Props {
   activeId: string | null;
   onSelect: (id: string) => void;
   onCustomize: (id: string) => void;
+  /** Called when the user right-clicks a workspace monogram. */
+  onContextMenu?: (workspaceId: string, x: number, y: number) => void;
   onNewWorkspace: () => void;
 }
 
@@ -14,6 +16,7 @@ export function WorkspaceRail({
   activeId,
   onSelect,
   onCustomize,
+  onContextMenu,
   onNewWorkspace,
 }: Props) {
   return (
@@ -28,6 +31,11 @@ export function WorkspaceRail({
           active={ws.id === activeId}
           onSelect={() => onSelect(ws.id)}
           onCustomize={() => onCustomize(ws.id)}
+          onContextMenu={
+            onContextMenu
+              ? (x, y) => onContextMenu(ws.id, x, y)
+              : undefined
+          }
         />
       ))}
       <button
@@ -48,11 +56,13 @@ function MonogramButton({
   active,
   onSelect,
   onCustomize,
+  onContextMenu,
 }: {
   workspace: Workspace;
   active: boolean;
   onSelect: () => void;
   onCustomize: () => void;
+  onContextMenu?: (x: number, y: number) => void;
 }) {
   const mono = resolveMonogram(workspace);
   const tint = TINTS[mono.tint];
@@ -68,7 +78,11 @@ function MonogramButton({
         onClick={onSelect}
         onContextMenu={(e) => {
           e.preventDefault();
-          onCustomize();
+          if (onContextMenu) {
+            onContextMenu(e.clientX, e.clientY);
+          } else {
+            onCustomize();
+          }
         }}
         title={`${workspace.name} (right-click to customize)`}
         aria-label={workspace.name}

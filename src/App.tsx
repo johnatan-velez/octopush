@@ -7,6 +7,9 @@ import { ModeSwitcher } from "./components/ModeSwitcher";
 import { Companion } from "./components/Companion";
 import { WorkspaceCustomizeMenu } from "./components/WorkspaceCustomizeMenu";
 import { WorkspaceCreator } from "./components/WorkspaceCreator";
+import { WorkspaceContextMenu } from "./components/WorkspaceContextMenu";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ChatView } from "./components/ChatView";
 import { ChangesPanel } from "./components/ChangesPanel";
 import { EditorPane } from "./components/EditorPane";
@@ -14,7 +17,7 @@ import { EditorTabs } from "./components/EditorTabs";
 import { useEditorStore } from "./stores/editorStore";
 import { TerminalPane } from "./components/TerminalPane";
 import { CommandPalette } from "./components/CommandPalette";
-import { ToastContainer } from "./components/Toasts";
+import { ToastContainer, pushToast } from "./components/Toasts";
 import { Settings } from "./components/Settings";
 import { useProjectStore } from "./stores/projectStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
@@ -48,6 +51,7 @@ function App() {
     load: loadWorkspaces,
     updateCustomization,
     select: selectWorkspace,
+    remove: removeWorkspace,
   } = useWorkspaceStore();
 
   const [appView, setAppView] = useState<AppView>("project");
@@ -82,11 +86,21 @@ function App() {
     );
   }, [terminalsByWs]);
 
+  // Project store — for switcher
+  const recentProjects = useProjectStore((s) => s.recent);
+  const loadRecentProjects = useProjectStore((s) => s.loadRecent);
+  const openProject = useProjectStore((s) => s.open);
+
   // Overlay/menu state
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [showPalette, setShowPalette] = useState(false);
   const [showCreator, setShowCreator] = useState(false);
   const [customizingWorkspaceId, setCustomizingWorkspaceId] = useState<string | null>(null);
+  const [showProjectSwitcher, setShowProjectSwitcher] = useState(false);
+  // Context menu: which workspace and where
+  const [contextMenu, setContextMenu] = useState<{ workspaceId: string; x: number; y: number } | null>(null);
+  // Pending delete confirmation
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
 
   // Git status + diff (refreshed on workspace change)
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
@@ -406,6 +420,30 @@ function App() {
     [customizingWorkspaceId, updateCustomization],
   );
 
+  // ── Workspace delete handler ──
+  const handleDeleteWorkspace = useCallback(async () => {
+    if (!deletingWorkspaceId || !project) return;
+    const ws = workspaces.find((w) => w.id === deletingWorkspaceId);
+    if (!ws) {
+      setDeletingWorkspaceId(null);
+      return;
+    }
+    const wsName = ws.name;
+    try {
+      await removeWorkspace(ws.id, project.path, ws.branch, ws.worktreePath ?? null);
+      // After removal, auto-select the first remaining workspace if active became null.
+      const remaining = useWorkspaceStore.getState().workspaces;
+      if (!useWorkspaceStore.getState().activeId && remaining.length > 0) {
+        selectWorkspace(remaining[0].id);
+      }
+      pushToast({ level: "success", title: `Deleted workspace "${wsName}"` });
+    } catch (err) {
+      pushToast({ level: "error", title: "Delete failed", body: String(err) });
+    } finally {
+      setDeletingWorkspaceId(null);
+    }
+  }, [deletingWorkspaceId, project, workspaces, removeWorkspace, selectWorkspace]);
+
   // ── Render: pre-project views ──
   if (!project) {
     if (appView === "new-project") {
@@ -434,6 +472,7 @@ function App() {
         activeId={activeWorkspaceId}
         onSelect={(id) => selectWorkspace(id)}
         onCustomize={(id) => setCustomizingWorkspaceId(id)}
+        onContextMenu={(workspaceId, x, y) => setContextMenu({ workspaceId, x, y })}
         onNewWorkspace={() => setShowCreator(true)}
       />
 
@@ -449,6 +488,11 @@ function App() {
                 ModeSwitcher in its own row. */}
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-4">
               <ContextHeader
+                projectName={project.name}
+                onOpenProjectSwitcher={() => {
+                  loadRecentProjects();
+                  setShowProjectSwitcher(true);
+                }}
                 workspaceName={activeWorkspace.name}
                 branch={activeWorkspace.branch}
                 gitStatus={gitStatus}
@@ -629,6 +673,60 @@ function App() {
         initialTab={settingsTab ?? "general"}
         onClose={() => setSettingsTab(null)}
       />
+
+      {/* Workspace context menu (right-click on monogram) */}
+      {contextMenu && (() => {
+        const ws = workspaces.find((w) => w.id === contextMenu.workspaceId);
+        return ws ? (
+          <WorkspaceContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            workspaceName={ws.name}
+            onCustomize={() => {
+              setContextMenu(null);
+              setCustomizingWorkspaceId(contextMenu.workspaceId);
+            }}
+            onDelete={() => {
+              setContextMenu(null);
+              setDeletingWorkspaceId(contextMenu.workspaceId);
+            }}
+            onClose={() => setContextMenu(null)}
+          />
+        ) : null;
+      })()}
+
+      {/* Delete confirmation modal */}
+      {deletingWorkspaceId && (() => {
+        const ws = workspaces.find((w) => w.id === deletingWorkspaceId);
+        return ws ? (
+          <ConfirmDialog
+            title={`Delete "${ws.name}"?`}
+            body={`This will remove the worktree and branch from disk. This cannot be undone.`}
+            destructiveLabel="Delete workspace"
+            onConfirm={handleDeleteWorkspace}
+            onCancel={() => setDeletingWorkspaceId(null)}
+          />
+        ) : null;
+      })()}
+
+      {/* Project switcher sheet — overlaid without unmounting the canvas */}
+      {showProjectSwitcher && project && (
+        <div className="absolute inset-0 z-50">
+          <ProjectSwitcher
+            activeProjectId={project.id}
+            projects={recentProjects}
+            onSelect={(p) => {
+              openProject(p.path);
+              setShowProjectSwitcher(false);
+            }}
+            onAddProject={() => {
+              setShowProjectSwitcher(false);
+              setAppView("new-project");
+            }}
+            onClose={() => setShowProjectSwitcher(false)}
+          />
+        </div>
+      )}
 
       <ToastContainer />
     </div>

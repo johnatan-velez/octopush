@@ -73,7 +73,7 @@ describe("WorkspaceRail", () => {
     expect(onSelect).toHaveBeenCalledWith("b");
   });
 
-  it("calls onCustomize with the workspace id on right-click", () => {
+  it("calls onCustomize with the workspace id on right-click when no onContextMenu provided", () => {
     const workspaces = [makeWorkspace({ id: "a", name: "Alpha" })];
     const onCustomize = vi.fn();
     render(
@@ -87,6 +87,23 @@ describe("WorkspaceRail", () => {
     );
     fireEvent.contextMenu(screen.getByText("A"));
     expect(onCustomize).toHaveBeenCalledWith("a");
+  });
+
+  it("calls onContextMenu with workspace id and coords on right-click when provided", () => {
+    const workspaces = [makeWorkspace({ id: "a", name: "Alpha" })];
+    const onContextMenu = vi.fn();
+    render(
+      <WorkspaceRail
+        workspaces={workspaces}
+        activeId="a"
+        onSelect={vi.fn()}
+        onCustomize={vi.fn()}
+        onContextMenu={onContextMenu}
+        onNewWorkspace={vi.fn()}
+      />,
+    );
+    fireEvent.contextMenu(screen.getByText("A"), { clientX: 50, clientY: 80 });
+    expect(onContextMenu).toHaveBeenCalledWith("a", 50, 80);
   });
 
   it("calls onNewWorkspace when the + button is clicked", () => {
