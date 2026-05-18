@@ -26,6 +26,7 @@ import { useTokenStore } from "./stores/tokenStore";
 import { useTerminalsStore } from "./stores/terminalsStore";
 import { useChatStore } from "./stores/chatStore";
 import { listen } from "@tauri-apps/api/event";
+import { deriveChatTitle, deriveChatMeta } from "./lib/chatTitle";
 import type { ModelWithProvider } from "./lib/types";
 import type { SettingsTab } from "./lib/settingsTabs";
 import { resolveMonogram } from "./lib/monogram";
@@ -410,14 +411,51 @@ function App() {
     };
   }, [gitStatus, lastTurnInputTokens, activeModelMaxContext, liveToolCalls]);
 
+  // Re-derive titles whenever new messages arrive — title comes from the
+  // first user message, meta comes from the relative time of the latest.
+  const allChatMessages = useChatStore((s) => s.messagesByWs);
+  // Tick once per minute so "5M AGO" / "1H AGO" stay current without
+  // requiring a full re-render of the chat itself.
+  const [tickerNow, setTickerNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setTickerNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   const companionHistoryProps = useMemo(
-    () => ({
-      chats: activeWorkspaceId ? chatsPerWorkspace[activeWorkspaceId] ?? [] : [],
+    () => {
+      const rawChats = activeWorkspaceId
+        ? chatsPerWorkspace[activeWorkspaceId] ?? []
+        : [];
+      // The "primary" chat for a workspace uses the workspace id as its
+      // own id — that's the one whose messages are persisted in the DB.
+      // Derive its title + meta from those messages so the history row
+      // becomes self-describing instead of the literal "Conversation · NOW".
+      const chats = rawChats.map((c) => {
+        if (c.id !== activeWorkspaceId) return c;
+        const msgs = allChatMessages[c.id] ?? [];
+        return {
+          ...c,
+          title: deriveChatTitle(msgs),
+          meta: deriveChatMeta(msgs, tickerNow),
+        };
+      });
+      return {
+        chats,
+        activeChatId,
+        onSelectChat: handleSelectChat,
+        onNewChat: handleNewChat,
+      };
+    },
+    [
+      activeWorkspaceId,
+      chatsPerWorkspace,
       activeChatId,
-      onSelectChat: handleSelectChat,
-      onNewChat: handleNewChat,
-    }),
-    [activeWorkspaceId, chatsPerWorkspace, activeChatId, handleSelectChat, handleNewChat],
+      handleSelectChat,
+      handleNewChat,
+      allChatMessages,
+      tickerNow,
+    ],
   );
 
   const openFileInEditor = useEditorStore((s) => s.openFile);
