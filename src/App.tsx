@@ -18,6 +18,7 @@ import { useProjectStore } from "./stores/projectStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useThemeStore } from "./stores/themeStore";
 import { useTokenStore } from "./stores/tokenStore";
+import { useTerminalsStore } from "./stores/terminalsStore";
 import type { SettingsTab } from "./lib/settingsTabs";
 import { resolveMonogram } from "./lib/monogram";
 import { type WorkspaceMode } from "./lib/modes";
@@ -28,13 +29,6 @@ interface ChatRef {
   id: string;
   title: string;
   meta: string;
-}
-
-interface TerminalRef {
-  id: string;
-  label: string;
-  meta: string;
-  sessionId: string | null;
 }
 
 type AppView = "project" | "new-project";
@@ -54,12 +48,22 @@ function App() {
 
   const [appView, setAppView] = useState<AppView>("project");
 
-  // Per-workspace state — modes, chats, terminals.
+  // Per-workspace state — modes, chats.
   const [modePerWorkspace, setModePerWorkspace] = useState<Record<string, WorkspaceMode>>({});
   const [chatsPerWorkspace, setChatsPerWorkspace] = useState<Record<string, ChatRef[]>>({});
-  const [terminalsPerWorkspace, setTerminalsPerWorkspace] = useState<Record<string, TerminalRef[]>>({});
   const [activeChatPerWorkspace, setActiveChatPerWorkspace] = useState<Record<string, string>>({});
-  const [activeTerminalPerWorkspace, setActiveTerminalPerWorkspace] = useState<Record<string, string>>({});
+
+  // Terminal store selectors
+  const terminals = useTerminalsStore((s) =>
+    activeWorkspaceId ? s.getTerminals(activeWorkspaceId) : [],
+  );
+  const activeTerminalId = useTerminalsStore((s) =>
+    activeWorkspaceId ? s.getActiveId(activeWorkspaceId) : null,
+  );
+  const loadTerminals = useTerminalsStore((s) => s.loadTerminals);
+  const createTerminal = useTerminalsStore((s) => s.createTerminal);
+  const markRunning = useTerminalsStore((s) => s.markRunning);
+  const setActiveTerminal = useTerminalsStore((s) => s.setActive);
 
   // Overlay/menu state
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
@@ -77,8 +81,6 @@ function App() {
     layoutVersionRef.current += 1;
     setLayoutVersion(layoutVersionRef.current);
   }, []);
-
-  const creatingTerminalRef = useRef<Set<string>>(new Set());
 
   // ── Theme load ──
   useEffect(() => {
@@ -119,22 +121,14 @@ function App() {
     setActiveChatPerWorkspace((prev) =>
       prev[activeWorkspaceId] ? prev : { ...prev, [activeWorkspaceId]: activeWorkspaceId },
     );
-    setTerminalsPerWorkspace((prev) => {
-      if (prev[activeWorkspaceId]) return prev;
-      const initial: TerminalRef = {
-        id: `term-${activeWorkspaceId}-1`,
-        label: "Main",
-        meta: "READY",
-        sessionId: null,
-      };
-      return { ...prev, [activeWorkspaceId]: [initial] };
-    });
-    setActiveTerminalPerWorkspace((prev) =>
-      prev[activeWorkspaceId]
-        ? prev
-        : { ...prev, [activeWorkspaceId]: `term-${activeWorkspaceId}-1` },
-    );
-  }, [activeWorkspaceId]);
+    // Hydrate terminals from DB; auto-create "Main" if the workspace is empty.
+    loadTerminals(activeWorkspaceId).then(() => {
+      const list = useTerminalsStore.getState().getTerminals(activeWorkspaceId);
+      if (list.length === 0) {
+        createTerminal(activeWorkspaceId, "Main").catch(console.error);
+      }
+    }).catch(console.error);
+  }, [activeWorkspaceId, loadTerminals, createTerminal]);
 
   // ── Refresh git status on workspace change ──
   useEffect(() => {
@@ -165,39 +159,6 @@ function App() {
     [activeWorkspaceId],
   );
 
-  // ── Lazily create a PTY session for the active terminal when entering Run mode ──
-  const ensureTerminal = useCallback(async () => {
-    if (!activeWorkspaceId) return;
-    const list = terminalsPerWorkspace[activeWorkspaceId] ?? [];
-    const activeTid = activeTerminalPerWorkspace[activeWorkspaceId];
-    const term = list.find((t) => t.id === activeTid);
-    if (!term || term.sessionId) return;
-    if (creatingTerminalRef.current.has(term.id)) return;
-    creatingTerminalRef.current.add(term.id);
-    try {
-      const ws = workspaces.find((w) => w.id === activeWorkspaceId);
-      if (!ws || !project) return;
-      const session = await ipc.createSession({
-        name: `${ws.name} - ${term.label}`,
-        projectRoot: ws.worktreePath || project.path,
-      });
-      setTerminalsPerWorkspace((prev) => ({
-        ...prev,
-        [activeWorkspaceId]: (prev[activeWorkspaceId] ?? []).map((t) =>
-          t.id === term.id ? { ...t, sessionId: session.id } : t,
-        ),
-      }));
-    } finally {
-      creatingTerminalRef.current.delete(term.id);
-    }
-  }, [activeWorkspaceId, terminalsPerWorkspace, activeTerminalPerWorkspace, workspaces, project]);
-
-  useEffect(() => {
-    if (activeMode === "run") {
-      ensureTerminal();
-    }
-  }, [activeMode, ensureTerminal]);
-
   // ── Chat / terminal handlers wired to Companion ──
   const handleNewChat = useCallback(() => {
     if (!activeWorkspaceId) return;
@@ -216,27 +177,6 @@ function App() {
     (id: string) => {
       if (!activeWorkspaceId) return;
       setActiveChatPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: id }));
-    },
-    [activeWorkspaceId],
-  );
-
-  const handleNewTerminal = useCallback(() => {
-    if (!activeWorkspaceId) return;
-    const list = terminalsPerWorkspace[activeWorkspaceId] ?? [];
-    const term: TerminalRef = {
-      id: `term-${activeWorkspaceId}-${list.length + 1}`,
-      label: `Terminal ${list.length + 1}`,
-      meta: "READY",
-      sessionId: null,
-    };
-    setTerminalsPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: [...list, term] }));
-    setActiveTerminalPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: term.id }));
-  }, [activeWorkspaceId, terminalsPerWorkspace]);
-
-  const handleSelectTerminal = useCallback(
-    (id: string) => {
-      if (!activeWorkspaceId) return;
-      setActiveTerminalPerWorkspace((p) => ({ ...p, [activeWorkspaceId]: id }));
     },
     [activeWorkspaceId],
   );
@@ -303,20 +243,30 @@ function App() {
         setSettingsTab("usage");
         return;
       }
+
+      // ⌘⌥1..9 → cycle within-workspace terminals (must check altKey to avoid
+      // colliding with ⌘1..9 workspace shortcuts above).
+      if (mod && e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        e.preventDefault();
+        if (activeWorkspaceId) {
+          const list = useTerminalsStore.getState().getTerminals(activeWorkspaceId);
+          const idx = parseInt(e.key, 10) - 1;
+          const target = list[idx];
+          if (target) {
+            setActiveTerminal(activeWorkspaceId, target.id);
+          }
+        }
+        return;
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [workspaces, selectWorkspace, setMode, project, bumpLayout]);
+  }, [workspaces, selectWorkspace, setMode, project, bumpLayout, activeWorkspaceId, setActiveTerminal]);
 
   // ── Computed values ──
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const activeChatId = activeWorkspaceId
     ? activeChatPerWorkspace[activeWorkspaceId] ?? activeWorkspaceId
-    : null;
-  const activeTerminal = activeWorkspaceId
-    ? (terminalsPerWorkspace[activeWorkspaceId] ?? []).find(
-        (t) => t.id === activeTerminalPerWorkspace[activeWorkspaceId],
-      ) ?? null
     : null;
 
   const companionContextProps = useMemo(() => {
@@ -338,24 +288,6 @@ function App() {
       onNewChat: handleNewChat,
     }),
     [activeWorkspaceId, chatsPerWorkspace, activeChatId, handleSelectChat, handleNewChat],
-  );
-
-  const companionTerminalsProps = useMemo(
-    () => ({
-      terminals: activeWorkspaceId ? terminalsPerWorkspace[activeWorkspaceId] ?? [] : [],
-      activeTerminalId: activeWorkspaceId
-        ? activeTerminalPerWorkspace[activeWorkspaceId] ?? null
-        : null,
-      onSelectTerminal: handleSelectTerminal,
-      onNewTerminal: handleNewTerminal,
-    }),
-    [
-      activeWorkspaceId,
-      terminalsPerWorkspace,
-      activeTerminalPerWorkspace,
-      handleSelectTerminal,
-      handleNewTerminal,
-    ],
   );
 
   const companionChangedProps = useMemo(
@@ -458,15 +390,30 @@ function App() {
                         visibility: activeMode === "run" ? "visible" : "hidden",
                       }}
                     >
-                      {activeTerminal?.sessionId ? (
-                        <TerminalPane
-                          sessionId={activeTerminal.sessionId}
-                          visible={activeMode === "run"}
-                          layoutVersion={layoutVersion}
-                        />
-                      ) : (
-                        <RunEmptyState onStart={ensureTerminal} />
-                      )}
+                      {/* Mount-once panes — one per terminal in the store.
+                          Visibility toggled via display:block/none so xterm
+                          never unmounts and scrollback is always preserved. */}
+                      <div className="relative h-full w-full">
+                        {terminals.map((t) => (
+                          <TerminalPane
+                            key={t.id}
+                            terminalId={t.id}
+                            workspacePath={activeWorkspace.worktreePath || project.path}
+                            label={t.label}
+                            visible={activeMode === "run" && t.id === activeTerminalId}
+                            layoutVersion={layoutVersion}
+                            onSpawn={() => markRunning(activeWorkspaceId!, t.id, true)}
+                            onExit={() => markRunning(activeWorkspaceId!, t.id, false)}
+                          />
+                        ))}
+                        {terminals.length === 0 && (
+                          <RunEmptyState
+                            onStart={() => {
+                              createTerminal(activeWorkspaceId!, "Main").catch(console.error);
+                            }}
+                          />
+                        )}
+                      </div>
                     </div>
 
                     <div
@@ -489,9 +436,9 @@ function App() {
 
               <Companion
                 mode={activeMode}
+                workspaceId={activeWorkspaceId}
                 contextProps={companionContextProps}
                 historyProps={companionHistoryProps}
-                terminalsProps={companionTerminalsProps}
                 changedProps={companionChangedProps}
               />
             </div>

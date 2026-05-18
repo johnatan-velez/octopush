@@ -1,7 +1,7 @@
 import type { WorkspaceMode } from "../lib/modes";
 import { CompanionContext } from "./CompanionContext";
 import { CompanionHistory, type CompanionHistoryChat } from "./CompanionHistory";
-import { CompanionTerminals, type CompanionTerminal } from "./CompanionTerminals";
+import { CompanionTerminals } from "./CompanionTerminals";
 import { CompanionChanged } from "./CompanionChanged";
 import type { FileChange } from "../lib/types";
 
@@ -19,30 +19,23 @@ interface HistoryProps {
   onNewChat: () => void;
 }
 
-interface TerminalsProps {
-  terminals: CompanionTerminal[];
-  activeTerminalId: string | null;
-  onSelectTerminal: (id: string) => void;
-  onNewTerminal: () => void;
-}
-
 interface ChangedProps {
   changedFiles: FileChange[];
 }
 
 interface Props {
   mode: WorkspaceMode;
+  workspaceId: string | null;
   contextProps: ContextProps;
   historyProps: HistoryProps;
-  terminalsProps: TerminalsProps;
   changedProps: ChangedProps;
 }
 
 export function Companion({
   mode,
+  workspaceId,
   contextProps,
   historyProps,
-  terminalsProps,
   changedProps,
 }: Props) {
   return (
@@ -56,7 +49,9 @@ export function Companion({
           <CompanionHistory {...historyProps} />
         </>
       )}
-      {mode === "run" && <CompanionTerminals {...terminalsProps} />}
+      {mode === "run" && workspaceId && (
+        <CompanionTerminals workspaceId={workspaceId} />
+      )}
       {mode === "review" && <CompanionChanged {...changedProps} />}
     </aside>
   );

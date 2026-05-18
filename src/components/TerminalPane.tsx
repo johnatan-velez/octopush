@@ -7,13 +7,30 @@ import { ipc } from "../lib/ipc";
 import type { PtyDataEvent, PtyExitEvent } from "../lib/types";
 
 interface Props {
-  sessionId: string;
+  /** Stable terminal record id — used as React key; never changes for this tab. */
+  terminalId: string;
+  /** Filesystem path of the workspace root, used when spawning the PTY. */
+  workspacePath: string;
+  /** Human label shown in the session name. */
+  label: string;
   visible: boolean;
   /** Incremented by parent when layout changes (sidebar/tokens/split toggle). */
   layoutVersion?: number;
+  /** Called once the PTY session has been successfully spawned. */
+  onSpawn?: () => void;
+  /** Called when the PTY process exits. */
+  onExit?: () => void;
 }
 
-export function TerminalPane({ sessionId, visible, layoutVersion }: Props) {
+export function TerminalPane({
+  terminalId,
+  workspacePath,
+  label,
+  visible,
+  layoutVersion,
+  onSpawn,
+  onExit,
+}: Props) {
   // Outer wrapper — stable size, observed by ResizeObserver.
   const wrapperRef = useRef<HTMLDivElement>(null);
   // Inner container — where xterm attaches its DOM.
@@ -22,11 +39,19 @@ export function TerminalPane({ sessionId, visible, layoutVersion }: Props) {
   const termRef = useRef<Terminal | null>(null);
   // Track last known size to avoid no-op resize IPC calls.
   const lastSizeRef = useRef<{ rows: number; cols: number }>({ rows: 0, cols: 0 });
+  // The PTY session id returned by ipc.createSession (internal, not the store id).
+  const ptySessionIdRef = useRef<string | null>(null);
+  // Stable ref wrappers so effect cleanup sees up-to-date callbacks.
+  const onSpawnRef = useRef(onSpawn);
+  const onExitRef = useRef(onExit);
+  onSpawnRef.current = onSpawn;
+  onExitRef.current = onExit;
 
   const syncSize = useCallback(() => {
     const fit = fitRef.current;
     const term = termRef.current;
-    if (!fit || !term) return;
+    const ptyId = ptySessionIdRef.current;
+    if (!fit || !term || !ptyId) return;
     // Don't fit if the container is hidden (0×0).
     const wrapper = wrapperRef.current;
     if (!wrapper || wrapper.clientWidth === 0 || wrapper.clientHeight === 0) return;
@@ -40,11 +65,11 @@ export function TerminalPane({ sessionId, visible, layoutVersion }: Props) {
     // Only send resize to PTY if dimensions actually changed.
     if (rows !== last.rows || cols !== last.cols) {
       lastSizeRef.current = { rows, cols };
-      ipc.resizeSession(sessionId, rows, cols).catch(() => {});
+      ipc.resizeSession(ptyId, rows, cols).catch(() => {});
     }
-  }, [sessionId]);
+  }, []);
 
-  // Create terminal once on mount.
+  // Create xterm + spawn PTY once on mount (keyed by terminalId).
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -95,7 +120,8 @@ export function TerminalPane({ sessionId, visible, layoutVersion }: Props) {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         const w = wrapperRef.current;
-        if (w && w.clientWidth > 0 && w.clientHeight > 0) {
+        const ptyId = ptySessionIdRef.current;
+        if (w && w.clientWidth > 0 && w.clientHeight > 0 && ptyId) {
           try {
             fit.fit();
           } catch {
@@ -105,7 +131,7 @@ export function TerminalPane({ sessionId, visible, layoutVersion }: Props) {
           const last = lastSizeRef.current;
           if (rows !== last.rows || cols !== last.cols) {
             lastSizeRef.current = { rows, cols };
-            ipc.resizeSession(sessionId, rows, cols).catch(() => {});
+            ipc.resizeSession(ptyId, rows, cols).catch(() => {});
           }
         }
       }, 100); // 100ms debounce
@@ -114,41 +140,68 @@ export function TerminalPane({ sessionId, visible, layoutVersion }: Props) {
       ro.observe(wrapperRef.current);
     }
 
-    // PTY → term
+    // PTY → term (listens on the global event bus; filters by session id).
     let unlistenData: UnlistenFn | undefined;
     let unlistenExit: UnlistenFn | undefined;
 
     listen<PtyDataEvent>("pty://data", (ev) => {
-      if (ev.payload.sessionId !== sessionId) return;
+      if (ev.payload.sessionId !== ptySessionIdRef.current) return;
       term.write(new Uint8Array(ev.payload.bytes));
     }).then((u) => {
       unlistenData = u;
     });
 
     listen<PtyExitEvent>("pty://exit", (ev) => {
-      if (ev.payload.sessionId !== sessionId) return;
+      if (ev.payload.sessionId !== ptySessionIdRef.current) return;
       term.writeln("\r\n\x1b[2;37m[session exited]\x1b[0m");
+      onExitRef.current?.();
     }).then((u) => {
       unlistenExit = u;
     });
 
     // term → PTY
     const dataDisp = term.onData((data) => {
-      ipc.writeTextToSession(sessionId, data).catch((err) => {
+      const ptyId = ptySessionIdRef.current;
+      if (!ptyId) return;
+      ipc.writeTextToSession(ptyId, data).catch((err) => {
         console.error("write to pty failed", err);
       });
     });
 
-    // Only sync size on explicit xterm resize events (not on every write).
+    // Propagate xterm resize events to PTY (handles manual terminal resize).
     const resizeDisp = term.onResize(({ rows, cols }) => {
+      const ptyId = ptySessionIdRef.current;
+      if (!ptyId) return;
       const last = lastSizeRef.current;
       if (rows !== last.rows || cols !== last.cols) {
         lastSizeRef.current = { rows, cols };
-        ipc.resizeSession(sessionId, rows, cols).catch(() => {});
+        ipc.resizeSession(ptyId, rows, cols).catch(() => {});
       }
     });
 
+    // Spawn the PTY session. We do this here so TerminalPane owns the full
+    // lifecycle; the xterm instance is already attached to the DOM so output
+    // arrives immediately without a separate mount-then-spawn race.
+    let cancelled = false;
+    ipc
+      .createSession({ name: label, projectRoot: workspacePath })
+      .then((session) => {
+        if (cancelled) return;
+        ptySessionIdRef.current = session.id;
+        onSpawnRef.current?.();
+        // Fit now that the PTY is alive.
+        requestAnimationFrame(() => {
+          if (!cancelled) syncSize();
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          term.writeln(`\r\n\x1b[31m[failed to spawn PTY: ${String(err)}]\x1b[0m`);
+        }
+      });
+
     return () => {
+      cancelled = true;
       if (resizeTimer) clearTimeout(resizeTimer);
       dataDisp.dispose();
       resizeDisp.dispose();
@@ -158,8 +211,17 @@ export function TerminalPane({ sessionId, visible, layoutVersion }: Props) {
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      // Kill the PTY if we have one.
+      const ptyId = ptySessionIdRef.current;
+      ptySessionIdRef.current = null;
+      if (ptyId) {
+        ipc.killSession(ptyId).catch(() => {});
+      }
     };
-  }, [sessionId]);
+    // terminalId is the React key — changes cause a full remount, not a re-run.
+    // workspacePath + label intentionally not in deps: only used at spawn time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminalId]);
 
   // Refit + focus when becoming visible.
   useEffect(() => {

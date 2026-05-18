@@ -1,0 +1,252 @@
+/**
+ * Tests for TerminalPane.
+ *
+ * xterm.js requires a browser canvas environment that JSDOM does not provide,
+ * so we mock the @xterm/xterm and @xterm/addon-fit packages entirely.
+ * This lets us verify:
+ *   - onSpawn fires after the PTY session is created.
+ *   - onExit fires when the pty://exit event matches this terminal's session.
+ *   - The wrapper div has display:none when visible===false and display:block when true.
+ *
+ * NOTE: xterm DOM-rendering behaviour (canvas, scroll, font) is skipped here
+ * because it requires a real browser environment. Verify those in Playwright/e2e.
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, act } from "@testing-library/react";
+
+// ─── JSDOM shims ──────────────────────────────────────────────────
+// ResizeObserver is not available in JSDOM.
+class ResizeObserverMock {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+Object.defineProperty(globalThis, "ResizeObserver", {
+  writable: true,
+  configurable: true,
+  value: ResizeObserverMock,
+});
+
+// requestAnimationFrame is present in JSDOM but behaves differently — stub it
+// so frame callbacks run immediately (avoids timing issues in tests).
+Object.defineProperty(globalThis, "requestAnimationFrame", {
+  writable: true,
+  value: (cb: FrameRequestCallback) => { cb(0); return 0; },
+});
+
+// ─── Mock @xterm/xterm ────────────────────────────────────────────
+// NOTE: Must use class (constructor), not arrow function, because the component
+// uses `new Terminal(...)` which requires a constructable function.
+
+vi.mock("@xterm/xterm", () => {
+  class Terminal {
+    loadAddon = vi.fn();
+    open = vi.fn();
+    onData = vi.fn(() => ({ dispose: vi.fn() }));
+    onResize = vi.fn(() => ({ dispose: vi.fn() }));
+    writeln = vi.fn();
+    write = vi.fn();
+    focus = vi.fn();
+    dispose = vi.fn();
+  }
+  return { Terminal };
+});
+
+vi.mock("@xterm/addon-fit", () => {
+  class FitAddon {
+    fit = vi.fn();
+    dispose = vi.fn();
+  }
+  return { FitAddon };
+});
+
+vi.mock("@xterm/addon-web-links", () => {
+  class WebLinksAddon {}
+  return { WebLinksAddon };
+});
+
+// ─── Mock Tauri event listener ────────────────────────────────────
+
+type EventCallback<T> = (ev: { payload: T }) => void;
+const eventListeners: Record<string, EventCallback<unknown>[]> = {};
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(
+    (event: string, cb: EventCallback<unknown>) =>
+      new Promise<() => void>((resolve) => {
+        if (!eventListeners[event]) eventListeners[event] = [];
+        eventListeners[event].push(cb);
+        resolve(() => {
+          eventListeners[event] = eventListeners[event].filter((fn) => fn !== cb);
+        });
+      }),
+  ),
+}));
+
+function emitEvent<T>(event: string, payload: T) {
+  (eventListeners[event] ?? []).forEach((cb) => cb({ payload }));
+}
+
+// ─── Mock IPC ─────────────────────────────────────────────────────
+
+const mockSession = { id: "pty-session-123" };
+const mockIpc = {
+  createSession: vi.fn(() => Promise.resolve(mockSession)),
+  killSession: vi.fn(() => Promise.resolve()),
+  resizeSession: vi.fn(() => Promise.resolve()),
+  writeTextToSession: vi.fn(() => Promise.resolve()),
+};
+
+vi.mock("../lib/ipc", () => ({ ipc: mockIpc }));
+
+// ─── Import component after mocks ─────────────────────────────────
+
+const { TerminalPane } = await import("./TerminalPane");
+
+// ─── Tests ────────────────────────────────────────────────────────
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Reset event listeners between tests.
+  Object.keys(eventListeners).forEach((k) => delete eventListeners[k]);
+  mockIpc.createSession.mockResolvedValue(mockSession);
+});
+
+describe("TerminalPane — spawn callback", () => {
+  it("calls onSpawn after createSession resolves", async () => {
+    const onSpawn = vi.fn();
+    render(
+      <TerminalPane
+        terminalId="t1"
+        workspacePath="/path/to/ws"
+        label="Main"
+        visible={true}
+        onSpawn={onSpawn}
+      />,
+    );
+
+    // Wait for the createSession promise to resolve.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockIpc.createSession).toHaveBeenCalledWith({
+      name: "Main",
+      projectRoot: "/path/to/ws",
+    });
+    expect(onSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onSpawn if the component unmounts before spawn resolves", async () => {
+    let resolveCreate!: (v: typeof mockSession) => void;
+    mockIpc.createSession.mockReturnValueOnce(
+      new Promise<typeof mockSession>((res) => {
+        resolveCreate = res;
+      }),
+    );
+
+    const onSpawn = vi.fn();
+    const { unmount } = render(
+      <TerminalPane
+        terminalId="t-unmount"
+        workspacePath="/ws"
+        label="Temp"
+        visible={true}
+        onSpawn={onSpawn}
+      />,
+    );
+
+    // Unmount before spawn resolves.
+    unmount();
+
+    await act(async () => {
+      resolveCreate(mockSession);
+      await Promise.resolve();
+    });
+
+    expect(onSpawn).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalPane — exit callback", () => {
+  it("calls onExit when pty://exit event fires for this session", async () => {
+    const onExit = vi.fn();
+    render(
+      <TerminalPane
+        terminalId="t-exit"
+        workspacePath="/ws"
+        label="Main"
+        visible={true}
+        onExit={onExit}
+      />,
+    );
+
+    // Let the event listener attach and spawn resolve.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => {
+      emitEvent("pty://exit", { sessionId: mockSession.id, code: 0 });
+    });
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores pty://exit events for other sessions", async () => {
+    const onExit = vi.fn();
+    render(
+      <TerminalPane
+        terminalId="t-exit-other"
+        workspacePath="/ws"
+        label="Main"
+        visible={true}
+        onExit={onExit}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => {
+      emitEvent("pty://exit", { sessionId: "different-session-id", code: 0 });
+    });
+
+    expect(onExit).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalPane — visibility", () => {
+  it("wrapper has display:none when visible is false", async () => {
+    const { container } = render(
+      <TerminalPane
+        terminalId="t-hidden"
+        workspacePath="/ws"
+        label="Main"
+        visible={false}
+      />,
+    );
+    const wrapper = container.firstChild as HTMLElement;
+    expect(wrapper.style.display).toBe("none");
+  });
+
+  it("wrapper has display:block when visible is true", async () => {
+    const { container } = render(
+      <TerminalPane
+        terminalId="t-visible"
+        workspacePath="/ws"
+        label="Main"
+        visible={true}
+      />,
+    );
+    const wrapper = container.firstChild as HTMLElement;
+    expect(wrapper.style.display).toBe("block");
+  });
+});
+
+// NOTE: xterm DOM rendering (canvas output, font metrics, scroll position) is
+// not tested here — JSDOM lacks the CanvasRenderingContext2D needed by xterm.
+// Cover those interactions in Playwright end-to-end tests.
