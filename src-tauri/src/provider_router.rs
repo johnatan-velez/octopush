@@ -49,6 +49,14 @@ pub struct ModelInfo {
     pub input_cost_per_m: f64,
     /// Cost per million output tokens (USD).
     pub output_cost_per_m: f64,
+    /// Cost per million cache-read tokens (USD). 0 = not applicable.
+    /// Anthropic: 10% of input cost. Others: 0.
+    #[serde(default)]
+    pub cache_read_cost_per_m: f64,
+    /// Cost per million cache-creation tokens (USD). 0 = not applicable.
+    /// Anthropic: 125% of input cost. Others: 0.
+    #[serde(default)]
+    pub cache_creation_cost_per_m: f64,
     pub max_context: u64,
     #[serde(default)]
     pub supports_vision: bool,
@@ -160,6 +168,22 @@ impl ProviderRouter {
                 }
             }
 
+            // Migration: backfill `cache_read_cost_per_m` / `cache_creation_cost_per_m`
+            // for Anthropic models that were persisted before these fields were added.
+            // A value of 0.0 on an Anthropic model means the field is missing — copy
+            // it from the builtin definition so cost calculations are correct.
+            for p in &mut list {
+                let Some(def) = defaults.get(&p.name) else { continue };
+                for m in &mut p.models {
+                    if m.cache_read_cost_per_m == 0.0 && m.cache_creation_cost_per_m == 0.0 {
+                        if let Some(def_model) = def.models.iter().find(|x| x.id == m.id) {
+                            m.cache_read_cost_per_m = def_model.cache_read_cost_per_m;
+                            m.cache_creation_cost_per_m = def_model.cache_creation_cost_per_m;
+                        }
+                    }
+                }
+            }
+
             for (name, def) in &defaults {
                 if !list.iter().any(|p| p.name == *name) {
                     list.push(def.clone());
@@ -180,6 +204,12 @@ impl ProviderRouter {
             defaults
         };
         Ok(Self { providers })
+    }
+
+    /// Construct a router directly from a map — for tests only.
+    #[cfg(test)]
+    pub(crate) fn from_map(providers: HashMap<String, ProviderConfig>) -> Self {
+        Self { providers }
     }
 
     pub fn list_providers(&self) -> Vec<&ProviderConfig> {
@@ -254,7 +284,7 @@ fn config_path() -> PathBuf {
         .join("providers.json")
 }
 
-fn builtin_providers() -> HashMap<String, ProviderConfig> {
+pub(crate) fn builtin_providers() -> HashMap<String, ProviderConfig> {
     let mut map = HashMap::new();
 
     map.insert(
@@ -269,6 +299,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "Claude Opus 4.6".into(),
                     input_cost_per_m: 15.0,
                     output_cost_per_m: 75.0,
+                    cache_read_cost_per_m: 15.0 * 0.10,    // $1.50 / M
+                    cache_creation_cost_per_m: 15.0 * 1.25, // $18.75 / M
                     max_context: 1_000_000,
                     supports_vision: true,
                     supports_tools: true,
@@ -279,6 +311,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "Claude Sonnet 4.6".into(),
                     input_cost_per_m: 3.0,
                     output_cost_per_m: 15.0,
+                    cache_read_cost_per_m: 3.0 * 0.10,    // $0.30 / M
+                    cache_creation_cost_per_m: 3.0 * 1.25, // $3.75 / M
                     max_context: 200_000,
                     supports_vision: true,
                     supports_tools: true,
@@ -289,6 +323,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "Claude Haiku 4.5".into(),
                     input_cost_per_m: 0.80,
                     output_cost_per_m: 4.0,
+                    cache_read_cost_per_m: 0.80 * 0.10,    // $0.08 / M
+                    cache_creation_cost_per_m: 0.80 * 1.25, // $1.00 / M
                     max_context: 200_000,
                     supports_vision: true,
                     supports_tools: true,
@@ -317,6 +353,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "GPT-4o".into(),
                     input_cost_per_m: 2.50,
                     output_cost_per_m: 10.0,
+                    cache_read_cost_per_m: 0.0,
+                    cache_creation_cost_per_m: 0.0,
                     max_context: 128_000,
                     supports_vision: true,
                     supports_tools: true,
@@ -327,6 +365,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "GPT-4o mini".into(),
                     input_cost_per_m: 0.15,
                     output_cost_per_m: 0.60,
+                    cache_read_cost_per_m: 0.0,
+                    cache_creation_cost_per_m: 0.0,
                     max_context: 128_000,
                     supports_vision: true,
                     supports_tools: true,
@@ -352,6 +392,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "DeepSeek Chat".into(),
                     input_cost_per_m: 0.14,
                     output_cost_per_m: 0.28,
+                    cache_read_cost_per_m: 0.0,
+                    cache_creation_cost_per_m: 0.0,
                     max_context: 64_000,
                     supports_vision: false,
                     supports_tools: true,
@@ -362,6 +404,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "DeepSeek Reasoner".into(),
                     input_cost_per_m: 0.55,
                     output_cost_per_m: 2.19,
+                    cache_read_cost_per_m: 0.0,
+                    cache_creation_cost_per_m: 0.0,
                     max_context: 64_000,
                     supports_vision: false,
                     supports_tools: false,
@@ -387,6 +431,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "Llama 3.3".into(),
                     input_cost_per_m: 0.0,
                     output_cost_per_m: 0.0,
+                    cache_read_cost_per_m: 0.0,
+                    cache_creation_cost_per_m: 0.0,
                     max_context: 128_000,
                     supports_vision: false,
                     supports_tools: true,
@@ -397,6 +443,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "Qwen 2.5 Coder".into(),
                     input_cost_per_m: 0.0,
                     output_cost_per_m: 0.0,
+                    cache_read_cost_per_m: 0.0,
+                    cache_creation_cost_per_m: 0.0,
                     max_context: 128_000,
                     supports_vision: false,
                     supports_tools: true,
@@ -407,6 +455,8 @@ fn builtin_providers() -> HashMap<String, ProviderConfig> {
                     display_name: "DeepSeek R1".into(),
                     input_cost_per_m: 0.0,
                     output_cost_per_m: 0.0,
+                    cache_read_cost_per_m: 0.0,
+                    cache_creation_cost_per_m: 0.0,
                     max_context: 64_000,
                     supports_vision: false,
                     supports_tools: false,

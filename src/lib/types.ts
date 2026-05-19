@@ -214,10 +214,29 @@ export interface AppSettings {
   providerBaseUrls: Record<string, string>;
   /** Per-host git credentials, keyed by hostname (e.g. "github.com"). */
   gitCredentials: Record<string, GitCredentialEntry>;
+  /** ISO-8601 timestamp of the last successful pricing refresh from LiteLLM. */
+  lastPricingRefresh?: string | null;
   /** @deprecated use providerKeys.anthropic */
   anthropicApiKey?: string | null;
   /** @deprecated use providerKeys.openai */
   openaiApiKey?: string | null;
+}
+
+// ─── Usage breakdown (cloud vs local) ─────────────────────────────
+
+export interface UsageBreakdown {
+  cloudCostUsd: number;
+  cloudTokens: number;
+  localTokens: number;
+  estimatedLocalSavingsUsd: number;
+}
+
+// ─── Pricing refresh ───────────────────────────────────────────────
+
+export interface RefreshPricingResult {
+  modelsUpdated: number;
+  modelsTotal: number;
+  fetchedAt: string;
 }
 
 // ─── Theme ────────────────────────────────────────────────────────
@@ -261,6 +280,10 @@ export interface ModelInfo {
   displayName: string;
   inputCostPerM: number;
   outputCostPerM: number;
+  /** Cost per million cache-read tokens. 0 = not applicable. */
+  cacheReadCostPerM: number;
+  /** Cost per million cache-creation tokens. 0 = not applicable. */
+  cacheCreationCostPerM: number;
   maxContext: number;
   supportsVision: boolean;
   supportsTools: boolean;

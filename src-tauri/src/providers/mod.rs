@@ -78,6 +78,12 @@ pub struct LlmResponse {
     pub stop_reason: LlmStopReason,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Tokens that were served from the prompt cache (cheaper than regular input).
+    #[allow(dead_code)]
+    pub cache_read_tokens: u64,
+    /// Tokens written into the prompt cache this turn (slightly more expensive than regular input).
+    #[allow(dead_code)]
+    pub cache_creation_tokens: u64,
 }
 
 #[derive(Debug, PartialEq, Clone)]

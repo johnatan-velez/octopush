@@ -787,6 +787,71 @@ impl Db {
         Ok((cost, tokens))
     }
 
+    /// Return a breakdown of cloud vs local token usage within a time range.
+    ///
+    /// Local models (provider.local == true) have $0 cost but their volume is
+    /// interesting as a "we saved X vs running cloud" metric. We estimate savings
+    /// by comparing local token count against the cheapest cloud model price
+    /// (currently DeepSeek Chat at $0.14/M input + $0.28/M output — we use a
+    /// blended $0.21/M average as a simple conservative estimate).
+    pub fn usage_breakdown(
+        &self,
+        router: &crate::provider_router::ProviderRouter,
+        start_iso: &str,
+        end_iso: &str,
+    ) -> AppResult<UsageBreakdown> {
+        // Cheapest cloud equivalent used for local savings estimate.
+        // DeepSeek Chat: $0.14/M input, $0.28/M output → blended ~$0.21/M.
+        const CHEAPEST_CLOUD_PER_M: f64 = 0.21;
+
+        // Per-model aggregates within the time range.
+        let mut stmt = self.conn.prepare(
+            "SELECT model,
+                    COALESCE(SUM(cost_usd), 0),
+                    COALESCE(SUM(input_tokens + output_tokens), 0)
+             FROM token_events
+             WHERE timestamp >= ?1 AND timestamp <= ?2
+             GROUP BY model",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![start_iso, end_iso], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, f64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })?;
+
+        let mut cloud_cost_usd = 0.0_f64;
+        let mut cloud_tokens: i64 = 0;
+        let mut local_tokens: i64 = 0;
+
+        for row in rows {
+            let (model, cost, tokens) = row?;
+            // Find the provider for this model. Unknown models are treated as cloud.
+            let is_local = router
+                .find_model(&model)
+                .map(|(p, _)| p.local)
+                .unwrap_or(false);
+
+            if is_local {
+                local_tokens += tokens;
+            } else {
+                cloud_cost_usd += cost;
+                cloud_tokens += tokens;
+            }
+        }
+
+        let estimated_local_savings_usd =
+            local_tokens as f64 * CHEAPEST_CLOUD_PER_M / 1_000_000.0;
+
+        Ok(UsageBreakdown {
+            cloud_cost_usd,
+            cloud_tokens,
+            local_tokens,
+            estimated_local_savings_usd,
+        })
+    }
+
     /// Export token events in the given time range as CSV.
     pub fn export_token_events_csv(
         &self,
@@ -888,6 +953,16 @@ pub struct BudgetRow {
     pub period: String,
     pub limit_usd: f64,
     pub updated_at: String,
+}
+
+/// Cloud vs. local usage split for the Usage dashboard.
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBreakdown {
+    pub cloud_cost_usd: f64,
+    pub cloud_tokens: i64,
+    pub local_tokens: i64,
+    pub estimated_local_savings_usd: f64,
 }
 
 fn row_to_session(row: &rusqlite::Row) -> AppResult<Session> {

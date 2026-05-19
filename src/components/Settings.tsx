@@ -12,7 +12,7 @@ import {
   SETTINGS_TAB_LABELS,
   type SettingsTab,
 } from "../lib/settingsTabs";
-import type { Budget, BudgetPeriod, BudgetScope, ProviderConfig } from "../lib/types";
+import type { Budget, BudgetPeriod, BudgetScope, ProviderConfig, UsageBreakdown } from "../lib/types";
 
 interface Props {
   open: boolean;
@@ -196,12 +196,16 @@ function ModelsPane() {
   const [shown, setShown] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [refreshingPricing, setRefreshingPricing] = useState(false);
+  const [lastPricingRefresh, setLastPricingRefresh] = useState<string | null>(null);
+  const [pricingMessage, setPricingMessage] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([ipc.listProviders(), ipc.getSettings()]).then(([provs, settings]) => {
       setProviders(provs);
       setKeys(settings.providerKeys ?? {});
       setBaseUrls(settings.providerBaseUrls ?? {});
+      setLastPricingRefresh(settings.lastPricingRefresh ?? null);
     });
   }, []);
 
@@ -221,6 +225,37 @@ function ModelsPane() {
     setTimeout(() => setSaved(false), 2000);
   }
 
+  async function handleRefreshPricing() {
+    setRefreshingPricing(true);
+    setPricingMessage(null);
+    try {
+      const result = await ipc.refreshPricing();
+      setLastPricingRefresh(result.fetchedAt);
+      setPricingMessage(`Updated pricing for ${result.modelsUpdated} of ${result.modelsTotal} models`);
+      // Reload providers to reflect new prices in UI.
+      const provs = await ipc.listProviders();
+      setProviders(provs);
+    } catch (e) {
+      setPricingMessage(`Refresh failed: ${String(e)}`);
+    } finally {
+      setRefreshingPricing(false);
+      setTimeout(() => setPricingMessage(null), 5000);
+    }
+  }
+
+  function formatLastRefresh(iso: string | null): string {
+    if (!iso) return "Never refreshed";
+    const d = new Date(iso);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffH = Math.floor(diffMs / 3_600_000);
+    const diffMin = Math.floor(diffMs / 60_000);
+    if (diffH >= 24) return `Last refreshed ${Math.floor(diffH / 24)}d ago`;
+    if (diffH >= 1) return `Last refreshed ${diffH}h ago`;
+    if (diffMin >= 1) return `Last refreshed ${diffMin}m ago`;
+    return "Last refreshed just now";
+  }
+
   return (
     <>
       <PaneHeader
@@ -228,6 +263,27 @@ function ModelsPane() {
         title="Choose where your tokens go."
         subtitle="API keys live on this machine in ~/.octopush/settings.json. They never leave the device except in requests to the providers themselves."
       />
+
+      {/* Pricing refresh row */}
+      <div className="mb-6 flex max-w-[680px] items-center gap-3 rounded-md border border-octo-hairline bg-octo-panel px-4 py-3">
+        <div className="flex-1">
+          <div className="font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute">
+            Model Pricing
+          </div>
+          <div className="mt-0.5 font-mono text-[10px] text-octo-sage">
+            {pricingMessage ?? formatLastRefresh(lastPricingRefresh)}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleRefreshPricing}
+          disabled={refreshingPricing}
+          className="rounded-md px-3 py-1.5 font-serif italic text-[12px] text-octo-brass transition disabled:opacity-50"
+          style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+        >
+          {refreshingPricing ? "Refreshing…" : "Refresh pricing"}
+        </button>
+      </div>
 
       <div className="max-w-[680px] space-y-7">
         {providers.map((p) => (
@@ -391,6 +447,7 @@ function AppearancePane() {
 function UsagePane() {
   const { report, refresh } = useTokenStore();
   const { budgets, spend, loadAll: loadBudgets, refreshAllSpend } = useBudgetsStore();
+  const [breakdown, setBreakdown] = useState<UsageBreakdown | null>(null);
 
   useEffect(() => {
     refresh();
@@ -401,6 +458,22 @@ function UsagePane() {
   useEffect(() => {
     loadBudgets();
   }, [loadBudgets]);
+
+  // Fetch cloud/local breakdown for the rolling 30-day window.
+  useEffect(() => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    const startIso = start.toISOString();
+    const endIso = end.toISOString();
+    ipc.getUsageBreakdown(startIso, endIso)
+      .then(setBreakdown)
+      .catch(() => {}); // non-fatal: breakdown cards stay hidden
+    const id = setInterval(() => {
+      ipc.getUsageBreakdown(startIso, endIso).then(setBreakdown).catch(() => {});
+    }, POLL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   // CSV export state
   const [exportStart, setExportStart] = useState(() => {
@@ -477,6 +550,14 @@ function UsagePane() {
         <Stat label="Projected / day" value={`$${report.projectedDailyCost.toFixed(2)}`} />
         <Stat label="Cache hit" value={cacheHitPct} />
       </div>
+
+      {breakdown && (
+        <div className="mt-3 grid max-w-[800px] grid-cols-3 gap-3">
+          <Stat label="Cloud spend · 30d" value={`$${breakdown.cloudCostUsd.toFixed(2)}`} />
+          <Stat label="Local volume · 30d" value={formatTokens(breakdown.localTokens)} />
+          <Stat label="Est. savings · 30d" value={`≈ $${breakdown.estimatedLocalSavingsUsd.toFixed(2)}`} />
+        </div>
+      )}
 
       {report.budgetRemaining != null && (
         <div className="mt-8 max-w-[800px]">

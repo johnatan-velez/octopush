@@ -467,8 +467,8 @@ impl ChatEngine {
                     timestamp: String::new(),
                     input_tokens: response.input_tokens,
                     output_tokens: response.output_tokens,
-                    cache_read_tokens: 0,
-                    cache_creation_tokens: 0,
+                    cache_read_tokens: response.cache_read_tokens,
+                    cache_creation_tokens: response.cache_creation_tokens,
                     model: request.model.clone(),
                     cost_usd: 0.0,
                 }) {

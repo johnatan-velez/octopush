@@ -323,6 +323,211 @@ mod terminal_tests {
     }
 }
 
+/// Tests for Feature 5 v2 — cache token tracking and LiteLLM pricing parse.
+#[cfg(test)]
+mod budgets_v2_tests {
+    use crate::db::Db;
+    use crate::provider_router::{builtin_providers, ProviderRouter};
+    use crate::token_engine::{compute_cost, compute_cost_with_prices, TokenEngine, TokenEvent};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use tempfile::NamedTempFile;
+
+    fn test_db() -> Db {
+        let tmp = NamedTempFile::new().unwrap();
+        Db::open(tmp.path()).unwrap()
+    }
+
+    fn test_engine() -> (Arc<Mutex<Db>>, TokenEngine) {
+        let db = Arc::new(Mutex::new(test_db()));
+        let engine = TokenEngine::new(Arc::clone(&db));
+        (db, engine)
+    }
+
+    /// cache_read/creation values from LlmResponse are persisted into TokenEvent.
+    #[test]
+    fn cache_tokens_are_recorded() {
+        let (db, engine) = test_engine();
+        // token_events doesn't enforce session FK, so no session needed.
+        let ev = TokenEvent {
+            id: None,
+            session_id: "ws-cache-test".to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            input_tokens: 500,
+            output_tokens: 200,
+            cache_read_tokens: 1000,
+            cache_creation_tokens: 500,
+            model: "claude-sonnet-4-6".to_string(),
+            cost_usd: 0.0, // let engine compute
+        };
+        engine.record(ev).unwrap();
+
+        let events = db.lock().list_token_events("ws-cache-test").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].cache_read_tokens, 1000);
+        assert_eq!(events[0].cache_creation_tokens, 500);
+        // Cost should be > 0 because model is known.
+        assert!(events[0].cost_usd > 0.0, "cost should be computed");
+    }
+
+    /// Cache-read tokens are cheaper than regular input tokens for Anthropic models.
+    #[test]
+    fn cache_pricing_is_cheaper_than_regular_input() {
+        let providers = builtin_providers();
+        let sonnet = providers["anthropic"]
+            .models
+            .iter()
+            .find(|m| m.id == "claude-sonnet-4-6")
+            .unwrap();
+
+        let regular_cost = compute_cost_with_prices(
+            sonnet.input_cost_per_m,
+            sonnet.output_cost_per_m,
+            sonnet.cache_read_cost_per_m,
+            sonnet.cache_creation_cost_per_m,
+            10_000, 0, 0, 0,
+        );
+        let cache_read_cost = compute_cost_with_prices(
+            sonnet.input_cost_per_m,
+            sonnet.output_cost_per_m,
+            sonnet.cache_read_cost_per_m,
+            sonnet.cache_creation_cost_per_m,
+            0, 0, 10_000, 0,
+        );
+        let cache_creation_cost = compute_cost_with_prices(
+            sonnet.input_cost_per_m,
+            sonnet.output_cost_per_m,
+            sonnet.cache_read_cost_per_m,
+            sonnet.cache_creation_cost_per_m,
+            0, 0, 0, 10_000,
+        );
+
+        assert!(
+            cache_read_cost < regular_cost,
+            "cache read (${:.6}) should be cheaper than regular input (${:.6})",
+            cache_read_cost,
+            regular_cost
+        );
+        assert!(
+            cache_creation_cost > regular_cost,
+            "cache creation (${:.6}) should be more expensive than regular input (${:.6})",
+            cache_creation_cost,
+            regular_cost
+        );
+    }
+
+    /// Anthropic builtin models have non-zero cache pricing fields.
+    #[test]
+    fn anthropic_models_have_cache_pricing() {
+        let providers = builtin_providers();
+        for m in &providers["anthropic"].models {
+            assert!(
+                m.cache_read_cost_per_m > 0.0,
+                "model {} should have cache_read_cost_per_m > 0",
+                m.id
+            );
+            assert!(
+                m.cache_creation_cost_per_m > 0.0,
+                "model {} should have cache_creation_cost_per_m > 0",
+                m.id
+            );
+        }
+    }
+
+    /// Non-Anthropic models have zero cache pricing (no caching support).
+    #[test]
+    fn non_anthropic_models_have_zero_cache_pricing() {
+        let providers = builtin_providers();
+        for (name, p) in &providers {
+            if name == "anthropic" { continue; }
+            for m in &p.models {
+                assert_eq!(
+                    m.cache_read_cost_per_m, 0.0,
+                    "provider {name} model {} should have cache_read_cost_per_m == 0",
+                    m.id
+                );
+            }
+        }
+    }
+
+    /// `parse_litellm_pricing` correctly maps token costs from the JSON fixture.
+    #[test]
+    fn parse_litellm_pricing_fixture() {
+        let json = r#"{
+            "claude-3-5-sonnet-20241022": {
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000015,
+                "cache_read_input_token_cost": 0.0000003,
+                "cache_creation_input_token_cost": 0.00000375
+            },
+            "gpt-4o": {
+                "input_cost_per_token": 0.0000025,
+                "output_cost_per_token": 0.00001
+            },
+            "provider/sample-model": {
+                "input_cost_per_token": 0.0
+            }
+        }"#;
+
+        let prices = crate::commands::parse_litellm_pricing(json);
+        // provider/sample-model has 0 input cost → filtered out
+        assert!(!prices.contains_key("provider/sample-model"), "zero-cost entries should be dropped");
+
+        let sonnet = prices.get("claude-3-5-sonnet-20241022").unwrap();
+        assert!((sonnet.input_cost_per_token - 0.000003).abs() < 1e-10);
+        assert!((sonnet.output_cost_per_token - 0.000015).abs() < 1e-10);
+        assert!((sonnet.cache_read_input_token_cost - 0.0000003).abs() < 1e-12);
+        assert!((sonnet.cache_creation_input_token_cost - 0.00000375).abs() < 1e-11);
+
+        let gpt4o = prices.get("gpt-4o").unwrap();
+        assert!((gpt4o.input_cost_per_token - 0.0000025).abs() < 1e-10);
+        assert_eq!(gpt4o.cache_read_input_token_cost, 0.0);
+    }
+
+    /// usage_breakdown correctly splits cloud vs local tokens.
+    #[test]
+    fn usage_breakdown_splits_cloud_and_local() {
+        let db = test_db();
+        let router = ProviderRouter::from_map(builtin_providers());
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Cloud model event
+        db.insert_token_event(&TokenEvent {
+            id: None,
+            session_id: "ws-cloud".to_string(),
+            timestamp: now.clone(),
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            model: "claude-sonnet-4-6".to_string(),
+            cost_usd: 2.00,
+        }).unwrap();
+
+        // Local model event
+        db.insert_token_event(&TokenEvent {
+            id: None,
+            session_id: "ws-local".to_string(),
+            timestamp: now.clone(),
+            input_tokens: 5000,
+            output_tokens: 2000,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            model: "llama3.3".to_string(),
+            cost_usd: 0.0,
+        }).unwrap();
+
+        let start = "2020-01-01T00:00:00Z";
+        let end = "2099-12-31T23:59:59Z";
+        let breakdown = db.usage_breakdown(&router, start, end).unwrap();
+
+        assert!((breakdown.cloud_cost_usd - 2.00).abs() < 0.001);
+        assert_eq!(breakdown.cloud_tokens, 1500);
+        assert_eq!(breakdown.local_tokens, 7000);
+        assert!(breakdown.estimated_local_savings_usd > 0.0, "savings should be positive");
+    }
+}
+
 /// Tests for Token Budgets & Governance (Feature 5).
 #[cfg(test)]
 mod budget_tests {

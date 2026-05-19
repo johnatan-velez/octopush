@@ -26,6 +26,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub git_credentials: HashMap<String, GitCredentialEntry>,
 
+    /// ISO-8601 timestamp of the last successful pricing refresh from LiteLLM.
+    #[serde(default)]
+    pub last_pricing_refresh: Option<String>,
+
     #[serde(default, rename = "anthropicApiKey", skip_serializing)]
     pub legacy_anthropic_api_key: Option<String>,
     #[serde(default, rename = "openaiApiKey", skip_serializing)]

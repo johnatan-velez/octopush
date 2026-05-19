@@ -157,6 +157,10 @@ pub fn run() {
             commands::clear_budget,
             commands::current_spend,
             commands::export_token_events_csv,
+            // Usage breakdown
+            commands::get_usage_breakdown,
+            // Pricing refresh
+            commands::refresh_pricing,
             // Settings
             commands::get_settings,
             commands::save_settings,

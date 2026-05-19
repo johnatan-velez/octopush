@@ -196,5 +196,8 @@ pub fn parse_response(response: Value) -> LlmResponse {
         stop_reason,
         input_tokens,
         output_tokens,
+        // OpenAI / DeepSeek / Ollama don't expose Anthropic-style cache fields.
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
     }
 }

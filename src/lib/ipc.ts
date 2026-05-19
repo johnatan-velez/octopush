@@ -17,6 +17,7 @@ import type {
   ProjectInfo,
   ProviderConfig,
   PtySession,
+  RefreshPricingResult,
   Session,
   SessionRecap,
   SessionTemplate,
@@ -27,6 +28,7 @@ import type {
   TintName,
   TokenEvent,
   TokenReport,
+  UsageBreakdown,
   Workspace,
 } from "./types";
 
@@ -177,6 +179,12 @@ export const ipc = {
 
   exportTokenEventsCsv: (startIso: string, endIso: string) =>
     invoke<string>("export_token_events_csv", { startIso, endIso }),
+
+  getUsageBreakdown: (startIso: string, endIso: string) =>
+    invoke<UsageBreakdown>("get_usage_breakdown", { startIso, endIso }),
+
+  refreshPricing: () =>
+    invoke<RefreshPricingResult>("refresh_pricing"),
 
   // ─── Settings ─────────────────────────────────────────────────
   getSettings: () =>

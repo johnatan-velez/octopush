@@ -133,6 +133,32 @@ pub fn compute_cost(
         + cache_creation as f64 * cost_per_token(model, TokenType::CacheCreation)
 }
 
+/// Compute cost using explicit per-million prices from `ModelInfo`.
+///
+/// When `cache_read_per_m` / `cache_creation_per_m` are 0 (e.g. non-Anthropic
+/// providers), those token counts are treated as normal input tokens (this is
+/// the correct fall-back: if the provider doesn't track cache separately, the
+/// caller already passes 0 for those counts anyway).
+pub fn compute_cost_with_prices(
+    input_per_m: f64,
+    output_per_m: f64,
+    cache_read_per_m: f64,
+    cache_creation_per_m: f64,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_creation: u64,
+) -> f64 {
+    let eff_cache_read_per_m = if cache_read_per_m > 0.0 { cache_read_per_m } else { input_per_m };
+    let eff_cache_creation_per_m = if cache_creation_per_m > 0.0 { cache_creation_per_m } else { input_per_m };
+
+    (input as f64 * input_per_m
+        + output as f64 * output_per_m
+        + cache_read as f64 * eff_cache_read_per_m
+        + cache_creation as f64 * eff_cache_creation_per_m)
+        / 1_000_000.0
+}
+
 // ─── Engine ───────────────────────────────────────────────────────────
 
 pub struct TokenEngine {
@@ -148,13 +174,38 @@ impl TokenEngine {
     /// the session's aggregate counters.
     pub fn record(&self, mut event: TokenEvent) -> AppResult<()> {
         if event.cost_usd == 0.0 {
-            event.cost_usd = compute_cost(
-                &event.model,
-                event.input_tokens,
-                event.output_tokens,
-                event.cache_read_tokens,
-                event.cache_creation_tokens,
-            );
+            // Try to look up per-model prices from ProviderRouter so that
+            // cache pricing is accurate for Anthropic models.
+            event.cost_usd = if let Ok(router) = crate::provider_router::ProviderRouter::load() {
+                if let Some((_, model_info)) = router.find_model(&event.model) {
+                    compute_cost_with_prices(
+                        model_info.input_cost_per_m,
+                        model_info.output_cost_per_m,
+                        model_info.cache_read_cost_per_m,
+                        model_info.cache_creation_cost_per_m,
+                        event.input_tokens,
+                        event.output_tokens,
+                        event.cache_read_tokens,
+                        event.cache_creation_tokens,
+                    )
+                } else {
+                    compute_cost(
+                        &event.model,
+                        event.input_tokens,
+                        event.output_tokens,
+                        event.cache_read_tokens,
+                        event.cache_creation_tokens,
+                    )
+                }
+            } else {
+                compute_cost(
+                    &event.model,
+                    event.input_tokens,
+                    event.output_tokens,
+                    event.cache_read_tokens,
+                    event.cache_creation_tokens,
+                )
+            };
         }
         if event.timestamp.is_empty() {
             event.timestamp = Utc::now().to_rfc3339();

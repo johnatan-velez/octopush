@@ -137,12 +137,21 @@ pub fn parse_response(response: Value) -> LlmResponse {
         None => LlmStopReason::EndTurn,
     };
 
-    let input_tokens = response.get("usage")
+    let usage = response.get("usage");
+    let input_tokens = usage
         .and_then(|u| u.get("input_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let output_tokens = response.get("usage")
+    let output_tokens = usage
         .and_then(|u| u.get("output_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_read_tokens = usage
+        .and_then(|u| u.get("cache_read_input_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_creation_tokens = usage
+        .and_then(|u| u.get("cache_creation_input_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
@@ -152,5 +161,7 @@ pub fn parse_response(response: Value) -> LlmResponse {
         stop_reason,
         input_tokens,
         output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
     }
 }

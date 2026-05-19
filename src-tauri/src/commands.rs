@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
+use serde::{Deserialize, Serialize};
 
 // ─── Session commands ─────────────────────────────────────────────
 
@@ -1085,6 +1086,149 @@ pub async fn export_token_events_csv(
     end_iso: String,
 ) -> AppResult<String> {
     state.db.lock().export_token_events_csv(&start_iso, &end_iso)
+}
+
+// ─── Usage breakdown (cloud vs local) ────────────────────────────
+
+#[tauri::command]
+pub async fn get_usage_breakdown(
+    state: State<'_, AppState>,
+    start_iso: String,
+    end_iso: String,
+) -> AppResult<crate::db::UsageBreakdown> {
+    let router = crate::provider_router::ProviderRouter::load()?;
+    state.db.lock().usage_breakdown(&router, &start_iso, &end_iso)
+}
+
+// ─── Pricing refresh from LiteLLM ────────────────────────────────
+
+/// Shape of a single entry in the LiteLLM pricing dataset.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "snake_case", default)]
+pub(crate) struct LiteLlmEntry {
+    pub input_cost_per_token: f64,
+    pub output_cost_per_token: f64,
+    pub cache_read_input_token_cost: f64,
+    pub cache_creation_input_token_cost: f64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshPricingResult {
+    pub models_updated: u32,
+    pub models_total: u32,
+    pub fetched_at: String,
+}
+
+/// Parse the LiteLLM pricing JSON into a map of model_id → entry.
+/// Extracted for unit testing without network.
+pub(crate) fn parse_litellm_pricing(json_str: &str) -> HashMap<String, LiteLlmEntry> {
+    let raw: HashMap<String, serde_json::Value> =
+        serde_json::from_str(json_str).unwrap_or_default();
+    raw.into_iter()
+        .filter_map(|(k, v)| {
+            let entry: LiteLlmEntry = serde_json::from_value(v).ok()?;
+            // Only keep entries that have at least an input cost set.
+            if entry.input_cost_per_token > 0.0 {
+                Some((k, entry))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn refresh_pricing(state: State<'_, AppState>) -> AppResult<RefreshPricingResult> {
+    const LITELLM_URL: &str =
+        "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| AppError::Other(format!("failed to build http client: {e}")))?;
+
+    let body = client
+        .get(LITELLM_URL)
+        .send()
+        .await
+        .map_err(|e| AppError::Other(format!("pricing fetch failed: {e}")))?
+        .text()
+        .await
+        .map_err(|e| AppError::Other(format!("pricing read failed: {e}")))?;
+
+    let prices = parse_litellm_pricing(&body);
+    let fetched_at = Utc::now().to_rfc3339();
+
+    // Load the current provider config, update matching models, save.
+    let providers_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".octopush")
+        .join("providers.json");
+
+    let mut providers: Vec<crate::provider_router::ProviderConfig> = if providers_path.exists() {
+        let content = std::fs::read_to_string(&providers_path)
+            .map_err(|e| AppError::Other(format!("read providers.json: {e}")))?;
+        serde_json::from_str(&content)
+            .map_err(|e| AppError::Other(format!("parse providers.json: {e}")))?
+    } else {
+        // Fall back to builtins — ProviderRouter::load() will persist them.
+        crate::provider_router::ProviderRouter::load()?;
+        let content = std::fs::read_to_string(&providers_path)
+            .map_err(|e| AppError::Other(format!("read providers.json after init: {e}")))?;
+        serde_json::from_str(&content)
+            .map_err(|e| AppError::Other(format!("parse providers.json after init: {e}")))?
+    };
+
+    let mut models_total: u32 = 0;
+    let mut models_updated: u32 = 0;
+
+    for provider in &mut providers {
+        for model in &mut provider.models {
+            models_total += 1;
+            if let Some(entry) = prices.get(&model.id) {
+                model.input_cost_per_m = entry.input_cost_per_token * 1_000_000.0;
+                model.output_cost_per_m = entry.output_cost_per_token * 1_000_000.0;
+                if entry.cache_read_input_token_cost > 0.0 {
+                    model.cache_read_cost_per_m = entry.cache_read_input_token_cost * 1_000_000.0;
+                }
+                if entry.cache_creation_input_token_cost > 0.0 {
+                    model.cache_creation_cost_per_m =
+                        entry.cache_creation_input_token_cost * 1_000_000.0;
+                }
+                tracing::info!(
+                    model = %model.id,
+                    input_per_m = model.input_cost_per_m,
+                    output_per_m = model.output_cost_per_m,
+                    "pricing updated from LiteLLM"
+                );
+                models_updated += 1;
+            } else {
+                tracing::debug!(model = %model.id, "no LiteLLM price match — skipping");
+            }
+        }
+    }
+
+    // Persist updated providers.json.
+    let json = serde_json::to_string_pretty(&providers)
+        .map_err(|e| AppError::Other(format!("serialize providers: {e}")))?;
+    std::fs::write(&providers_path, json)
+        .map_err(|e| AppError::Other(format!("write providers.json: {e}")))?;
+
+    // Reload router in state so in-memory pricing is immediately up to date.
+    let updated_router = crate::provider_router::ProviderRouter::load()?;
+    *state.router.lock() = updated_router;
+
+    // Persist the refresh timestamp to settings.
+    let mut settings = crate::settings::load_settings().unwrap_or_default();
+    settings.last_pricing_refresh = Some(fetched_at.clone());
+    let _ = crate::settings::save_settings(&settings);
+
+    Ok(RefreshPricingResult {
+        models_updated,
+        models_total,
+        fetched_at,
+    })
 }
 
 // ─── Settings ─────────────────────────────────────────────────────
