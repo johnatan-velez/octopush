@@ -169,11 +169,12 @@ ok(`Signature: ${sigFile}`);
 
 step("Writing latest.json");
 
-// macOS arch detection: Tauri emits `aarch64` (Apple Silicon) or `x64`.
-// We default to aarch64 since that's the only one this dev box can
-// produce; users on Intel would need a separate workflow.
-const arch = tarball.includes("aarch64") ? "aarch64" : "x64";
-const platformKey = `darwin-${arch}`;
+// macOS arch detection. Tauri's tarball filename doesn't always carry
+// the arch suffix, so we trust the host: Node's `process.arch` is
+// `arm64` on Apple Silicon and `x64` on Intel. The Tauri updater
+// expects platform keys like `darwin-aarch64` and `darwin-x86_64`.
+const platformKey =
+  process.arch === "arm64" ? "darwin-aarch64" : "darwin-x86_64";
 
 const releaseUrl = `https://github.com/johnatan-velez/octopush/releases/download/v${newVersion}/${encodeURIComponent(
   tarball,
