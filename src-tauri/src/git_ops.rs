@@ -215,17 +215,61 @@ pub fn create_branch(path: &Path, branch_name: &str, from: &str) -> AppResult<()
 }
 
 pub fn create_worktree(repo_path: &Path, branch: &str, worktree_path: &Path) -> AppResult<()> {
-    // Clean up any leftover from a failed previous attempt.
+    // Clean up the working-tree directory itself in case a previous run
+    // bailed mid-way and left a partial checkout.
     if worktree_path.exists() {
         let _ = std::fs::remove_dir_all(worktree_path);
     }
 
     let repo = open_repo(repo_path)?;
 
-    // Prune any dangling worktree refs.
-    if let Ok(wt) = repo.find_worktree(branch) {
-        if wt.validate().is_err() {
-            let _ = wt.prune(None);
+    // ── Self-heal stale worktree state ───────────────────────────
+    // A previous failed attempt can leave orphan state in two places:
+    //   1. A registered-but-invalid worktree in `repo.worktrees()`
+    //      (its working tree no longer exists on disk).
+    //   2. An orphan directory `.git/worktrees/<name>/` that libgit2
+    //      never finished initialising (no entry in `worktrees()`),
+    //      which makes the next `git worktree add` fail with
+    //      "directory exists".
+    // We prune (1) and remove (2) here so the user can retry without
+    // having to learn `git worktree prune` themselves.
+    if let Ok(names) = repo.worktrees() {
+        for opt_name in names.iter() {
+            let Some(name) = opt_name else { continue };
+            if let Ok(wt) = repo.find_worktree(name) {
+                if wt.validate().is_err() {
+                    let _ = wt.prune(None);
+                }
+            }
+        }
+    }
+    // Pass (2): look for any orphan directories under .git/worktrees/.
+    if let Some(git_dir) = repo.path().to_str() {
+        let worktrees_meta = std::path::Path::new(git_dir).join("worktrees");
+        if worktrees_meta.exists() {
+            // Re-fetch the list after pruning above so registered names
+            // are current.
+            let registered: std::collections::HashSet<String> = repo
+                .worktrees()
+                .ok()
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(|n| n.map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Ok(entries) = std::fs::read_dir(&worktrees_meta) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if registered.contains(&name) {
+                        continue;
+                    }
+                    // Not in libgit2's worktree registry → orphan from
+                    // a failed prior attempt. Safe to remove.
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
         }
     }
 

@@ -11,6 +11,15 @@ interface Props {
 
 type Step = 1 | 2;
 
+/** Mirror the backend's worktree path computation: workspaces live as
+ *  siblings of the project root, inside a shared `.octopus-worktrees/`
+ *  directory. Showing this honestly here means the path the user sees
+ *  in the wizard matches what they'd see in Finder. */
+function worktreeDisplayPath(projectPath: string, branch: string): string {
+  const parent = projectPath.replace(/\/[^/]+\/?$/, "");
+  return `${parent}/.octopus-worktrees/${branch}`;
+}
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -167,16 +176,33 @@ export function WorkspaceCreator({ projectId, projectPath, onCreated, onCancel }
               </Field>
 
               <div className="mt-2 font-mono text-[10px] tracking-[0.05em] text-octo-mute">
-                Runs inside the new worktree at <span className="text-octo-sage">{projectPath}/.octopus/{branch}</span>.
+                Runs inside the new worktree at <span className="text-octo-sage">{worktreeDisplayPath(projectPath, branch)}</span>.
               </div>
             </div>
 
             {error && (
               <div
                 className="mt-6 max-w-[520px] rounded-md px-3 py-2 text-[12px] text-octo-rouge"
-                style={{ borderLeft: "1px solid var(--color-octo-rouge)", background: "rgba(209, 139, 139, 0.08)" }}
+                style={{
+                  borderLeft: "1px solid var(--color-octo-rouge)",
+                  background: "rgba(209, 139, 139, 0.08)",
+                  userSelect: "text",
+                  WebkitUserSelect: "text",
+                  cursor: "text",
+                }}
               >
                 {error}
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(error).catch(() => {});
+                  }}
+                  className="ml-2 inline-flex items-center font-mono text-[10px] uppercase tracking-[0.18em] text-octo-rouge/70 transition-colors hover:text-octo-rouge"
+                  title="Copy error to clipboard"
+                  style={{ userSelect: "none" }}
+                >
+                  · copy
+                </button>
               </div>
             )}
 
