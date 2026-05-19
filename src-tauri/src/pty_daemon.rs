@@ -22,19 +22,50 @@ const SOCKET_READY_TIMEOUT: Duration = Duration::from_millis(2500);
 /// Polling interval while waiting.
 const SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Expected daemon version — must match the binary Octopush bundled for
+/// this build. Mismatches mean an older daemon process is still alive
+/// (the PID file's lockout would otherwise keep us connected to it
+/// forever, missing every feature added in the new build).
+const EXPECTED_DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Return the path to the PTY daemon's Unix socket, starting the daemon
-/// first if it is not already running.
-///
-/// - If the socket file exists *and* a connection succeeds, returns immediately.
-/// - Otherwise, locates the `octopush-pty-server` binary, spawns it fully
-///   detached (new session via `setsid`), then polls until the socket is ready
-///   or 2.5 seconds elapse.
+/// first if it is not already running OR replacing it if the running
+/// daemon is from a stale Octopush build.
 pub fn ensure_daemon_running() -> AppResult<PathBuf> {
     let sock_path = socket_path()?;
 
-    // Fast path: daemon already up.
+    // Fast path: daemon already up *and* speaking our version.
     if is_socket_ready(&sock_path) {
-        return Ok(sock_path);
+        match query_daemon_version(&sock_path) {
+            Ok(v) if v == EXPECTED_DAEMON_VERSION => {
+                return Ok(sock_path);
+            }
+            Ok(v) => {
+                tracing::warn!(
+                    running = %v,
+                    expected = %EXPECTED_DAEMON_VERSION,
+                    "stale PTY daemon detected — replacing"
+                );
+            }
+            Err(e) => {
+                // Daemon responded but didn't implement `version` — this
+                // is pre-0.1.12 and definitely stale.
+                tracing::warn!(
+                    error = %e,
+                    "running PTY daemon predates version handshake — replacing"
+                );
+            }
+        }
+        // Old daemon → kill it and wait for the socket to disappear.
+        if let Err(e) = kill_existing_daemon() {
+            tracing::warn!(error = %e, "failed to terminate stale daemon");
+        }
+        // Wait briefly for the socket to clear, otherwise the new
+        // daemon will see a stale `~/.octopush/pty-server.sock` file.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while sock_path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     // Locate the binary.
@@ -60,6 +91,62 @@ pub fn ensure_daemon_running() -> AppResult<PathBuf> {
     Err(AppError::Other(
         "PTY daemon failed to start within 2.5s".into(),
     ))
+}
+
+/// Send a `version` request to the daemon and return the reported
+/// version string. Times out at ~1 second.
+fn query_daemon_version(sock_path: &PathBuf) -> Result<String, String> {
+    use std::io::{BufRead, BufReader, Write};
+    let mut stream =
+        UnixStream::connect(sock_path).map_err(|e| format!("connect: {e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|e| format!("set timeout: {e}"))?;
+    // The daemon expects newline-delimited JSON of {"method": "...", ...}.
+    let req = br#"{"method":"version"}
+"#;
+    stream
+        .write_all(req)
+        .map_err(|e| format!("write: {e}"))?;
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .map_err(|e| format!("read: {e}"))?;
+    // Defensive: any non-{type:"version"} response (e.g. an old
+    // daemon returning Error) is "wrong version".
+    let v: serde_json::Value =
+        serde_json::from_str(&line).map_err(|e| format!("parse: {e}"))?;
+    if v["type"] == "version" {
+        Ok(v["version"].as_str().unwrap_or("").to_string())
+    } else {
+        Err(format!("non-version response: {}", v))
+    }
+}
+
+/// Best-effort kill of the running daemon. Reads the PID file and
+/// sends SIGTERM. The daemon's own signal handler cleans up the PID
+/// file and the socket; we wait for that asynchronously in the caller.
+fn kill_existing_daemon() -> Result<(), String> {
+    let home =
+        dirs::home_dir().ok_or_else(|| "no HOME".to_string())?;
+    let pid_file = home.join(".octopush").join("pty-server.pid");
+    if !pid_file.exists() {
+        return Ok(()); // nothing to kill
+    }
+    let pid_str = std::fs::read_to_string(&pid_file)
+        .map_err(|e| format!("read pid file: {e}"))?;
+    let pid: i32 = pid_str
+        .trim()
+        .parse()
+        .map_err(|e| format!("parse pid: {e}"))?;
+    // SAFETY: `kill(pid, SIGTERM)` is async-signal-safe and has well-
+    // defined semantics — sends a signal to the named process.
+    let rc = unsafe { libc::kill(pid, libc::SIGTERM) };
+    if rc != 0 {
+        return Err(format!("kill({pid}, SIGTERM) returned {rc}"));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

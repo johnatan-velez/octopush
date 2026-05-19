@@ -38,6 +38,10 @@ pub enum RequestPayload {
     Resize(ResizeParams),
     Kill(KillParams),
     Shutdown,
+    /// Compile-time version of the daemon binary. Clients use this to
+    /// detect a stale daemon left over from an older Octopush bundle
+    /// (the PID file lockout would otherwise keep them connected to it).
+    Version,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -127,6 +131,8 @@ pub enum ResponsePayload {
     Ok {},
     /// Error response.
     Error { message: String },
+    /// `version` → the daemon's compile-time version string.
+    Version { version: String },
     /// Sentinel: the handler already sent its own response via the tx channel.
     /// `handle_connection` must NOT send this to the wire.
     #[serde(skip)]

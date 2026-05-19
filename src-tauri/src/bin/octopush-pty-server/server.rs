@@ -241,6 +241,9 @@ fn dispatch(
         RequestPayload::Resize(p) => cmd_resize(p, state),
         RequestPayload::Kill(p) => cmd_kill(p, state),
         RequestPayload::Shutdown => cmd_shutdown(state),
+        RequestPayload::Version => ResponsePayload::Version {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
     };
     Response::with_reqid(inner, reqid)
 }

@@ -603,6 +603,9 @@ mod tests {
                         panic!("unexpected error event: {message}");
                     }
                 }
+                Ok(TermEvent::Attention) => {
+                    // Daemon-driven attention pings — not under test here.
+                }
                 Err(_) => {}
             }
         }
