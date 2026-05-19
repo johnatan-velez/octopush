@@ -121,10 +121,14 @@ ok(`Bumped to ${newVersion}`);
 
 step("Building release bundle (signed) — this takes a few minutes");
 
+// Tauri 2 reads the private key content from TAURI_SIGNING_PRIVATE_KEY.
+// (The `_PATH` variant in some docs isn't honored by the bundler.)
+const privateKey = readFileSync(KEY_PATH, "utf8");
+
 run("npm run tauri:build", {
   env: {
     ...process.env,
-    TAURI_SIGNING_PRIVATE_KEY_PATH: KEY_PATH,
+    TAURI_SIGNING_PRIVATE_KEY: privateKey,
     // Empty password — keep aligned with how the key was generated.
     TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "",
   },
