@@ -209,10 +209,37 @@ run(`git push origin v${newVersion}`);
 
 step("Creating GitHub release + uploading assets");
 
+// Release notes: short description plus the Gatekeeper unblock command
+// since Octopush isn't notarized (no Apple Developer Account).
+// Users who already have v0.1.1+ installed get updates in-app via the
+// Tauri updater — they never see this notice.
+const notesBody = `Octopush ${newVersion}
+
+## Install (first time only)
+
+1. Download \`Octopush_${newVersion}_aarch64.dmg\` below.
+2. Open the DMG and drag **Octopush.app** to **Applications**.
+3. Open Terminal and run:
+
+   \`\`\`
+   xattr -cr /Applications/Octopush.app
+   \`\`\`
+
+4. Launch Octopush from Applications.
+
+The \`xattr\` step removes macOS Gatekeeper's quarantine flag. It's only
+needed for the first manual install — after that, future versions
+arrive in-app via the auto-updater.
+`;
+
+// Write notes to a temp file so multi-line markdown survives the shell.
+const notesFile = join(BUNDLE_DIR, ".release-notes.md");
+writeFileSync(notesFile, notesBody);
+
 const ghCmd = [
   `gh release create v${newVersion}`,
   `--title "v${newVersion}"`,
-  `--notes "Octopush ${newVersion}"`,
+  `--notes-file "${notesFile}"`,
   `"${dmgPath}"`,
   `"${tarPath}"`,
   `"${sigPath}"`,
