@@ -20,6 +20,7 @@ import { TerminalPane } from "./components/TerminalPane";
 import { CommandPalette } from "./components/CommandPalette";
 import { WorkspaceSearchPalette } from "./components/WorkspaceSearchPalette";
 import { ToastContainer, pushToast } from "./components/Toasts";
+import { UpdateNotifier } from "./components/UpdateNotifier";
 import { Settings } from "./components/Settings";
 import { useProjectStore } from "./stores/projectStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
@@ -1036,6 +1037,7 @@ function App() {
       )}
 
       <ToastContainer />
+      <UpdateNotifier />
     </div>
   );
 }

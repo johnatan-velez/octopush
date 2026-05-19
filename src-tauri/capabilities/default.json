@@ -8,6 +8,8 @@
     "core:window:allow-start-dragging",
     "core:event:default",
     "shell:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "updater:default",
+    "process:allow-restart"
   ]
 }
