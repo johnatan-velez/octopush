@@ -1,7 +1,113 @@
 /**
  * Parses a unified diff string and extracts per-file line markers
- * for use with the CodeMirror diff gutter.
+ * for use with the CodeMirror diff gutter, plus full hunk structures
+ * for the Review canvas Accept/Reject UI.
  */
+
+// ─── Full diff parse (for Review canvas) ──────────────────────────
+
+export interface DiffHunk {
+  /** The @@ header line. */
+  header: string;
+  /** All lines within this hunk (including the @@ line). */
+  lines: string[];
+  /** Raw text of just this hunk (suitable for git apply). */
+  rawText: string;
+  /** Number of added lines. */
+  additions: number;
+  /** Number of removed lines. */
+  deletions: number;
+}
+
+export interface DiffFile {
+  /** Path as it appears in the diff (b/... side). */
+  filePath: string;
+  /** "modified" | "new" | "deleted" */
+  changeType: "modified" | "new" | "deleted";
+  /** Individual hunks parsed from the file section. */
+  hunks: DiffHunk[];
+  /** Full header lines for this file (diff --git, ---, +++ lines). */
+  fileHeader: string;
+}
+
+/**
+ * Parse a full unified diff string into a list of DiffFile objects,
+ * each containing one or more DiffHunk objects.
+ */
+export function parseFullDiff(diff: string): DiffFile[] {
+  if (!diff) return [];
+
+  // Split into per-file sections on the "diff --git" boundary.
+  const rawSections = diff.split(/^(?=diff --git )/m).filter(Boolean);
+
+  return rawSections.map((section): DiffFile => {
+    const sectionLines = section.split("\n");
+
+    // Extract file path from the first line: "diff --git a/path b/path"
+    const firstLine = sectionLines[0] ?? "";
+    const pathMatch = firstLine.match(/^diff --git a\/(.+) b\/(.+)$/);
+    const filePath = pathMatch ? pathMatch[2] : firstLine;
+
+    // Detect change type from headers.
+    const isNew = sectionLines.some(
+      (l) => l.startsWith("new file mode") || l.startsWith("+++ /dev/null") === false && l === "--- /dev/null",
+    );
+    const isDeleted = sectionLines.some(
+      (l) => l.startsWith("deleted file mode") || l === "+++ /dev/null",
+    );
+    const changeType: DiffFile["changeType"] = isDeleted
+      ? "deleted"
+      : isNew || sectionLines.some((l) => l.startsWith("new file mode"))
+        ? "new"
+        : "modified";
+
+    // Find where hunks start (first @@ line).
+    const firstHunkIdx = sectionLines.findIndex((l) => l.startsWith("@@"));
+    const fileHeaderLines = firstHunkIdx >= 0 ? sectionLines.slice(0, firstHunkIdx) : sectionLines;
+    const fileHeader = fileHeaderLines.join("\n");
+
+    // Split hunk content into individual hunks by @@ boundaries.
+    const hunkLines = firstHunkIdx >= 0 ? sectionLines.slice(firstHunkIdx) : [];
+    const hunks: DiffHunk[] = [];
+    let currentHunkLines: string[] = [];
+
+    for (const line of hunkLines) {
+      if (line.startsWith("@@") && currentHunkLines.length > 0) {
+        hunks.push(buildHunk(currentHunkLines, fileHeaderLines));
+        currentHunkLines = [line];
+      } else {
+        currentHunkLines.push(line);
+      }
+    }
+    if (currentHunkLines.length > 0) {
+      hunks.push(buildHunk(currentHunkLines, fileHeaderLines));
+    }
+
+    return { filePath, changeType, hunks, fileHeader };
+  });
+}
+
+/**
+ * Build a DiffHunk from the raw lines of a single hunk block.
+ * Prepends the file header lines so `git apply` can locate the file.
+ */
+function buildHunk(lines: string[], fileHeaderLines: string[]): DiffHunk {
+  const header = lines[0] ?? "";
+  let additions = 0;
+  let deletions = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("+") && !line.startsWith("+++")) additions++;
+    else if (line.startsWith("-") && !line.startsWith("---")) deletions++;
+  }
+
+  // rawText includes the file headers so git apply knows which file to patch.
+  const rawText = [...fileHeaderLines, ...lines].join("\n") + "\n";
+
+  return { header, lines, rawText, additions, deletions };
+}
+
+// ─── Per-file gutter markers (existing API) ────────────────────────
 
 export interface DiffLineMarker {
   /** 1-based line number in the NEW (post-diff) file. */

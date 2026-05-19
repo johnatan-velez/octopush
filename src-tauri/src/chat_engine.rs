@@ -561,6 +561,35 @@ impl ChatEngine {
             }
 
             // ─── Handle tool use ──────────────────────────────────
+            // Persist the assistant message that contains the tool_use blocks,
+            // so we can link file edits back to this assistant message.
+            let assistant_msg_id = {
+                // Build a JSON summary of the tool calls as the persisted content.
+                let tool_summary: Vec<serde_json::Value> = response.tool_uses.iter().map(|u| {
+                    serde_json::json!({ "toolName": u.name, "toolInput": u.input })
+                }).collect();
+                let content = if !response.text.is_empty() {
+                    format!("{}\n\n[tool_calls: {}]", response.text,
+                        serde_json::to_string(&tool_summary).unwrap_or_default())
+                } else {
+                    format!("[tool_calls: {}]",
+                        serde_json::to_string(&tool_summary).unwrap_or_default())
+                };
+                match self.db.lock().insert_chat_message(
+                    &request.workspace_id,
+                    "assistant_tool_use",
+                    &content,
+                    Some(&request.model),
+                    None, None, None,
+                ) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to persist assistant_tool_use message");
+                        -1_i64
+                    }
+                }
+            };
+
             // Add assistant message with tool_use content to conversation.
             messages.push(LlmMessage {
                 role: LlmRole::Assistant,
@@ -575,6 +604,21 @@ impl ChatEngine {
             for u in &response.tool_uses {
                 tracing::info!(tool = %u.name, "executing tool");
                 let result = execute_tool(&workspace_path, &u.name, &u.input);
+
+                // If the tool wrote a file, record it in file_edits for the Review canvas.
+                if u.name == "write_file" {
+                    if let Some(path) = u.input.get("path").and_then(|p| p.as_str()) {
+                        let msg_id = if assistant_msg_id >= 0 { Some(assistant_msg_id) } else { None };
+                        if let Err(e) = self.db.lock().insert_file_edit(
+                            &request.workspace_id,
+                            path,
+                            "write_file",
+                            msg_id,
+                        ) {
+                            tracing::warn!(tool = "write_file", path = path, error = %e, "failed to record file edit");
+                        }
+                    }
+                }
 
                 // For persistence and events, strip large file contents from
                 // the input (the file is already on disk). This prevents

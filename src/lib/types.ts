@@ -136,6 +136,26 @@ export interface Workspace {
   lastActive: string;
   glyph: string | null;
   tint: TintName | null;
+  testCommand?: string | null;
+}
+
+// ─── File edits ───────────────────────────────────────────────────
+
+export interface FileEdit {
+  id: number;
+  workspaceId: string;
+  filePath: string;
+  toolName: string;
+  messageId: number | null;
+  createdAt: string;
+}
+
+// ─── Test runner ──────────────────────────────────────────────────
+
+export interface TestRunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
 }
 
 // ─── Terminals ────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import type {
   ChatMessage,
   CreateSessionArgs,
   DirectoryEntry,
+  FileEdit,
   GitStatus,
   ModelSuggestion,
   ModelWithProvider,
@@ -24,6 +25,7 @@ import type {
   SpendSnapshot,
   TaskType,
   TerminalRecord,
+  TestRunResult,
   ThemeConfig,
   TintName,
   TokenEvent,
@@ -203,6 +205,33 @@ export const ipc = {
     invoke<void>("rename_terminal", { id, label }),
   deleteTerminal: (id: string) =>
     invoke<void>("delete_terminal", { id }),
+
+  // ─── File edits (Review canvas) ───────────────────────────────
+  listFileEdits: (workspaceId: string) =>
+    invoke<FileEdit[]>("list_file_edits", { workspaceId }),
+
+  getMessage: (messageId: number) =>
+    invoke<ChatMessage>("get_message", { messageId }),
+
+  // ─── Hunk operations ──────────────────────────────────────────
+  revertHunk: (workspacePath: string, hunkText: string) =>
+    invoke<void>("revert_hunk", { workspacePath, hunkText }),
+
+  stageHunk: (workspacePath: string, hunkText: string) =>
+    invoke<void>("stage_hunk", { workspacePath, hunkText }),
+
+  stageAllChanges: (workspacePath: string) =>
+    invoke<void>("stage_all_changes", { workspacePath }),
+
+  // ─── Test runner ──────────────────────────────────────────────
+  runTestCommand: (workspacePath: string, command: string) =>
+    invoke<TestRunResult>("run_test_command", { workspacePath, command }),
+
+  setWorkspaceTestCommand: (workspaceId: string, command: string) =>
+    invoke<void>("set_workspace_test_command", { workspaceId, command }),
+
+  detectDefaultTestCommand: (workspacePath: string) =>
+    invoke<string | null>("detect_default_test_command", { workspacePath }),
 
   // ─── PTY daemon ───────────────────────────────────────────────
   /** List all PTY sessions currently alive in the daemon. */

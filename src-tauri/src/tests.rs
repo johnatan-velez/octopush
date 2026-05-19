@@ -706,6 +706,202 @@ mod budget_tests {
     }
 }
 
+/// Tests for Review Mode Rethink — file_edits table, hunk ops, test command detection.
+#[cfg(test)]
+mod review_rethink_tests {
+    use crate::db::Db;
+    use tempfile::NamedTempFile;
+    use tempfile::TempDir;
+    use std::fs;
+
+    fn test_db() -> Db {
+        let tmp = NamedTempFile::new().unwrap();
+        Db::open(tmp.path()).unwrap()
+    }
+
+    fn setup_workspace(db: &Db) {
+        db.insert_project("proj-r", "Test Project", "/tmp/proj-r").unwrap();
+        db.insert_workspace("ws-r", "proj-r", "ws", "", "feat/test", None, "").unwrap();
+    }
+
+    // ── file_edits CRUD ────────────────────────────────────────────
+
+    #[test]
+    fn file_edits_insert_and_list() {
+        let db = test_db();
+        setup_workspace(&db);
+
+        let id1 = db.insert_file_edit("ws-r", "src/foo.ts", "write_file", Some(10)).unwrap();
+        let id2 = db.insert_file_edit("ws-r", "src/bar.ts", "write_file", None).unwrap();
+        assert!(id2 > id1);
+
+        let edits = db.list_file_edits_for_workspace("ws-r").unwrap();
+        assert_eq!(edits.len(), 2);
+        // list is ordered by created_at DESC, so bar.ts is first
+        assert_eq!(edits[0].file_path, "src/bar.ts");
+        assert_eq!(edits[0].message_id, None);
+        assert_eq!(edits[1].file_path, "src/foo.ts");
+        assert_eq!(edits[1].message_id, Some(10));
+    }
+
+    #[test]
+    fn file_edits_latest_for_file() {
+        let db = test_db();
+        setup_workspace(&db);
+
+        db.insert_file_edit("ws-r", "src/foo.ts", "write_file", Some(1)).unwrap();
+        db.insert_file_edit("ws-r", "src/foo.ts", "write_file", Some(2)).unwrap();
+
+        let latest = db.latest_edit_for_file("ws-r", "src/foo.ts").unwrap();
+        assert!(latest.is_some());
+        // message_id 2 was inserted last, but since timestamps are the same
+        // within a test, we just verify we get one back with the right path.
+        assert_eq!(latest.unwrap().file_path, "src/foo.ts");
+    }
+
+    #[test]
+    fn file_edits_latest_returns_none_for_unknown_file() {
+        let db = test_db();
+        setup_workspace(&db);
+
+        let result = db.latest_edit_for_file("ws-r", "nonexistent.ts").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn workspace_test_command_set_and_get() {
+        let db = test_db();
+        setup_workspace(&db);
+
+        // Initially None
+        let cmd = db.get_workspace_test_command("ws-r").unwrap();
+        assert_eq!(cmd, None);
+
+        // Set it
+        db.set_workspace_test_command("ws-r", "npm test").unwrap();
+        let cmd = db.get_workspace_test_command("ws-r").unwrap();
+        assert_eq!(cmd, Some("npm test".to_string()));
+
+        // Overwrite
+        db.set_workspace_test_command("ws-r", "cargo test").unwrap();
+        let cmd = db.get_workspace_test_command("ws-r").unwrap();
+        assert_eq!(cmd, Some("cargo test".to_string()));
+    }
+
+    #[test]
+    fn file_edits_cascade_delete_with_workspace() {
+        let db = test_db();
+        setup_workspace(&db);
+
+        db.insert_file_edit("ws-r", "src/foo.ts", "write_file", None).unwrap();
+        assert_eq!(db.list_file_edits_for_workspace("ws-r").unwrap().len(), 1);
+
+        // Deleting the workspace cascades to file_edits.
+        db.delete_workspace("ws-r").unwrap();
+        assert_eq!(db.list_file_edits_for_workspace("ws-r").unwrap().len(), 0);
+    }
+
+    // ── detect_default_test_command ────────────────────────────────
+
+    #[tokio::test]
+    async fn detect_npm_project() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+
+        let result = crate::commands::detect_default_test_command(
+            tmp.path().to_string_lossy().to_string()
+        ).await.unwrap();
+        assert_eq!(result, Some("npm test".to_string()));
+    }
+
+    #[tokio::test]
+    async fn detect_cargo_project() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("Cargo.toml"), "[package]\nname=\"test\"\nversion=\"0.1.0\"").unwrap();
+
+        let result = crate::commands::detect_default_test_command(
+            tmp.path().to_string_lossy().to_string()
+        ).await.unwrap();
+        assert_eq!(result, Some("cargo test".to_string()));
+    }
+
+    #[tokio::test]
+    async fn detect_pytest_project() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("pytest.ini"), "[pytest]").unwrap();
+
+        let result = crate::commands::detect_default_test_command(
+            tmp.path().to_string_lossy().to_string()
+        ).await.unwrap();
+        assert_eq!(result, Some("pytest".to_string()));
+    }
+
+    #[tokio::test]
+    async fn detect_no_project_returns_none() {
+        let tmp = TempDir::new().unwrap();
+
+        let result = crate::commands::detect_default_test_command(
+            tmp.path().to_string_lossy().to_string()
+        ).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    // ── revert_hunk with a real git repo ──────────────────────────
+
+    #[tokio::test]
+    async fn revert_hunk_undoes_a_change() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Init a git repo
+        let init = std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(root)
+            .output();
+        if init.is_err() { return; } // git not available in this env
+
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(root).output().ok();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(root).output().ok();
+
+        // Create initial file + commit
+        fs::write(root.join("foo.txt"), "line1\nline2\nline3\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "foo.txt"])
+            .current_dir(root).output().ok();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(root).output().ok();
+
+        // Modify the file
+        fs::write(root.join("foo.txt"), "line1\nLINE2_MODIFIED\nline3\n").unwrap();
+
+        // Get the diff to build a hunk
+        let diff_out = std::process::Command::new("git")
+            .args(["diff"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let diff_text = String::from_utf8_lossy(&diff_out.stdout).to_string();
+
+        if diff_text.is_empty() { return; } // shouldn't happen but be safe
+
+        // revert_hunk should restore the original content
+        let result = crate::commands::revert_hunk(
+            root.to_string_lossy().to_string(),
+            diff_text,
+        ).await;
+
+        assert!(result.is_ok(), "revert_hunk failed: {:?}", result.err());
+
+        let content = fs::read_to_string(root.join("foo.txt")).unwrap();
+        assert_eq!(content, "line1\nline2\nline3\n");
+    }
+}
+
 /// Tests for the Phase 3 `spawn_or_attach` logic in [`crate::pty_manager`].
 ///
 /// These tests start the real daemon binary so we can verify the

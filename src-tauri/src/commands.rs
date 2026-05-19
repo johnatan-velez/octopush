@@ -1348,6 +1348,169 @@ pub async fn write_file(path: String, content: String) -> AppResult<()> {
         .map_err(|e| AppError::Other(format!("write_file({}): {e}", path)))
 }
 
+// ─── File edits (Review canvas) ───────────────────────────────────
+
+#[tauri::command]
+pub async fn list_file_edits(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> AppResult<Vec<crate::db::FileEditRow>> {
+    state.db.lock().list_file_edits_for_workspace(&workspace_id)
+}
+
+#[tauri::command]
+pub async fn get_message(
+    state: State<'_, AppState>,
+    message_id: i64,
+) -> AppResult<crate::db::ChatMessageRow> {
+    state
+        .db
+        .lock()
+        .get_chat_message(message_id)?
+        .ok_or_else(|| AppError::Other(format!("message {message_id} not found")))
+}
+
+// ─── Hunk operations ──────────────────────────────────────────────
+
+/// Apply a unified-diff hunk in reverse (undo a change).
+#[tauri::command]
+pub async fn revert_hunk(workspace_path: String, hunk_text: String) -> AppResult<()> {
+    use std::io::Write as _;
+    use tempfile::NamedTempFile;
+
+    let workspace_path = expand_tilde(&workspace_path);
+    let mut tmp = NamedTempFile::new()
+        .map_err(|e| AppError::Other(format!("failed to create tempfile: {e}")))?;
+    tmp.write_all(hunk_text.as_bytes())
+        .map_err(|e| AppError::Other(format!("failed to write hunk: {e}")))?;
+    tmp.flush()
+        .map_err(|e| AppError::Other(format!("failed to flush hunk: {e}")))?;
+
+    let output = std::process::Command::new("git")
+        .args(["apply", "--reverse", "-p1", tmp.path().to_str().unwrap_or("")])
+        .current_dir(&workspace_path)
+        .output()
+        .map_err(|e| AppError::Other(format!("failed to run git apply: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Other(format!("git apply --reverse failed: {stderr}")));
+    }
+    Ok(())
+}
+
+/// Stage a single unified-diff hunk (partial staging).
+#[tauri::command]
+pub async fn stage_hunk(workspace_path: String, hunk_text: String) -> AppResult<()> {
+    use std::io::Write as _;
+    use tempfile::NamedTempFile;
+
+    let workspace_path = expand_tilde(&workspace_path);
+    let mut tmp = NamedTempFile::new()
+        .map_err(|e| AppError::Other(format!("failed to create tempfile: {e}")))?;
+    tmp.write_all(hunk_text.as_bytes())
+        .map_err(|e| AppError::Other(format!("failed to write hunk: {e}")))?;
+    tmp.flush()
+        .map_err(|e| AppError::Other(format!("failed to flush hunk: {e}")))?;
+
+    let output = std::process::Command::new("git")
+        .args(["apply", "--cached", "-p1", tmp.path().to_str().unwrap_or("")])
+        .current_dir(&workspace_path)
+        .output()
+        .map_err(|e| AppError::Other(format!("failed to run git apply: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Other(format!("git apply --cached failed: {stderr}")));
+    }
+    Ok(())
+}
+
+/// Stage all changes (git add -A).
+#[tauri::command]
+pub async fn stage_all_changes(workspace_path: String) -> AppResult<()> {
+    let workspace_path = expand_tilde(&workspace_path);
+    let output = std::process::Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(&workspace_path)
+        .output()
+        .map_err(|e| AppError::Other(format!("failed to run git add: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Other(format!("git add -A failed: {stderr}")));
+    }
+    Ok(())
+}
+
+// ─── Test runner ──────────────────────────────────────────────────
+
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TestRunResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+/// Run a test command via the user's login shell (inherits SSH_AUTH_SOCK,
+/// PATH, etc.) in the given workspace directory. Times out after 60 seconds.
+#[tauri::command]
+pub async fn run_test_command(workspace_path: String, command: String) -> AppResult<TestRunResult> {
+    use tokio::process::Command as TokioCommand;
+    use tokio::time::{timeout, Duration};
+
+    let workspace_path = expand_tilde(&workspace_path);
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+
+    let run = async {
+        TokioCommand::new(&shell)
+            .arg("-lc")
+            .arg(&command)
+            .current_dir(&workspace_path)
+            .output()
+            .await
+            .map_err(|e| AppError::Other(format!("failed to spawn test command: {e}")))
+    };
+
+    let output = timeout(Duration::from_secs(60), run)
+        .await
+        .map_err(|_| AppError::Other("test command timed out after 60s".into()))??;
+
+    Ok(TestRunResult {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        exit_code: output.status.code().unwrap_or(-1),
+    })
+}
+
+// ─── Workspace test command ───────────────────────────────────────
+
+#[tauri::command]
+pub async fn set_workspace_test_command(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    command: String,
+) -> AppResult<()> {
+    state.db.lock().set_workspace_test_command(&workspace_id, &command)
+}
+
+/// Detect a sensible default test command by looking for project files.
+#[tauri::command]
+pub async fn detect_default_test_command(workspace_path: String) -> AppResult<Option<String>> {
+    let path = std::path::Path::new(&workspace_path);
+    if path.join("package.json").exists() {
+        return Ok(Some("npm test".into()));
+    }
+    if path.join("Cargo.toml").exists() {
+        return Ok(Some("cargo test".into()));
+    }
+    if path.join("pytest.ini").exists() || path.join("pyproject.toml").exists() {
+        return Ok(Some("pytest".into()));
+    }
+    Ok(None)
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────
 
 /// Expand `~/...` to the user's home directory.

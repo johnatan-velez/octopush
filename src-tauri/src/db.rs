@@ -137,6 +137,18 @@ impl Db {
                 updated_at    TEXT NOT NULL,
                 PRIMARY KEY (scope_type, scope_id, period)
             );
+
+            CREATE TABLE IF NOT EXISTS file_edits (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id    TEXT NOT NULL,
+                file_path       TEXT NOT NULL,
+                tool_name       TEXT NOT NULL,
+                message_id      INTEGER,
+                created_at      TEXT NOT NULL,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_file_edits_workspace_path
+                ON file_edits(workspace_id, file_path);
             "#,
         )?;
         // Phase 2 — workspace customization columns (glyph + tint).
@@ -144,6 +156,7 @@ impl Db {
         // duplicate-column error if the migration has already run.
         add_column_if_missing(&self.conn, "ALTER TABLE workspaces ADD COLUMN glyph TEXT")?;
         add_column_if_missing(&self.conn, "ALTER TABLE workspaces ADD COLUMN tint TEXT")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE workspaces ADD COLUMN test_command TEXT")?;
 
         // Phase 9 — drop the FK from token_events.session_id. The original
         // schema only ever expected CLI session ids, so chat-driven token
@@ -565,7 +578,7 @@ impl Db {
 
     pub fn list_workspaces(&self, project_id: &str) -> AppResult<Vec<WorkspaceRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, name, task, branch, worktree_path, setup_script, status, created_at, last_active, glyph, tint
+            "SELECT id, project_id, name, task, branch, worktree_path, setup_script, status, created_at, last_active, glyph, tint, test_command
              FROM workspaces WHERE project_id = ?1 ORDER BY last_active DESC",
         )?;
         let rows = stmt.query_map(params![project_id], |r| {
@@ -582,6 +595,7 @@ impl Db {
                 last_active: r.get(9)?,
                 glyph: r.get(10)?,
                 tint: r.get(11)?,
+                test_command: r.get(12)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -882,6 +896,106 @@ impl Db {
         Ok(csv)
     }
 
+    // ─── File edits ───────────────────────────────────────────────
+
+    pub fn insert_file_edit(
+        &self,
+        workspace_id: &str,
+        file_path: &str,
+        tool_name: &str,
+        message_id: Option<i64>,
+    ) -> AppResult<i64> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO file_edits (workspace_id, file_path, tool_name, message_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![workspace_id, file_path, tool_name, message_id, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn list_file_edits_for_workspace(&self, workspace_id: &str) -> AppResult<Vec<FileEditRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, file_path, tool_name, message_id, created_at
+             FROM file_edits WHERE workspace_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![workspace_id], |r| {
+            Ok(FileEditRow {
+                id: r.get(0)?,
+                workspace_id: r.get(1)?,
+                file_path: r.get(2)?,
+                tool_name: r.get(3)?,
+                message_id: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn latest_edit_for_file(&self, workspace_id: &str, file_path: &str) -> AppResult<Option<FileEditRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, file_path, tool_name, message_id, created_at
+             FROM file_edits WHERE workspace_id = ?1 AND file_path = ?2
+             ORDER BY created_at DESC LIMIT 1",
+        )?;
+        let row = stmt
+            .query_row(params![workspace_id, file_path], |r| {
+                Ok(FileEditRow {
+                    id: r.get(0)?,
+                    workspace_id: r.get(1)?,
+                    file_path: r.get(2)?,
+                    tool_name: r.get(3)?,
+                    message_id: r.get(4)?,
+                    created_at: r.get(5)?,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    // ─── Workspace test command ───────────────────────────────────
+
+    pub fn set_workspace_test_command(&self, workspace_id: &str, command: &str) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE workspaces SET test_command = ?1 WHERE id = ?2",
+            params![command, workspace_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_workspace_test_command(&self, workspace_id: &str) -> AppResult<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT test_command FROM workspaces WHERE id = ?1",
+        )?;
+        let result = stmt
+            .query_row(params![workspace_id], |r| r.get::<_, Option<String>>(0))
+            .optional()?;
+        Ok(result.flatten())
+    }
+
+    pub fn get_chat_message(&self, message_id: i64) -> AppResult<Option<ChatMessageRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, role, content, model, input_tokens, output_tokens, cost_usd, created_at
+             FROM chat_messages WHERE id = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![message_id], |r| {
+                Ok(ChatMessageRow {
+                    id: r.get(0)?,
+                    workspace_id: r.get(1)?,
+                    role: r.get(2)?,
+                    content: r.get(3)?,
+                    model: r.get(4)?,
+                    input_tokens: r.get(5)?,
+                    output_tokens: r.get(6)?,
+                    cost_usd: r.get(7)?,
+                    created_at: r.get(8)?,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
     pub fn list_chat_messages(&self, workspace_id: &str) -> AppResult<Vec<ChatMessageRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, workspace_id, role, content, model, input_tokens, output_tokens, cost_usd, created_at
@@ -919,6 +1033,18 @@ pub struct WorkspaceRow {
     pub last_active: String,
     pub glyph: Option<String>,
     pub tint: Option<String>,
+    pub test_command: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEditRow {
+    pub id: i64,
+    pub workspace_id: String,
+    pub file_path: String,
+    pub tool_name: String,
+    pub message_id: Option<i64>,
+    pub created_at: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

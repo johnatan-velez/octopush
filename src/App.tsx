@@ -14,6 +14,7 @@ import { ChatView } from "./components/ChatView";
 import { ChangesPanel } from "./components/ChangesPanel";
 import { EditorPane } from "./components/EditorPane";
 import { EditorTabs } from "./components/EditorTabs";
+import { ReviewCanvas } from "./components/ReviewCanvas";
 import { useEditorStore } from "./stores/editorStore";
 import { TerminalPane } from "./components/TerminalPane";
 import { CommandPalette } from "./components/CommandPalette";
@@ -701,21 +702,44 @@ function App() {
             >
               {activeWorkspace && (
                 <div className="flex h-full min-h-0">
-                  {(gitStatus?.changedFiles.length ?? 0) > 0 && (
-                    <div className="w-[320px] shrink-0 border-r border-octo-hairline">
-                      <ChangesPanel
-                        projectPath={activeWorkspace.worktreePath || project.path}
-                        diff={gitDiff}
-                      />
-                    </div>
-                  )}
+                  {/* Left: slim Changes panel (file index + commit) */}
+                  <div className="w-[280px] shrink-0 border-r border-octo-hairline">
+                    <ChangesPanel
+                      projectPath={activeWorkspace.worktreePath || project.path}
+                      diff={gitDiff}
+                    />
+                  </div>
+
+                  {/* Centre: ReviewCanvas with Diff/Editor toggle */}
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                    <EditorTabs workspaceId={activeWorkspaceId!} />
-                    <EditorPane
+                    <ReviewCanvas
                       workspaceId={activeWorkspaceId!}
                       workspacePath={activeWorkspace.worktreePath || project.path}
-                      diffText={gitDiff}
-                    />
+                      gitStatus={gitStatus}
+                      gitDiff={gitDiff}
+                      onDiffChange={() => {
+                        // Re-fetch git status + diff after a hunk action
+                        const path = activeWorkspace.worktreePath || project.path;
+                        Promise.all([
+                          ipc.getGitStatus(path),
+                          ipc.getGitDiff(path).catch(() => ""),
+                        ])
+                          .then(([s, d]) => {
+                            setGitStatus(s);
+                            setGitDiff(d);
+                          })
+                          .catch(() => {});
+                      }}
+                      initialTestCommand={activeWorkspace.testCommand ?? null}
+                    >
+                      {/* Editor mode content */}
+                      <EditorTabs workspaceId={activeWorkspaceId!} />
+                      <EditorPane
+                        workspaceId={activeWorkspaceId!}
+                        workspacePath={activeWorkspace.worktreePath || project.path}
+                        diffText={gitDiff}
+                      />
+                    </ReviewCanvas>
                   </div>
                 </div>
               )}

@@ -178,6 +178,17 @@ pub fn run() {
             // File I/O
             commands::read_file,
             commands::write_file,
+            // File edits (Review canvas)
+            commands::list_file_edits,
+            commands::get_message,
+            // Hunk operations
+            commands::revert_hunk,
+            commands::stage_hunk,
+            commands::stage_all_changes,
+            // Test runner
+            commands::run_test_command,
+            commands::set_workspace_test_command,
+            commands::detect_default_test_command,
         ])
         .setup(|app| {
             // Restore sessions that were active when the app last closed.
