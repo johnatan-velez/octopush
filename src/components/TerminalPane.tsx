@@ -243,6 +243,10 @@ export function TerminalPane({
     listen<PtyDataEvent>("pty://data", (ev) => {
       if (ev.payload.sessionId !== ptySessionIdRef.current) return;
       term.write(new Uint8Array(ev.payload.bytes));
+      // Reset the idle-TUI timer on each chunk of output. The timer
+      // only fires (and pings attention) if no new bytes arrive for
+      // IDLE_TUI_MS *and* we're in alt-screen at that moment.
+      scheduleIdleCheck();
     }).then((u) => {
       unlistenData = u;
     });
@@ -282,13 +286,41 @@ export function TerminalPane({
       unlistenReattached = u;
     });
 
-    // BEL → attention ping (only when this terminal isn't visible —
-    // otherwise the user is already looking at it and a chime would be
-    // noise). xterm emits onBell for every \x07 it processes.
+    // BEL → attention ping. Only fires when this terminal is hidden,
+    // otherwise it'd just nag the user about a terminal they're already
+    // looking at. xterm emits onBell for every \x07 it processes.
     const bellDisp = term.onBell(() => {
       if (visibleRef.current) return;
       useAttentionStore.getState().ping(workspaceIdRef.current, "terminal");
     });
+
+    // ── Idle-in-alt-screen detection ──────────────────────────────
+    // Modern TUIs (Claude Code, vim, less, k9s, …) don't ring the
+    // bell when they want your input — they just redraw their UI and
+    // wait. We notice they're waiting by combining two signals:
+    //   1. the terminal is in the alternate screen buffer (TUI mode),
+    //   2. PTY output has been quiet for ~2s after recent activity.
+    // When that pair is true AND the pane isn't currently visible, we
+    // ping attention. The timer resets every time new bytes arrive,
+    // so a continuously-painting app (htop) doesn't trigger; only the
+    // moment it goes quiet does.
+    const IDLE_TUI_MS = 2_000;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleIdleCheck = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleTimer = null;
+        if (visibleRef.current) return;
+        // Only ping if the inner app is in alt-screen (TUI mode);
+        // a plain shell prompt going idle isn't a notification case.
+        // Defensive optional-chaining for the test env where the xterm
+        // mock has no buffer object.
+        if (term.buffer?.active?.type !== "alternate") return;
+        useAttentionStore
+          .getState()
+          .ping(workspaceIdRef.current, "terminal");
+      }, IDLE_TUI_MS);
+    };
 
     // term → PTY
     const dataDisp = term.onData((data) => {
@@ -342,6 +374,7 @@ export function TerminalPane({
     return () => {
       cancelled = true;
       if (resizeTimer) clearTimeout(resizeTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       dataDisp.dispose();
       resizeDisp.dispose();
       bellDisp.dispose();
