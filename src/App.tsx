@@ -34,7 +34,7 @@ import { useBudgetsStore } from "./stores/budgetsStore";
 import type { ProjectGroup } from "./components/WorkspaceRail";
 import { listen } from "@tauri-apps/api/event";
 import { deriveChatTitle, deriveChatMeta } from "./lib/chatTitle";
-import type { ModelWithProvider } from "./lib/types";
+import type { ModelWithProvider, Workspace } from "./lib/types";
 import type { SettingsTab } from "./lib/settingsTabs";
 import { resolveMonogram } from "./lib/monogram";
 import { type WorkspaceMode } from "./lib/modes";
@@ -712,11 +712,39 @@ function App() {
   // ── Render: workspace shell ──
   const customizingWorkspace = workspaces.find((w) => w.id === customizingWorkspaceId) ?? null;
 
-  // Wrap workspaces in a project group for the hierarchical rail structure.
-  // Task 2 will handle multiple projects; for now, all workspaces belong to the current project.
-  const projectGroups: ProjectGroup[] = project
-    ? [{ id: project.id, name: project.name, workspaces }]
-    : [];
+  // Build hierarchical project data: collect all projects (current + recent) and
+  // group their workspaces together. Only the current project's workspaces are
+  // loaded into the store, so other projects show as empty initially. Future
+  // work can implement lazy-loading of workspaces when projects are expanded.
+  const projectGroups: ProjectGroup[] = useMemo(() => {
+    if (!project) return [];
+
+    // Collect all unique projects: current + recent
+    const allProjects = new Map<string, { id: string; name: string }>();
+    if (project) {
+      allProjects.set(project.id, { id: project.id, name: project.name });
+    }
+    recentProjects.forEach((p) => {
+      if (!allProjects.has(p.id)) {
+        allProjects.set(p.id, { id: p.id, name: p.name });
+      }
+    });
+
+    // Group workspaces by projectId (only current project has loaded workspaces)
+    const workspacesByProject = new Map<string, Workspace[]>();
+    workspaces.forEach((ws) => {
+      const list = workspacesByProject.get(ws.projectId) || [];
+      list.push(ws);
+      workspacesByProject.set(ws.projectId, list);
+    });
+
+    // Build ProjectGroup array from all projects, with workspaces where available
+    return Array.from(allProjects.entries()).map(([projectId, projectInfo]) => ({
+      id: projectInfo.id,
+      name: projectInfo.name,
+      workspaces: workspacesByProject.get(projectId) || [],
+    }));
+  }, [project, recentProjects, workspaces]);
 
   return (
     <div className="flex h-screen w-screen bg-octo-bg text-octo-ivory">
