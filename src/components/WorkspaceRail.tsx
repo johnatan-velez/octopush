@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { resolveMonogram, TINTS } from "../lib/monogram";
 import type { Workspace } from "../lib/types";
 import { useAttentionStore } from "../stores/attentionStore";
@@ -29,18 +29,6 @@ export function WorkspaceRail({
   onNewWorkspace,
 }: Props) {
   const [isCollapsed, setIsCollapsed] = useState(false);
-
-  // Listen for ⌘\ keyboard shortcut to toggle collapse
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
-        e.preventDefault();
-        setIsCollapsed((prev) => !prev);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
 
   return (
     <aside
@@ -101,7 +89,7 @@ export function WorkspaceRail({
       <button
         type="button"
         onClick={() => setIsCollapsed(!isCollapsed)}
-        title={`${isCollapsed ? "Expand" : "Collapse"} workspace rail (⌘\\)`}
+        title={`${isCollapsed ? "Expand" : "Collapse"} workspace rail`}
         aria-label={`${isCollapsed ? "Expand" : "Collapse"} workspace rail`}
         className={`w-full border border-octo-hairline text-octo-mute transition hover:border-octo-brass hover:text-octo-sage ${
           isCollapsed ? "px-1" : "px-3"

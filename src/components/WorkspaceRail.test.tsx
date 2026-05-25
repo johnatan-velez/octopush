@@ -167,32 +167,6 @@ describe("WorkspaceRail", () => {
     expect(aside).toHaveClass("w-[280px]");
   });
 
-  it("should toggle rail on ⌘\\ keydown", () => {
-    const workspaces = [makeWorkspace({ id: "a", name: "Alpha" })];
-    const projects: ProjectGroup[] = [
-      { id: "proj-1", name: "Project", workspaces },
-    ];
-    const { container } = render(
-      <WorkspaceRail
-        projects={projects}
-        activeWorkspaceId="a"
-        onSelect={vi.fn()}
-        onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
-      />,
-    );
-    const aside = container.querySelector("aside");
-    expect(aside).toHaveClass("w-[280px]");
-
-    // Fire keyboard shortcut ⌘\
-    fireEvent.keyDown(window, { key: "\\", metaKey: true });
-    expect(aside).toHaveClass("w-[50px]");
-
-    // Fire again to expand
-    fireEvent.keyDown(window, { key: "\\", metaKey: true });
-    expect(aside).toHaveClass("w-[280px]");
-  });
-
   it("should render project headers in expanded mode", () => {
     const workspaces = [
       makeWorkspace({ id: "a", name: "Alpha" }),
