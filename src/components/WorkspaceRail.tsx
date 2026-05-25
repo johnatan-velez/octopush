@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { resolveMonogram, TINTS } from "../lib/monogram";
 import type { Workspace } from "../lib/types";
 import { useAttentionStore } from "../stores/attentionStore";
@@ -137,6 +137,27 @@ function WorkspaceRow({
   );
   const showPulse = !!attentionFlag && !active;
 
+  const [showFadeOut, setShowFadeOut] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const handleMouseEnter = () => {
+    timeoutRef.current = setTimeout(() => {
+      setShowFadeOut(true);
+    }, 500);
+  };
+
+  const handleMouseLeave = () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setShowFadeOut(false);
+  };
+
   if (isCollapsed) {
     // Collapsed mode: 32px monogram only
     return (
@@ -215,30 +236,43 @@ function WorkspaceRow({
         {mono.glyph}
       </button>
 
-      {/* Workspace name (clickable div, not a button) */}
+      {/* Workspace name container with fade-out gradient */}
       <div
-        onClick={onSelect}
-        onContextMenu={handleContextMenu}
-        title={
-          showPulse
-            ? `${workspace.name} — needs your attention (${attentionFlag.kind})`
-            : `${workspace.name} (right-click to customize)`
-        }
-        className="flex-1 truncate text-left text-sm transition cursor-pointer"
-        style={{
-          color: active ? "var(--color-octo-ivory)" : "var(--color-octo-sage)",
-        }}
+        className="relative flex-1 overflow-hidden"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       >
-        {workspace.name}
+        <div
+          onClick={onSelect}
+          onContextMenu={handleContextMenu}
+          title={
+            showPulse
+              ? `${workspace.name} — needs your attention (${attentionFlag.kind})`
+              : `${workspace.name} (right-click to customize)`
+          }
+          className="truncate text-left text-sm transition cursor-pointer"
+          style={{
+            color: active ? "var(--color-octo-ivory)" : "var(--color-octo-sage)",
+          }}
+        >
+          {workspace.name}
+        </div>
+
+        {/* Fade-out gradient */}
+        <div
+          className={`pointer-events-none absolute right-0 top-0 bottom-0 w-10 bg-gradient-to-l from-octo-onyx to-transparent transition-opacity duration-[220ms] ${
+            showFadeOut ? "opacity-100" : "opacity-0"
+          }`}
+          style={{
+            transitionTimingFunction: "cubic-bezier(0.2, 0.8, 0.3, 1)",
+          }}
+        />
       </div>
 
       {/* Active dot (6px, brass, visible only when active) */}
       {active && (
         <div className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-octo-brass" />
       )}
-
-      {/* Fade-out gradient (placeholder for Task 4) */}
-      <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-10 bg-gradient-to-l from-octo-onyx to-transparent opacity-0 transition-opacity duration-[220ms] group-hover:opacity-100" />
     </div>
   );
 }
