@@ -712,13 +712,11 @@ function App() {
   // ── Render: workspace shell ──
   const customizingWorkspace = workspaces.find((w) => w.id === customizingWorkspaceId) ?? null;
 
-  const projectGroups: ProjectGroup[] = useMemo(() => {
+  const projectGroups: ProjectGroup[] = (() => {
     if (!project) return [];
 
     const allProjects = new Map<string, { id: string; name: string }>();
-    if (project) {
-      allProjects.set(project.id, { id: project.id, name: project.name });
-    }
+    allProjects.set(project.id, { id: project.id, name: project.name });
     recentProjects.forEach((p) => {
       if (!allProjects.has(p.id)) {
         allProjects.set(p.id, { id: p.id, name: p.name });
@@ -739,7 +737,7 @@ function App() {
       name: projectInfo.name,
       workspaces: workspacesByProject.get(projectId) || [],
     }));
-  }, [project, recentProjects, workspaces]);
+  })();
 
   return (
     <div className="flex h-screen w-screen bg-octo-bg text-octo-ivory">
