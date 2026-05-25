@@ -2,9 +2,16 @@ import { resolveMonogram, TINTS } from "../lib/monogram";
 import type { Workspace } from "../lib/types";
 import { useAttentionStore } from "../stores/attentionStore";
 
-interface Props {
+/** Hierarchical project/workspace structure for the rail. */
+export interface ProjectGroup {
+  id: string;
+  name: string;
   workspaces: Workspace[];
-  activeId: string | null;
+}
+
+interface Props {
+  projects: ProjectGroup[];
+  activeWorkspaceId: string | null;
   onSelect: (id: string) => void;
   onCustomize: (id: string) => void;
   /** Called when the user right-clicks a workspace monogram. */
@@ -13,13 +20,17 @@ interface Props {
 }
 
 export function WorkspaceRail({
-  workspaces,
-  activeId,
+  projects,
+  activeWorkspaceId,
   onSelect,
   onCustomize,
   onContextMenu,
   onNewWorkspace,
 }: Props) {
+  // Temporary: flatten projects to workspaces for the current implementation.
+  // Task 2 will refactor the rendering to use the hierarchical structure.
+  const workspaces = projects.flatMap((p) => p.workspaces);
+
   return (
     <aside
       className="flex h-full w-12 flex-col items-center gap-2 border-r border-octo-hairline bg-octo-panel pb-3 pt-9"
@@ -29,7 +40,7 @@ export function WorkspaceRail({
         <MonogramButton
           key={ws.id}
           workspace={ws}
-          active={ws.id === activeId}
+          active={ws.id === activeWorkspaceId}
           onSelect={() => onSelect(ws.id)}
           onCustomize={() => onCustomize(ws.id)}
           onContextMenu={

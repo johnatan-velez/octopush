@@ -31,6 +31,7 @@ import { useTokenStore } from "./stores/tokenStore";
 import { useTerminalsStore } from "./stores/terminalsStore";
 import { useChatStore } from "./stores/chatStore";
 import { useBudgetsStore } from "./stores/budgetsStore";
+import type { ProjectGroup } from "./components/WorkspaceRail";
 import { listen } from "@tauri-apps/api/event";
 import { deriveChatTitle, deriveChatMeta } from "./lib/chatTitle";
 import type { ModelWithProvider } from "./lib/types";
@@ -711,11 +712,17 @@ function App() {
   // ── Render: workspace shell ──
   const customizingWorkspace = workspaces.find((w) => w.id === customizingWorkspaceId) ?? null;
 
+  // Wrap workspaces in a project group for the hierarchical rail structure.
+  // Task 2 will handle multiple projects; for now, all workspaces belong to the current project.
+  const projectGroups: ProjectGroup[] = project
+    ? [{ id: project.id, name: project.name, workspaces }]
+    : [];
+
   return (
     <div className="flex h-screen w-screen bg-octo-bg text-octo-ivory">
       <WorkspaceRail
-        workspaces={workspaces}
-        activeId={activeWorkspaceId}
+        projects={projectGroups}
+        activeWorkspaceId={activeWorkspaceId}
         onSelect={(id) => selectWorkspace(id)}
         onCustomize={(id) => setCustomizingWorkspaceId(id)}
         onContextMenu={(workspaceId, x, y) => setContextMenu({ workspaceId, x, y })}
