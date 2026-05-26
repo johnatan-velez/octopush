@@ -17,6 +17,7 @@ import { ChangesPanel } from "./components/ChangesPanel";
 import { EditorPane } from "./components/EditorPane";
 import { EditorTabs } from "./components/EditorTabs";
 import { ReviewCanvas, type ReviewViewMode } from "./components/ReviewCanvas";
+import { CanvasSplit } from "./components/CanvasSplit";
 import { useEditorStore } from "./stores/editorStore";
 import { useAttentionStore } from "./stores/attentionStore";
 import { focus as focusGlobal } from "./lib/focus";
@@ -1067,36 +1068,38 @@ function App() {
 
                   {/* Centre: ReviewCanvas with Diff/Editor toggle */}
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                    <ReviewCanvas
-                      workspaceId={activeWorkspaceId!}
-                      workspacePath={activeWorkspace.worktreePath || project.path}
-                      gitStatus={gitStatus}
-                      gitDiff={gitDiff}
-                      viewMode={reviewViewMode}
-                      onViewModeChange={setReviewViewMode}
-                      onDiffChange={() => {
-                        // Re-fetch git status + diff after a hunk action
-                        const path = activeWorkspace.worktreePath || project.path;
-                        Promise.all([
-                          ipc.getGitStatus(path),
-                          ipc.getGitDiff(path).catch(() => ""),
-                        ])
-                          .then(([s, d]) => {
-                            setGitStatus(s);
-                            setGitDiff(d);
-                          })
-                          .catch(() => {});
-                      }}
-                      initialTestCommand={activeWorkspace.testCommand ?? null}
-                    >
-                      {/* Editor mode content */}
-                      <EditorTabs workspaceId={activeWorkspaceId!} />
-                      <EditorPane
+                    <CanvasSplit>
+                      <ReviewCanvas
                         workspaceId={activeWorkspaceId!}
                         workspacePath={activeWorkspace.worktreePath || project.path}
-                        diffText={gitDiff}
-                      />
-                    </ReviewCanvas>
+                        gitStatus={gitStatus}
+                        gitDiff={gitDiff}
+                        viewMode={reviewViewMode}
+                        onViewModeChange={setReviewViewMode}
+                        onDiffChange={() => {
+                          // Re-fetch git status + diff after a hunk action
+                          const path = activeWorkspace.worktreePath || project.path;
+                          Promise.all([
+                            ipc.getGitStatus(path),
+                            ipc.getGitDiff(path).catch(() => ""),
+                          ])
+                            .then(([s, d]) => {
+                              setGitStatus(s);
+                              setGitDiff(d);
+                            })
+                            .catch(() => {});
+                        }}
+                        initialTestCommand={activeWorkspace.testCommand ?? null}
+                      >
+                        {/* Editor mode content */}
+                        <EditorTabs workspaceId={activeWorkspaceId!} />
+                        <EditorPane
+                          workspaceId={activeWorkspaceId!}
+                          workspacePath={activeWorkspace.worktreePath || project.path}
+                          diffText={gitDiff}
+                        />
+                      </ReviewCanvas>
+                    </CanvasSplit>
                   </div>
                 </div>
               )}
