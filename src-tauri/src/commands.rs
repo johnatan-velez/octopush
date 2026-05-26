@@ -1031,6 +1031,71 @@ pub async fn clone_project(
     })
 }
 
+#[tauri::command]
+pub async fn update_project_customization(
+    state: State<'_, AppState>,
+    project_id: String,
+    name: Option<String>,
+    tint: Option<String>,
+) -> AppResult<()> {
+    state.db.lock().update_project(
+        &project_id,
+        name.as_deref(),
+        tint.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub async fn close_project(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> AppResult<()> {
+    state.db.lock().delete_project(&project_id)
+}
+
+#[tauri::command]
+pub async fn delete_project(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> AppResult<()> {
+    // Look up the project to get its path and list all workspaces
+    let (path, workspaces) = {
+        let db = state.db.lock();
+        let (_, _, path) = db
+            .get_project_by_id(&project_id)?
+            .ok_or_else(|| AppError::Other(format!("project not found: {}", project_id)))?;
+
+        // Get all workspaces for this project
+        let workspaces = db.list_workspaces(&project_id)?;
+        (path, workspaces)
+    }; // Lock is released here
+
+    // Delete all workspaces and their associated worktrees
+    for workspace in workspaces {
+        // Call the existing delete_workspace logic to properly clean up worktrees
+        let _ = delete_workspace(
+            state.clone(),
+            workspace.id,
+            path.clone(),
+            workspace.branch,
+            workspace.worktree_path,
+        )
+        .await;
+    }
+
+    // Delete the project directory from disk
+    let project_path = std::path::Path::new(&path);
+    if project_path.exists() {
+        std::fs::remove_dir_all(project_path).map_err(|e| {
+            AppError::Other(format!("failed to delete project directory '{}': {}", path, e))
+        })?;
+    }
+
+    // Remove from database
+    state.db.lock().delete_project(&project_id)?;
+    Ok(())
+}
+
 // ─── Budget commands ──────────────────────────────────────────────
 
 #[derive(serde::Serialize)]

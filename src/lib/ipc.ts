@@ -130,6 +130,12 @@ export const ipc = {
       nameOverride: args.nameOverride ?? null,
       credentials: args.credentials ?? null,
     }),
+  updateProjectCustomization: (projectId: string, name: string | null, tint: string | null) =>
+    invoke<void>("update_project_customization", { projectId, name, tint }),
+  closeProject: (projectId: string) =>
+    invoke<void>("close_project", { projectId }),
+  deleteProject: (projectId: string) =>
+    invoke<void>("delete_project", { projectId }),
 
   // ─── Workspaces ─────────────────────────────────────────────────
   createWorkspace: (projectId: string, projectPath: string, name: string, task: string,
