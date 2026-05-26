@@ -18,7 +18,6 @@ interface Props {
   onCustomize: (id: string) => void;
   /** Called when the user right-clicks a workspace monogram. */
   onContextMenu?: (workspaceId: string, x: number, y: number) => void;
-  onNewWorkspace: () => void;
   /** Called when user clicks to create a workspace for a specific project. */
   onNewWorkspaceForProject?: (projectId: string) => void;
   /** Called when user clicks to add a new project. */
@@ -33,7 +32,6 @@ export function WorkspaceRail({
   onSelect,
   onCustomize,
   onContextMenu,
-  onNewWorkspace,
   onNewWorkspaceForProject,
   onAddProject,
   onProjectContextMenu,
@@ -42,14 +40,14 @@ export function WorkspaceRail({
 
   return (
     <aside
-      className={`flex h-full flex-col items-center gap-2 border-r border-octo-hairline bg-octo-panel pb-3 pt-9 transition-all duration-[220ms] ${
-        isCollapsed ? "w-[50px]" : "w-[280px]"
+      className={`flex h-full flex-col items-center border-r border-octo-hairline bg-octo-panel pb-3 pt-9 transition-all duration-[220ms] ${
+        isCollapsed ? "w-[50px] gap-1" : "w-[280px] gap-2"
       }`}
       aria-label="Workspaces"
     >
-      <div className="flex-1 flex flex-col gap-2 w-full overflow-y-auto">
+      <div className={`flex-1 flex flex-col w-full overflow-y-auto ${isCollapsed ? "gap-0.5" : "gap-2"}`}>
         {(projects || []).map((project, projectIndex) => (
-          <div key={project?.id || `project-${projectIndex}`} className="flex flex-col gap-1" style={{ marginBottom: projectIndex < projects.length - 1 ? '0.75rem' : '0' }}>
+          <div key={project?.id || `project-${projectIndex}`} className={`flex flex-col ${isCollapsed ? "gap-1" : "gap-1"}`} style={{ marginBottom: isCollapsed && projectIndex < projects.length - 1 ? '0.5rem' : !isCollapsed && projectIndex < projects.length - 1 ? '0.75rem' : '0' }}>
             {/* Project header (only when expanded) */}
             {!isCollapsed && project?.name && (() => {
               const tint = project.tint ? TINTS[project.tint as keyof typeof TINTS] : TINTS.brass;
@@ -85,8 +83,8 @@ export function WorkspaceRail({
 
             {/* Project separator (only when collapsed, not on first project) */}
             {isCollapsed && projectIndex > 0 && (
-              <div className="flex justify-center">
-                <div className="h-[1px] w-6 bg-octo-hairline opacity-50" />
+              <div className="flex justify-center my-1">
+                <div className="h-[1px] w-5 bg-octo-hairline opacity-60" />
               </div>
             )}
 
@@ -115,24 +113,13 @@ export function WorkspaceRail({
         <button
           type="button"
           onClick={onAddProject}
-          className={`w-full flex ${isCollapsed ? "justify-center" : ""} items-center gap-2 px-3 py-2 text-octo-mute hover:text-octo-brass transition font-mono text-sm`}
+          className="w-full flex justify-center items-center gap-2 px-3 py-2 text-octo-mute hover:text-octo-brass transition font-mono text-sm"
           title="Add project"
           aria-label="Add project"
         >
           ◉ {!isCollapsed && "Add project"}
         </button>
       )}
-
-      {/* New workspace button */}
-      <button
-        type="button"
-        onClick={onNewWorkspace}
-        title="New workspace (⌘N)"
-        aria-label="New workspace"
-        className="flex h-7 w-7 items-center justify-center rounded-md border border-dashed border-octo-hairline font-mono text-base text-octo-mute transition hover:border-octo-brass hover:text-octo-brass"
-      >
-        +
-      </button>
 
       {/* Toggle button at bottom */}
       <button
@@ -144,7 +131,7 @@ export function WorkspaceRail({
           isCollapsed ? "px-1" : "px-3"
         } py-1 text-center font-mono text-[11px]`}
       >
-        {isCollapsed ? "▲" : "▼ Collapse"}
+        {isCollapsed ? "▶" : "◀ Collapse"}
       </button>
     </aside>
   );
@@ -207,20 +194,23 @@ function WorkspaceRow({
     setShowFadeOut(false);
   };
 
+  const handleContextMenu = (e: React.MouseEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onContextMenu) {
+      onContextMenu(e.clientX, e.clientY);
+    } else {
+      onCustomize();
+    }
+  };
+
   if (isCollapsed) {
-    // Collapsed mode: 32px monogram only
+    // Collapsed mode: simple centered button
     return (
       <button
         type="button"
         onClick={onSelect}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          if (onContextMenu) {
-            onContextMenu(e.clientX, e.clientY);
-          } else {
-            onCustomize();
-          }
-        }}
+        onContextMenu={handleContextMenu}
         title={workspace?.name || "Workspace"}
         aria-label={
           showPulse
@@ -228,7 +218,7 @@ function WorkspaceRow({
             : workspace?.name || "Workspace"
         }
         aria-current={active ? "location" : undefined}
-        className={`relative flex h-8 w-8 items-center justify-center rounded-md border font-serif transition ${
+        className={`relative flex h-7 w-7 mx-auto items-center justify-center rounded-md border font-serif transition ${
           showPulse ? "animate-attention-pulse" : ""
         }`}
         style={{
@@ -238,7 +228,7 @@ function WorkspaceRow({
             : active
               ? tint?.accent || "transparent"
               : "transparent",
-          background: active && tint ? tint.bg : "transparent",
+          background: tint?.bg || "transparent",
         }}
       >
         {mono?.glyph || "?"}
@@ -247,26 +237,17 @@ function WorkspaceRow({
   }
 
   // Expanded mode
-  const handleContextMenu = (e: React.MouseEvent<HTMLElement>) => {
-    e.preventDefault();
-    if (onContextMenu) {
-      onContextMenu(e.clientX, e.clientY);
-    } else {
-      onCustomize();
-    }
-  };
-
   return (
     <div
       className={`group relative flex h-11 items-center gap-2 border-l-2 px-3 transition-all duration-[220ms] ${
         active ? "border-octo-brass bg-octo-panel-2" : "border-transparent hover:bg-octo-panel-2"
       }`}
+      onContextMenu={handleContextMenu}
     >
       {/* Monogram (24px) */}
       <button
         type="button"
         onClick={onSelect}
-        onContextMenu={handleContextMenu}
         title={workspace?.name || "Workspace"}
         aria-label={workspace?.name || "Workspace"}
         className={`relative flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border bg-transparent font-serif transition ${
@@ -293,7 +274,6 @@ function WorkspaceRow({
       >
         <div
           onClick={onSelect}
-          onContextMenu={handleContextMenu}
           title={
             showPulse
               ? `${workspace?.name || "Workspace"} — needs your attention${attentionFlag?.kind ? ` (${attentionFlag.kind})` : ""}`

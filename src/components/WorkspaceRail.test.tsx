@@ -22,7 +22,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
 }
 
 describe("WorkspaceRail", () => {
-  it("renders one button per workspace plus new workspace and toggle buttons", () => {
+  it("renders one button per workspace plus toggle button", () => {
     const workspaces = [
       makeWorkspace({ id: "a", name: "Alpha" }),
       makeWorkspace({ id: "b", name: "Beta" }),
@@ -37,11 +37,10 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="a"
         onSelect={vi.fn()}
         onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
       />,
     );
-    // workspace buttons + new workspace button + toggle button
-    expect(screen.getAllByRole("button")).toHaveLength(workspaces.length + 2);
+    // workspace buttons + toggle button
+    expect(screen.getAllByRole("button")).toHaveLength(workspaces.length + 1);
   });
 
   it("renders the workspace monogram glyph", () => {
@@ -55,7 +54,6 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="ws-1"
         onSelect={vi.fn()}
         onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
       />,
     );
     expect(screen.getByText("H")).toBeInTheDocument();
@@ -76,7 +74,6 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="a"
         onSelect={onSelect}
         onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
       />,
     );
     fireEvent.click(screen.getByText("B"));
@@ -95,7 +92,6 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="a"
         onSelect={vi.fn()}
         onCustomize={onCustomize}
-        onNewWorkspace={vi.fn()}
       />,
     );
     fireEvent.contextMenu(screen.getByText("A"));
@@ -115,29 +111,10 @@ describe("WorkspaceRail", () => {
         onSelect={vi.fn()}
         onCustomize={vi.fn()}
         onContextMenu={onContextMenu}
-        onNewWorkspace={vi.fn()}
       />,
     );
     fireEvent.contextMenu(screen.getByText("A"), { clientX: 50, clientY: 80 });
     expect(onContextMenu).toHaveBeenCalledWith("a", 50, 80);
-  });
-
-  it("calls onNewWorkspace when the + button is clicked", () => {
-    const onNewWorkspace = vi.fn();
-    const projects: ProjectGroup[] = [
-      { id: "proj-1", name: "Project", workspaces: [] },
-    ];
-    render(
-      <WorkspaceRail
-        projects={projects}
-        activeWorkspaceId={null}
-        onSelect={vi.fn()}
-        onCustomize={vi.fn()}
-        onNewWorkspace={onNewWorkspace}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /new workspace/i }));
-    expect(onNewWorkspace).toHaveBeenCalled();
   });
 
   it("should toggle rail width on button click", () => {
@@ -151,7 +128,6 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="a"
         onSelect={vi.fn()}
         onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
       />,
     );
     const aside = container.querySelector("aside");
@@ -182,7 +158,6 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="a"
         onSelect={vi.fn()}
         onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
       />,
     );
 
@@ -194,8 +169,8 @@ describe("WorkspaceRail", () => {
     const headers = screen.getAllByText(/^— /);
     headers.forEach((header) => {
       expect(header).toHaveClass("font-mono");
-      expect(header).toHaveClass("text-octo-brass");
       expect(header).toHaveClass("uppercase");
+      expect(header.getAttribute("style")).toBeTruthy();
     });
   });
 
@@ -214,7 +189,6 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="a"
         onSelect={vi.fn()}
         onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
       />,
     );
 
@@ -242,7 +216,6 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="a"
         onSelect={vi.fn()}
         onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
       />,
     );
 
@@ -268,12 +241,12 @@ describe("WorkspaceRail", () => {
     // Monogram should still be visible in collapsed mode
     expect(screen.getByText("H")).toBeInTheDocument();
 
-    // Find the collapsed monogram button (32px)
+    // Find the collapsed monogram button (28px)
     monogramButtons = container.querySelectorAll("button");
     let collapsedMonogramFound = false;
     monogramButtons.forEach((button) => {
-      if (button.textContent === "H" && button.classList.contains("h-8")) {
-        expect(button).toHaveClass("w-8"); // 32px = h-8 w-8
+      if (button.textContent === "H" && button.classList.contains("h-7")) {
+        expect(button).toHaveClass("w-7"); // 28px = h-7 w-7
         collapsedMonogramFound = true;
       }
     });
@@ -291,7 +264,6 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="a"
         onSelect={vi.fn()}
         onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
       />,
     );
 
@@ -323,7 +295,6 @@ describe("WorkspaceRail", () => {
         activeWorkspaceId="a"
         onSelect={vi.fn()}
         onCustomize={vi.fn()}
-        onNewWorkspace={vi.fn()}
       />,
     );
 

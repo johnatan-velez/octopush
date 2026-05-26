@@ -137,6 +137,8 @@ function App() {
   const [customizingProjectId, setCustomizingProjectId] = useState<string | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [projectContextMenu, setProjectContextMenu] = useState<{ projectId: string; x: number; y: number } | null>(null);
+  // Counter to trigger re-renders when project customizations change
+  const [projectCustomizationsVersion, setProjectCustomizationsVersion] = useState(0);
 
   // Git status + diff (refreshed on workspace change)
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
@@ -824,6 +826,9 @@ function App() {
       customizations[customizingProjectId] = { name, tint };
       localStorage.setItem("projectCustomizations", JSON.stringify(customizations));
 
+      // Trigger re-render so projectGroups recalculates with new customizations
+      setProjectCustomizationsVersion((v) => v + 1);
+
       // Call IPC to update backend (will be implemented in Task 6)
       pushToast({ level: "success", title: "Project updated" });
     } catch (err) {
@@ -853,9 +858,20 @@ function App() {
   }
 
   // ── Render: workspace shell ──
-  const customizingWorkspace = workspaces.find((w) => w.id === customizingWorkspaceId) ?? null;
+  const customizingWorkspace = (() => {
+    if (!customizingWorkspaceId) return null;
+    // Search across all workspaces from all projects
+    for (const projectWs of Object.values(workspacesByProjectId)) {
+      const ws = projectWs.find((w) => w.id === customizingWorkspaceId);
+      if (ws) return ws;
+    }
+    return null;
+  })();
 
   const projectGroups: ProjectGroup[] = (() => {
+    // Depend on projectCustomizationsVersion to trigger recalculation when customizations change
+    void projectCustomizationsVersion;
+
     if (!project) return [];
 
     // Load customizations from localStorage
@@ -895,7 +911,6 @@ function App() {
         onSelect={(id) => selectWorkspace(id)}
         onCustomize={(id) => setCustomizingWorkspaceId(id)}
         onContextMenu={(workspaceId, x, y) => setContextMenu({ workspaceId, x, y })}
-        onNewWorkspace={() => setShowCreator(true)}
         onNewWorkspaceForProject={(projectId) => {
           setCreatorProjectId(projectId);
           setShowCreator(true);
@@ -1267,7 +1282,12 @@ function App() {
 
       {/* Workspace context menu (right-click on monogram) */}
       {contextMenu && (() => {
-        const ws = workspaces.find((w) => w.id === contextMenu.workspaceId);
+        // Search across all workspaces from all projects
+        let ws = null;
+        for (const projectWs of Object.values(workspacesByProjectId)) {
+          ws = projectWs.find((w) => w.id === contextMenu.workspaceId);
+          if (ws) break;
+        }
         return ws ? (
           <WorkspaceContextMenu
             x={contextMenu.x}
@@ -1288,7 +1308,12 @@ function App() {
 
       {/* Delete confirmation modal */}
       {deletingWorkspaceId && (() => {
-        const ws = workspaces.find((w) => w.id === deletingWorkspaceId);
+        // Search across all workspaces from all projects
+        let ws = null;
+        for (const projectWs of Object.values(workspacesByProjectId)) {
+          ws = projectWs.find((w) => w.id === deletingWorkspaceId);
+          if (ws) break;
+        }
         return ws ? (
           <ConfirmDialog
             title={`Delete "${ws.name}"?`}

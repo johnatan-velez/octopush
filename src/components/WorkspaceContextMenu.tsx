@@ -35,6 +35,8 @@ export function WorkspaceContextMenu({
   // Close on outside click (capture phase so it fires before bubbling)
   useEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
+      // Ignore right-click (button 2) to allow context menu to fire
+      if (e.button === 2) return;
       if (ref.current && !ref.current.contains(e.target as Node)) {
         onClose();
       }
