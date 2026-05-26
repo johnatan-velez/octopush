@@ -758,11 +758,62 @@ function App() {
     setProjectContextMenu(null);
   };
 
+  // ── Project close handler ──
+  const handleCloseProject = useCallback(
+    async (projectId: string) => {
+      try {
+        await ipc.closeProject(projectId);
+        await loadRecentProjects();
+        pushToast({
+          level: "success",
+          title: "Project closed",
+        });
+      } catch (err) {
+        pushToast({
+          level: "error",
+          title: "Failed to close project",
+          body: String(err),
+        });
+      }
+      setProjectContextMenu(null);
+    },
+    [loadRecentProjects]
+  );
+
   // ── Project delete handler ──
   const handleDeleteProject = (projectId: string) => {
     setDeletingProjectId(projectId);
     setProjectContextMenu(null);
   };
+
+  // ── Project confirm delete handler ──
+  const handleConfirmDeleteProject = useCallback(
+    async (projectId: string) => {
+      try {
+        await ipc.deleteProject(projectId);
+        await loadRecentProjects();
+
+        // If current project was deleted, go to welcome screen
+        if (project?.id === projectId) {
+          useProjectStore.getState().close();
+        }
+
+        pushToast({
+          level: "success",
+          title: "Project deleted",
+        });
+      } catch (err) {
+        pushToast({
+          level: "error",
+          title: "Failed to delete project",
+          body: String(err),
+        });
+      } finally {
+        setDeletingProjectId(null);
+      }
+    },
+    [project?.id, loadRecentProjects]
+  );
 
   // ── Project customized handler ──
   const handleProjectCustomized = async (name: string, tint: string) => {
@@ -1148,11 +1199,7 @@ function App() {
               setShowProjectCustomizer(true);
               setProjectContextMenu(null);
             }}
-            onClose={() => {
-              // Will implement in Task 6
-              console.warn("Close project not yet implemented");
-              setProjectContextMenu(null);
-            }}
+            onClose={() => handleCloseProject(projectContextMenu.projectId)}
             onDelete={() => handleDeleteProject(projectContextMenu.projectId)}
             onDismiss={() => setProjectContextMenu(null)}
           />
@@ -1190,11 +1237,7 @@ function App() {
             destructiveLabel="Delete"
             cancelLabel="Cancel"
             requireInput={proj.name}
-            onConfirm={() => {
-              // Will implement in Task 6
-              console.warn("Delete project not yet implemented");
-              setDeletingProjectId(null);
-            }}
+            onConfirm={() => handleConfirmDeleteProject(deletingProjectId!)}
             onCancel={() => setDeletingProjectId(null)}
           />
         );
