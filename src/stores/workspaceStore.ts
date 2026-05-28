@@ -21,6 +21,12 @@ interface WorkspaceState {
   create: (projectId: string, projectPath: string, name: string, task: string,
            branch: string, fromBranch: string, setupScript: string) => Promise<Workspace>;
   select: (id: string | null) => void;
+  /**
+   * Record (and persist) which workspace was last active for a project without
+   * changing the currently-active workspace. Used when switching INTO another
+   * project from the rail so that the project-load picks the clicked workspace.
+   */
+  rememberActiveForProject: (projectId: string, workspaceId: string) => void;
   remove: (workspaceId: string, projectPath: string, branch: string, worktreePath: string | null) => Promise<void>;
   updateCustomization: (workspaceId: string, glyph: string | null, tint: string | null) => Promise<void>;
   notify: (workspaceId: string) => void;
@@ -104,12 +110,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         console.error("Failed to persist lastActiveByProject:", err);
       }
       return {
-        workspaces: [ws, ...s.workspaces],
+        // Append: new workspaces always sit at the end of their project's
+        // list (matching the backend's created_at ASC ordering). They still
+        // become active so the user lands on the freshly created workspace.
+        workspaces: [...s.workspaces, ws],
         activeId: ws.id,
         lastActiveByProject: updated,
         workspacesByProjectId: {
           ...s.workspacesByProjectId,
-          [projectId]: [ws, ...(s.workspacesByProjectId[projectId] || [])],
+          [projectId]: [...(s.workspacesByProjectId[projectId] || []), ws],
         },
       };
     });
@@ -140,12 +149,33 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return next as WorkspaceState;
     }),
 
+  rememberActiveForProject: (projectId, workspaceId) =>
+    set((s) => {
+      const updated = { ...s.lastActiveByProject, [projectId]: workspaceId };
+      try {
+        localStorage.setItem("lastActiveWorkspacePerProject", JSON.stringify(updated));
+      } catch (err) {
+        console.error("Failed to persist lastActiveByProject:", err);
+      }
+      return { lastActiveByProject: updated };
+    }),
+
   remove: async (workspaceId, projectPath, branch, worktreePath) => {
     await ipc.deleteWorkspace(workspaceId, projectPath, branch, worktreePath);
-    set((s) => ({
-      workspaces: s.workspaces.filter((w) => w.id !== workspaceId),
-      activeId: s.activeId === workspaceId ? null : s.activeId,
-    }));
+    set((s) => {
+      // Drop the workspace from every project's group too — the rail renders
+      // from `workspacesByProjectId`, so leaving a stale entry there keeps the
+      // deleted workspace visible even though it's gone from disk.
+      const nextByProject: Record<string, Workspace[]> = {};
+      for (const [pid, wss] of Object.entries(s.workspacesByProjectId)) {
+        nextByProject[pid] = wss.filter((w) => w.id !== workspaceId);
+      }
+      return {
+        workspaces: s.workspaces.filter((w) => w.id !== workspaceId),
+        workspacesByProjectId: nextByProject,
+        activeId: s.activeId === workspaceId ? null : s.activeId,
+      };
+    });
   },
 
   updateCustomization: async (workspaceId, glyph, tint) => {

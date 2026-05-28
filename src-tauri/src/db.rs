@@ -529,7 +529,7 @@ impl Db {
 
     pub fn list_projects(&self) -> AppResult<Vec<(String, String, String, String)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, last_opened FROM projects ORDER BY last_opened DESC LIMIT 20",
+            "SELECT id, name, path, last_opened FROM projects ORDER BY created_at ASC",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
@@ -610,7 +610,7 @@ impl Db {
     pub fn list_workspaces(&self, project_id: &str) -> AppResult<Vec<WorkspaceRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, project_id, name, task, branch, worktree_path, setup_script, status, created_at, last_active, glyph, tint, test_command
-             FROM workspaces WHERE project_id = ?1 ORDER BY last_active DESC",
+             FROM workspaces WHERE project_id = ?1 ORDER BY created_at ASC",
         )?;
         let rows = stmt.query_map(params![project_id], |r| {
             Ok(WorkspaceRow {

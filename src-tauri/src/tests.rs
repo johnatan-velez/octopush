@@ -195,6 +195,42 @@ mod workspace_tests {
     }
 
     #[test]
+    fn list_workspaces_orders_by_creation_ascending() {
+        let db = test_db();
+        db.insert_project("proj-1", "Test Project", "/tmp/proj-1")
+            .unwrap();
+        // Insert with gaps so created_at timestamps are distinct, then prove the
+        // order is stable creation-ascending (new at end) regardless of which
+        // one was touched most recently.
+        for id in ["ws-a", "ws-b", "ws-c"] {
+            db.insert_workspace(id, "proj-1", "ws", "", "main", None, "")
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        let workspaces = db.list_workspaces("proj-1").unwrap();
+        let ids: Vec<&str> = workspaces.iter().map(|w| w.id.as_str()).collect();
+        assert_eq!(ids, ["ws-a", "ws-b", "ws-c"]);
+    }
+
+    #[test]
+    fn list_projects_is_stable_creation_order_not_recency() {
+        let db = test_db();
+        for id in ["proj-a", "proj-b", "proj-c"] {
+            db.insert_project(id, "P", &format!("/tmp/{id}")).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        // "Open" the oldest project — under the old `last_opened DESC` ordering
+        // this would hoist proj-a to the front. Creation-ascending must NOT move it.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        db.touch_project("proj-a").unwrap();
+
+        let projects = db.list_projects().unwrap();
+        let ids: Vec<&str> = projects.iter().map(|p| p.0.as_str()).collect();
+        assert_eq!(ids, ["proj-a", "proj-b", "proj-c"]);
+    }
+
+    #[test]
     fn insert_and_list_error_message() {
         let db = test_db();
         db.insert_project("proj-err", "Test Project", "/tmp/proj-err")

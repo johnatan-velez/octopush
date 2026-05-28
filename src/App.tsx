@@ -64,6 +64,7 @@ function App() {
     loadAllWorkspaces,
     updateCustomization,
     select: selectWorkspace,
+    rememberActiveForProject,
     remove: removeWorkspace,
     workspacesByProjectId,
   } = useWorkspaceStore();
@@ -284,12 +285,16 @@ function App() {
       // shows the empty state, not the creator from the previous project.
       setShowInlineCreator(false);
       loadWorkspaces(project.id);
+      // Refresh the recent-projects list so a freshly created/opened project is
+      // present in the rail's stable (creation-ordered) list, not only via the
+      // active-project fallback.
+      loadRecentProjects();
       // Persist this project as last opened
       saveLastOpenedPath(project.path);
     } else {
       setShowCreator(false);
     }
-  }, [project, loadWorkspaces, saveLastOpenedPath]);
+  }, [project, loadWorkspaces, loadRecentProjects, saveLastOpenedPath]);
 
   // ── Load all workspaces from all projects for the rail ──
   useEffect(() => {
@@ -727,16 +732,31 @@ function App() {
 
   // ── Workspace delete handler ──
   const handleDeleteWorkspace = useCallback(async () => {
-    if (!deletingWorkspaceId || !project) return;
-    const ws = workspaces.find((w) => w.id === deletingWorkspaceId);
-    if (!ws) {
+    if (!deletingWorkspaceId) return;
+    // Find the workspace across ALL projects (the rail can delete any of them,
+    // not just one in the active project) and resolve its owning project path.
+    const entry = Object.entries(workspacesByProjectId)
+      .flatMap(([pid, wss]) => wss.map((w) => ({ pid, w })))
+      .find((e) => e.w.id === deletingWorkspaceId);
+    if (!entry) {
       setDeletingWorkspaceId(null);
+      return;
+    }
+    const { pid: wsProjectId, w: ws } = entry;
+    const projPath =
+      project?.id === wsProjectId
+        ? project.path
+        : recentProjects.find((p) => p.id === wsProjectId)?.path;
+    if (!projPath) {
+      setDeletingWorkspaceId(null);
+      pushToast({ level: "error", title: "Delete failed", body: "Could not resolve the workspace's project path." });
       return;
     }
     const wsName = ws.name;
     try {
-      await removeWorkspace(ws.id, project.path, ws.branch, ws.worktreePath ?? null);
-      // After removal, auto-select the first remaining workspace if active became null.
+      await removeWorkspace(ws.id, projPath, ws.branch, ws.worktreePath ?? null);
+      // If we removed the active workspace, fall back to the first remaining one
+      // in the current project so the canvas doesn't drop to the empty state.
       const remaining = useWorkspaceStore.getState().workspaces;
       if (!useWorkspaceStore.getState().activeId && remaining.length > 0) {
         selectWorkspace(remaining[0].id);
@@ -747,7 +767,39 @@ function App() {
     } finally {
       setDeletingWorkspaceId(null);
     }
-  }, [deletingWorkspaceId, project, workspaces, removeWorkspace, selectWorkspace]);
+  }, [deletingWorkspaceId, project, recentProjects, workspacesByProjectId, removeWorkspace, selectWorkspace]);
+
+  // Selecting a workspace from the rail. If it belongs to a different project,
+  // switch the active project to it (the project-switch effect loads that
+  // project's workspaces and, thanks to the remembered selection below,
+  // activates the clicked workspace). Selecting within the current project is a
+  // plain activeId change. Without this, clicking a workspace in another project
+  // left the active project unchanged and `activeWorkspace` resolved to null,
+  // dropping the user onto the empty "No workspaces here yet" screen.
+  const handleSelectWorkspace = useCallback(
+    (id: string) => {
+      const entry = Object.entries(workspacesByProjectId)
+        .flatMap(([pid, wss]) => wss.map((w) => ({ pid, w })))
+        .find((e) => e.w.id === id);
+      const targetProjectId = entry?.pid;
+
+      if (!targetProjectId || targetProjectId === project?.id) {
+        selectWorkspace(id);
+        return;
+      }
+
+      const targetPath = recentProjects.find((p) => p.id === targetProjectId)?.path;
+      if (!targetPath) {
+        selectWorkspace(id);
+        return;
+      }
+      // Remember the clicked workspace so loadWorkspaces() activates it after
+      // the project switch, then switch projects.
+      rememberActiveForProject(targetProjectId, id);
+      openProject(targetPath);
+    },
+    [workspacesByProjectId, project, selectWorkspace, recentProjects, rememberActiveForProject, openProject],
+  );
 
   // ── Project context menu handler ──
   const handleProjectContextMenu = (projectId: string, x: number, y: number) => {
@@ -878,29 +930,27 @@ function App() {
     // Load customizations from localStorage
     const customizations = JSON.parse(localStorage.getItem("projectCustomizations") || "{}");
 
-    const allProjects = new Map<string, { id: string; name: string; tint?: string }>();
-    const currentProjCustom = customizations[project.id];
-    allProjects.set(project.id, {
-      id: project.id,
-      name: currentProjCustom?.name || project.name,
-      tint: currentProjCustom?.tint
-    });
-    recentProjects.forEach((p) => {
-      if (!allProjects.has(p.id)) {
-        const pCustom = customizations[p.id];
-        allProjects.set(p.id, {
-          id: p.id,
-          name: pCustom?.name || p.name,
-          tint: pCustom?.tint
-        });
-      }
-    });
+    // Stable order: follow `recentProjects` (creation order from the backend),
+    // and append the active project only if it isn't in that list yet (e.g. one
+    // just created this session). We deliberately do NOT hoist the active
+    // project to the top — selecting a workspace must never reorder the rail,
+    // and newly added projects stay at the end.
+    const ordered: { id: string; name: string; tint?: string }[] = [];
+    const seen = new Set<string>();
+    const pushProject = (id: string, fallbackName: string) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      const custom = customizations[id];
+      ordered.push({ id, name: custom?.name || fallbackName, tint: custom?.tint });
+    };
+    recentProjects.forEach((p) => pushProject(p.id, p.name));
+    pushProject(project.id, project.name);
 
-    return Array.from(allProjects.entries()).map(([projectId, projectInfo]) => ({
-      id: projectInfo.id,
-      name: projectInfo.name,
-      tint: projectInfo.tint,
-      workspaces: workspacesByProjectId[projectId] || [],
+    return ordered.map((p) => ({
+      id: p.id,
+      name: p.name,
+      tint: p.tint,
+      workspaces: workspacesByProjectId[p.id] || [],
     }));
   })();
 
@@ -909,7 +959,7 @@ function App() {
       <WorkspaceRail
         projects={projectGroups}
         activeWorkspaceId={activeWorkspaceId}
-        onSelect={(id) => selectWorkspace(id)}
+        onSelect={handleSelectWorkspace}
         onCustomize={(id) => setCustomizingWorkspaceId(id)}
         onContextMenu={(workspaceId, x, y) => setContextMenu({ workspaceId, x, y })}
         onNewWorkspaceForProject={(projectId) => {
