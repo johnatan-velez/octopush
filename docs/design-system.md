@@ -203,3 +203,15 @@ One‑page reference for **Atelier in Onyx & Brass**. For the full design, motio
 | Input bar     | flex  | Italic-serif placeholder, ⌘K kbd hint. |
 
 Don't add chrome outside these surfaces. If a feature needs something new, propose extending the grammar in the spec — don't add it ad-hoc.
+
+### Status bar (bottom)
+
+A single full-width strip at the very bottom of the window (~22px), beneath
+both the rail and the main column. It is the one sanctioned piece of bottom
+chrome. Rules:
+
+- `bg-octo-panel`, top `border-octo-hairline`, JetBrains Mono `text-[11px]`.
+- Labels in `text-octo-mute`/`text-octo-sage`; live values in `text-octo-brass`.
+- Calm: no motion, no spring. It informs, it doesn't perform.
+- Current resident: the performance monitor (RAM + CPU). Future bottom-bar
+  content must keep this quiet, single-line character.
