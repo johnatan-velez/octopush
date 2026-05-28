@@ -2138,8 +2138,11 @@ pub async fn search_workspace_text(
 /// Async so the per-poll process scan runs off the UI thread.
 #[tauri::command]
 pub async fn get_perf_stats(perf: tauri::State<'_, crate::perf::PerfState>) -> Result<crate::perf::PerfStats, String> {
-    let mut sys = perf.0.lock();
-    let samples = crate::perf::sample_system(&mut sys);
+    // Hold the System lock only across the refresh+sample, not the FFI loop below.
+    let samples = {
+        let mut sys = perf.0.lock();
+        crate::perf::sample_system(&mut sys)
+    };
     let app_pid = std::process::id();
     let daemon_pid = crate::perf::daemon_pid();
     let responsible = crate::perf::responsible_map(&samples);

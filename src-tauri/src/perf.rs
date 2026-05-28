@@ -1,8 +1,10 @@
 //! Process performance sampling for the in-app monitor.
 //!
-//! Two groups are reported: `app` (the Octopush main process plus its WebKit
-//! helper descendants) and `daemon` (the `octopush-pty-server` process only —
-//! its shell children are user workloads, not Octopush overhead), plus a total.
+//! Two groups are reported: `app` (the Octopush main process plus the helper
+//! processes macOS considers it "responsible" for — e.g. the WebKit content/GPU/
+//! networking XPC processes, which are reparented to launchd but attributed back
+//! to the app) and `daemon` (the `octopush-pty-server` process only — its shell
+//! children are user workloads, not Octopush overhead), plus a total.
 
 use parking_lot::Mutex;
 use serde::Serialize;
