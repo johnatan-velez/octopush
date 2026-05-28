@@ -10,4 +10,15 @@ describe("formatBytes", () => {
     expect(formatBytes(412 * 1024 * 1024)).toBe("412 MB");
     expect(formatBytes(3 * 1024 * 1024 * 1024)).toBe("3.0 GB");
   });
+
+  it("renders whole numbers at and above 10 of a unit", () => {
+    expect(formatBytes(10 * 1024)).toBe("10 KB");
+    expect(formatBytes(15 * 1024)).toBe("15 KB");
+  });
+
+  it("handles zero and rejects invalid input", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(NaN)).toBe("—");
+    expect(formatBytes(-5)).toBe("—");
+  });
 });
