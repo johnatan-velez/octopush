@@ -16,6 +16,7 @@ import type {
   ModelSuggestion,
   ModelWithProvider,
   OpenPr,
+  PerfStats,
   ProjectInfo,
   ProviderConfig,
   PtySession,
@@ -297,4 +298,7 @@ export const ipc = {
       "spawn_or_attach_terminal",
       { id, cwd, label },
     ),
+
+  // ─── Performance ──────────────────────────────────────────────
+  getPerfStats: () => invoke<PerfStats>("get_perf_stats"),
 };

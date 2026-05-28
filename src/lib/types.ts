@@ -409,6 +409,21 @@ export interface SpendSnapshot {
   tokens: number;
 }
 
+// ─── Performance stats ────────────────────────────────────────────
+
+export interface ProcGroup {
+  rssBytes: number;
+  cpuPct: number;
+  processCount: number;
+}
+
+export interface PerfStats {
+  app: ProcGroup;
+  daemon: ProcGroup;
+  total: ProcGroup;
+  ts: number;
+}
+
 // ─── Templates ────────────────────────────────────────────────────
 
 export interface SessionTemplate {
