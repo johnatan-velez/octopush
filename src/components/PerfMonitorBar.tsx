@@ -19,7 +19,7 @@ export function PerfMonitorBar() {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="relative flex h-[22px] w-full flex-shrink-0 items-center border-t border-octo-hairline bg-octo-panel px-3 font-mono text-[11px] text-octo-mute">
+    <div className="relative flex h-[22px] w-full flex-shrink-0 items-center justify-end border-t border-octo-hairline bg-octo-panel px-3 font-mono text-[11px] text-octo-mute">
       {!stats ? (
         <span className="flex items-center gap-2">
           <span className="text-octo-brass">⌗</span>
@@ -44,7 +44,7 @@ export function PerfMonitorBar() {
             <span className="text-octo-mute">{open ? "▾" : "▸"}</span>
           </button>
           {open && (
-            <div className="absolute bottom-[26px] left-2 z-50 rounded-md border border-octo-hairline bg-octo-panel-2 p-2 shadow-lg">
+            <div className="absolute bottom-[26px] right-2 z-50 rounded-md border border-octo-hairline bg-octo-panel-2 p-2 shadow-lg">
               <PerfRow label="App" g={stats.app} />
               <PerfRow label="Daemon" g={stats.daemon} />
             </div>
