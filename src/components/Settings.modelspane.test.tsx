@@ -142,3 +142,111 @@ describe("ModelsPane — model editing", () => {
     expect(modelIds.length).toBeGreaterThan(0);
   });
 });
+
+describe("ModelsPane — custom provider management", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listProvidersMock.mockResolvedValue([MOCK_PROVIDER]);
+    getSettingsMock.mockResolvedValue(MOCK_SETTINGS);
+    saveProvidersMock.mockResolvedValue(undefined);
+    saveSettingsMock.mockResolvedValue(undefined);
+    getDefaultProvidersMock.mockResolvedValue([MOCK_PROVIDER]);
+  });
+
+  it("adds a custom provider and appends it to the list", async () => {
+    await renderModelsPane();
+
+    // Click "Add a provider"
+    const addProviderBtn = screen.getByRole("button", { name: /add a provider/i });
+    await act(async () => { fireEvent.click(addProviderBtn); });
+
+    // Fill in provider name
+    const nameInput = screen.getByPlaceholderText(/e.g. my-gateway/i);
+    await act(async () => { fireEvent.change(nameInput, { target: { value: "sonatype" } }); });
+
+    // Fill in base URL
+    const baseUrlInput = screen.getByPlaceholderText(/https:\/\/my-gateway/i);
+    await act(async () => { fireEvent.change(baseUrlInput, { target: { value: "https://sonatype.example.com" } }); });
+
+    // Use the form's Add a provider button (the second one inside the form)
+    const addBtns = screen.getAllByRole("button", { name: /add a provider/i });
+    // After clicking the top-level one, the form appears — the submit button is inside the form
+    // There should be one remaining for the submit inside the form
+    const submitFormBtn = addBtns[addBtns.length - 1];
+    await act(async () => { fireEvent.click(submitFormBtn); });
+
+    // The new provider should appear in the list
+    expect(screen.getByText("Sonatype")).toBeInTheDocument();
+  });
+
+  it("shows an error when adding a provider with empty name", async () => {
+    await renderModelsPane();
+
+    const addProviderBtn = screen.getByRole("button", { name: /add a provider/i });
+    await act(async () => { fireEvent.click(addProviderBtn); });
+
+    // Submit without filling name
+    const addBtns = screen.getAllByRole("button", { name: /add a provider/i });
+    const submitFormBtn = addBtns[addBtns.length - 1];
+    await act(async () => { fireEvent.click(submitFormBtn); });
+
+    expect(screen.getByText(/name is required/i)).toBeInTheDocument();
+  });
+
+  it("removes a custom provider via confirm dialog", async () => {
+    const customProvider: ProviderConfig = {
+      name: "my-gateway",
+      apiBase: "https://gw.example.com",
+      apiKeyEnv: "",
+      models: [],
+      enabled: true,
+      protocol: "anthropic",
+      local: false,
+    };
+    // Only show the custom provider (not built-in) so there's only one Remove button
+    listProvidersMock.mockResolvedValue([customProvider]);
+    await renderModelsPane();
+
+    // The custom provider is shown
+    expect(screen.getByText("My-gateway")).toBeInTheDocument();
+
+    // Click the "Remove" provider button (not a model remove)
+    const removeBtn = screen.getByRole("button", { name: /^remove$/i });
+    await act(async () => { fireEvent.click(removeBtn); });
+
+    // ConfirmDialog should appear
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // Click the destructive button in the dialog
+    const confirmBtn = screen.getByRole("button", { name: /remove provider/i });
+    await act(async () => { fireEvent.click(confirmBtn); });
+
+    // Provider should be gone from UI
+    expect(screen.queryByText("My-gateway")).not.toBeInTheDocument();
+  });
+
+  it("reset to defaults restores a builtin provider's models in local state", async () => {
+    // Start with anthropic with models removed
+    const modifiedAnthropic: ProviderConfig = {
+      ...MOCK_PROVIDER,
+      models: [],
+    };
+    listProvidersMock.mockResolvedValue([modifiedAnthropic]);
+    // Defaults still have the model
+    getDefaultProvidersMock.mockResolvedValue([MOCK_PROVIDER]);
+
+    await renderModelsPane();
+
+    // Should have no model initially
+    expect(screen.queryByText("claude-sonnet-4-6")).not.toBeInTheDocument();
+
+    // Click "Reset to defaults"
+    const resetBtn = screen.getByRole("button", { name: /reset to defaults/i });
+    await act(async () => { fireEvent.click(resetBtn); });
+
+    // The model should now appear
+    await waitFor(() => {
+      expect(screen.getByText("claude-sonnet-4-6")).toBeInTheDocument();
+    });
+  });
+});
