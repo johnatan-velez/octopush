@@ -60,6 +60,13 @@ describe("PerfMonitorBar", () => {
     expect(screen.getByText("318 MB")).toBeInTheDocument();
   });
 
+  it("shows a quiet dash in caches when there is no workspace path", () => {
+    usePerfStore.setState({ stats: STATS_FIXTURE });
+    render(<PerfMonitorBar />);
+    fireEvent.click(screen.getByRole("button", { name: /performance/i }));
+    expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
   it("fetches and lists workspace caches when the popover opens", async () => {
     mockIpc.getWorkspaceCacheSizes.mockResolvedValue({
       entries: [{ name: "target", bytes: 34 * 1024 * 1024 * 1024 }],

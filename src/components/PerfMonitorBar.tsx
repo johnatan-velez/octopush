@@ -20,15 +20,17 @@ export function PerfMonitorBar({ workspacePath }: { workspacePath?: string }) {
   const [open, setOpen] = useState(false);
   const [caches, setCaches] = useState<WorkspaceCacheSizes | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     if (!open || !workspacePath) return;
     let cancelled = false;
     setScanning(true);
     setCaches(null);
+    setFetchError(false);
     ipc.getWorkspaceCacheSizes(workspacePath)
       .then((c) => { if (!cancelled) setCaches(c); })
-      .catch(() => { if (!cancelled) setCaches(null); })
+      .catch(() => { if (!cancelled) { setCaches(null); setFetchError(true); } })
       .finally(() => { if (!cancelled) setScanning(false); });
     return () => { cancelled = true; };
   }, [open, workspacePath]);
@@ -76,7 +78,10 @@ export function PerfMonitorBar({ workspacePath }: { workspacePath?: string }) {
                 {!scanning && !workspacePath && (
                   <div className="py-0.5 text-octo-mute">—</div>
                 )}
-                {!scanning && workspacePath && caches && caches.entries.length === 0 && (
+                {!scanning && workspacePath && fetchError && (
+                  <div className="py-0.5 text-octo-mute">couldn't read caches</div>
+                )}
+                {!scanning && workspacePath && !fetchError && caches && caches.entries.length === 0 && (
                   <div className="py-0.5 text-octo-mute">no build caches</div>
                 )}
                 {!scanning && caches && caches.entries.length > 0 && (

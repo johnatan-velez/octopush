@@ -355,13 +355,16 @@ mod tests {
     #[test]
     fn perf_stats_serializes_camel_case() {
         let g = ProcGroup { rss_bytes: 1, cpu_pct: 2.0, process_count: 3 };
-        let disk = DiskInfo { free_bytes: 10, total_bytes: 100 };
+        let disk = DiskInfo { free_bytes: 9, total_bytes: 99 };
         let stats = PerfStats { app: g.clone(), daemon: g.clone(), total: g.clone(), disk, ts: 42 };
         let json = serde_json::to_string(&stats).unwrap();
         assert!(json.contains("\"rssBytes\":1"));
         assert!(json.contains("\"cpuPct\":2.0"));
         assert!(json.contains("\"processCount\":3"));
         assert!(json.contains("\"ts\":42"));
+        assert!(json.contains("\"disk\""));
+        assert!(json.contains("\"freeBytes\""));
+        assert!(json.contains("\"totalBytes\""));
     }
 
     #[test]
@@ -455,5 +458,22 @@ mod tests {
         assert_eq!(d, DiskInfo { free_bytes: 200, total_bytes: 2000 });
         let root = pick_disk_for_path(&mounts, Path::new("/opt/x"));
         assert_eq!(root, DiskInfo { free_bytes: 100, total_bytes: 1000 });
+    }
+
+    #[test]
+    fn pick_disk_falls_back_to_first_when_no_root_or_prefix() {
+        let mounts = vec![
+            (PathBuf::from("/Volumes/Data"), 10u64, 5u64),
+            (PathBuf::from("/Volumes/Other"), 20u64, 7u64),
+        ];
+        // target matches no mount prefix and there is no "/" mount → first.
+        let d = pick_disk_for_path(&mounts, Path::new("/home/x"));
+        assert_eq!(d, DiskInfo { free_bytes: 5, total_bytes: 10 });
+    }
+
+    #[test]
+    fn pick_disk_empty_mounts_returns_zero() {
+        let d = pick_disk_for_path(&[], Path::new("/anything"));
+        assert_eq!(d, DiskInfo { free_bytes: 0, total_bytes: 0 });
     }
 }
