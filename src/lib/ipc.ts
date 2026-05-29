@@ -87,6 +87,12 @@ export const ipc = {
   // ─── Providers / Agents ───────────────────────────────────────
   listProviders: () => invoke<ProviderConfig[]>("list_providers"),
 
+  saveProviders: (providers: ProviderConfig[]) =>
+    invoke<void>("save_providers", { providers }),
+
+  getDefaultProviders: () =>
+    invoke<ProviderConfig[]>("get_default_providers"),
+
   listModels: () => invoke<ModelWithProvider[]>("list_models"),
 
   suggestModel: (taskType: TaskType) =>

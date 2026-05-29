@@ -364,8 +364,9 @@ export interface ProviderConfig {
   apiBase: string;
   apiKeyEnv: string;
   models: ModelInfo[];
+  rateLimits?: { requestsPerMinute?: number | null; tokensPerMinute?: number | null };
   enabled: boolean;
-  protocol: string;
+  protocol: string; // "anthropic" | "openai-compatible"
   local: boolean;
 }
 
