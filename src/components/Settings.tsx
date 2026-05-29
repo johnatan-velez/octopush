@@ -293,27 +293,28 @@ export function ModelsPane() {
 
   async function handleSave() {
     setSaving(true);
-    await ipc.saveSettings({
-      providerKeys: Object.fromEntries(
-        Object.entries(keys).filter(([, v]) => v && v.length > 0),
-      ),
-      providerBaseUrls: Object.fromEntries(
-        Object.entries(baseUrls).filter(([, v]) => v && v.length > 0),
-      ),
-      gitCredentials: {},
-    });
     try {
+      // Save the catalog first — it validates server-side and throws on invalid
+      // input, so we don't write settings.json for a rejected catalog.
       await ipc.saveProviders(providers);
+      await ipc.saveSettings({
+        providerKeys: Object.fromEntries(
+          Object.entries(keys).filter(([, v]) => v && v.length > 0),
+        ),
+        providerBaseUrls: Object.fromEntries(
+          Object.entries(baseUrls).filter(([, v]) => v && v.length > 0),
+        ),
+        gitCredentials: {},
+      });
+      // Refresh models so the picker reflects edits
+      await ipc.listModels?.();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
     } catch (e) {
       pushToast({ level: "error", title: "Save failed", body: String(e) });
+    } finally {
       setSaving(false);
-      return;
     }
-    // Refresh models so the picker reflects edits
-    await ipc.listModels?.();
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
   }
 
   async function handleRefreshPricing() {
