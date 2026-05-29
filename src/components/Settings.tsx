@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, RefreshCw, CheckCircle, Loader2 } from "lucide-react";
+import { Download, RefreshCw, CheckCircle, Loader2, Pencil, X } from "lucide-react";
 import { useUpdaterStore } from "../stores/updaterStore";
 import { useAttentionStore } from "../stores/attentionStore";
 import {
@@ -15,7 +15,9 @@ import {
   SETTINGS_TAB_LABELS,
   type SettingsTab,
 } from "../lib/settingsTabs";
-import type { Budget, BudgetPeriod, BudgetScope, ProviderConfig, UsageBreakdown } from "../lib/types";
+import type { Budget, BudgetPeriod, BudgetScope, ModelInfo, ProviderConfig, UsageBreakdown } from "../lib/types";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { pushToast } from "./Toasts";
 
 interface Props {
   open: boolean;
@@ -256,7 +258,9 @@ function ToggleRow({
 
 // ─── Tab: Models & Providers ──────────────────────────────────────────
 
-function ModelsPane() {
+const BUILTIN_PROVIDER_NAMES = new Set(["anthropic", "openai", "deepseek", "ollama"]);
+
+export function ModelsPane() {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [baseUrls, setBaseUrls] = useState<Record<string, string>>({});
@@ -266,6 +270,10 @@ function ModelsPane() {
   const [refreshingPricing, setRefreshingPricing] = useState(false);
   const [lastPricingRefresh, setLastPricingRefresh] = useState<string | null>(null);
   const [pricingMessage, setPricingMessage] = useState<string | null>(null);
+  const [showAddProvider, setShowAddProvider] = useState(false);
+  const [confirmRemoveProvider, setConfirmRemoveProvider] = useState<string | null>(null);
+  // Cache of defaults for reset-to-defaults (fetched once)
+  const [defaults, setDefaults] = useState<ProviderConfig[] | null>(null);
 
   useEffect(() => {
     Promise.all([ipc.listProviders(), ipc.getSettings()]).then(([provs, settings]) => {
@@ -276,17 +284,33 @@ function ModelsPane() {
     });
   }, []);
 
+  async function getDefaults(): Promise<ProviderConfig[]> {
+    if (defaults) return defaults;
+    const d = await ipc.getDefaultProviders();
+    setDefaults(d);
+    return d;
+  }
+
   async function handleSave() {
     setSaving(true);
     await ipc.saveSettings({
       providerKeys: Object.fromEntries(
-        Object.entries(keys).filter(([_, v]) => v && v.length > 0),
+        Object.entries(keys).filter(([, v]) => v && v.length > 0),
       ),
       providerBaseUrls: Object.fromEntries(
-        Object.entries(baseUrls).filter(([_, v]) => v && v.length > 0),
+        Object.entries(baseUrls).filter(([, v]) => v && v.length > 0),
       ),
       gitCredentials: {},
     });
+    try {
+      await ipc.saveProviders(providers);
+    } catch (e) {
+      pushToast({ level: "error", title: "Save failed", body: String(e) });
+      setSaving(false);
+      return;
+    }
+    // Refresh models so the picker reflects edits
+    await ipc.listModels?.();
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -363,8 +387,44 @@ function ModelsPane() {
             onChange={(v) => setKeys((s) => ({ ...s, [p.name]: v }))}
             onChangeBaseUrl={(v) => setBaseUrls((s) => ({ ...s, [p.name]: v }))}
             onToggleShow={() => setShown((s) => ({ ...s, [p.name]: !s[p.name] }))}
+            onChangeProvider={(updated) =>
+              setProviders((ps) => ps.map((x) => x.name === updated.name ? updated : x))
+            }
+            isBuiltin={BUILTIN_PROVIDER_NAMES.has(p.name)}
+            onRemove={() => setConfirmRemoveProvider(p.name)}
+            onResetToDefaults={async () => {
+              const defs = await getDefaults();
+              const def = defs.find((d) => d.name === p.name);
+              if (def) {
+                setProviders((ps) => ps.map((x) =>
+                  x.name === p.name
+                    ? { ...x, models: def.models, apiBase: def.apiBase, protocol: def.protocol }
+                    : x
+                ));
+              }
+            }}
           />
         ))}
+
+        {/* Add a provider form / CTA */}
+        {showAddProvider ? (
+          <AddProviderForm
+            onAdd={(p) => {
+              setProviders((ps) => [...ps, p]);
+              setShowAddProvider(false);
+            }}
+            onCancel={() => setShowAddProvider(false)}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowAddProvider(true)}
+            className="rounded-md px-4 py-2 font-serif text-[13px] text-octo-brass transition"
+            style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+          >
+            Add a provider
+          </button>
+        )}
 
         <div className="flex items-center gap-3 pt-2">
           <button
@@ -383,12 +443,260 @@ function ModelsPane() {
           )}
         </div>
       </div>
+
+      {/* Confirm remove provider */}
+      {confirmRemoveProvider && (
+        <ConfirmDialog
+          title={`Remove provider "${confirmRemoveProvider}"?`}
+          body="The provider and all its models will be removed from the catalog. This cannot be undone without resetting to defaults."
+          destructiveLabel="Remove provider"
+          onConfirm={() => {
+            setProviders((ps) => ps.filter((p) => p.name !== confirmRemoveProvider));
+            setConfirmRemoveProvider(null);
+          }}
+          onCancel={() => setConfirmRemoveProvider(null)}
+        />
+      )}
     </>
   );
 }
 
+// ─── ModelEditor ──────────────────────────────────────────────────────
+
+function ModelEditor({
+  initial,
+  onSubmit,
+  onCancel,
+}: {
+  initial?: ModelInfo;
+  onSubmit: (m: ModelInfo) => void;
+  onCancel: () => void;
+}) {
+  const [id, setId] = useState(initial?.id ?? "");
+  const [name, setName] = useState(initial?.displayName ?? "");
+  const [inC, setInC] = useState(String(initial?.inputCostPerM ?? 0));
+  const [outC, setOutC] = useState(String(initial?.outputCostPerM ?? 0));
+  const [ctx, setCtx] = useState(String(initial?.maxContext ?? 200000));
+  const [err, setErr] = useState<string | null>(null);
+
+  function submit() {
+    if (!id.trim()) {
+      setErr("Model id is required");
+      return;
+    }
+    onSubmit({
+      ...(initial ?? {
+        cacheReadCostPerM: 0,
+        cacheCreationCostPerM: 0,
+        supportsVision: false,
+        supportsTools: true,
+        tags: [],
+      }),
+      id: id.trim(),
+      displayName: name.trim() || id.trim(),
+      inputCostPerM: Number(inC) || 0,
+      outputCostPerM: Number(outC) || 0,
+      maxContext: Number(ctx) || 200000,
+    });
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-octo-hairline bg-octo-onyx p-3 space-y-2">
+      <div className="font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute">Model ID</div>
+      <input
+        value={id}
+        onChange={(e) => setId(e.target.value)}
+        placeholder="model id (e.g. claude-3-5-sonnet-20241022)"
+        className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+      />
+      <div className="font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute mt-1">Display Name</div>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="display name (optional)"
+        className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+      />
+      <div className="flex gap-2">
+        <div className="flex-1">
+          <div className="font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute mt-1">Cost In /M</div>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={inC}
+            onChange={(e) => setInC(e.target.value)}
+            placeholder="0"
+            className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+          />
+        </div>
+        <div className="flex-1">
+          <div className="font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute mt-1">Cost Out /M</div>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={outC}
+            onChange={(e) => setOutC(e.target.value)}
+            placeholder="0"
+            className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+          />
+        </div>
+        <div className="flex-1">
+          <div className="font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute mt-1">Context</div>
+          <input
+            type="number"
+            min="0"
+            step="1000"
+            value={ctx}
+            onChange={(e) => setCtx(e.target.value)}
+            placeholder="200000"
+            className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+          />
+        </div>
+      </div>
+      {err && <div className="font-mono text-[10px] text-octo-rouge">{err}</div>}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={submit}
+          className="rounded-md px-3 py-1.5 font-serif text-[12px] text-octo-brass"
+          style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+        >
+          {initial ? "Save model" : "Add model"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-octo-hairline px-3 py-1.5 text-[12px] text-octo-sage hover:text-octo-ivory"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── AddProviderForm ──────────────────────────────────────────────────
+
+function AddProviderForm({
+  onAdd,
+  onCancel,
+}: {
+  onAdd: (p: ProviderConfig) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [protocol, setProtocol] = useState<"anthropic" | "openai-compatible">("anthropic");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [local, setLocal] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function submit() {
+    if (!name.trim()) {
+      setErr("Name is required");
+      return;
+    }
+    if (!local && !baseUrl.trim()) {
+      setErr("Base URL is required");
+      return;
+    }
+    onAdd({
+      name: name.trim(),
+      apiBase: baseUrl.trim(),
+      apiKeyEnv: "",
+      models: [],
+      rateLimits: {},
+      enabled: true,
+      protocol,
+      local,
+    });
+  }
+
+  return (
+    <div className="rounded-md border border-octo-hairline bg-octo-onyx p-4 space-y-3">
+      <div className="font-mono text-[9px] uppercase tracking-[0.25em] text-octo-brass">New Provider</div>
+
+      <div>
+        <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute">Name</div>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. my-gateway"
+          className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+        />
+      </div>
+
+      <div>
+        <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute">Protocol</div>
+        <select
+          value={protocol}
+          onChange={(e) => setProtocol(e.target.value as "anthropic" | "openai-compatible")}
+          className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none focus:border-octo-brass"
+        >
+          <option value="anthropic">Anthropic-compatible</option>
+          <option value="openai-compatible">OpenAI-compatible</option>
+        </select>
+      </div>
+
+      {!local && (
+        <div>
+          <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute">Base URL</div>
+          <input
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="https://my-gateway.example.com"
+            className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
+          />
+        </div>
+      )}
+
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={local}
+          onChange={(e) => setLocal(e.target.checked)}
+          className="rounded border border-octo-hairline"
+        />
+        <span className="font-mono text-[11px] text-octo-sage">Runs locally (no API key needed)</span>
+      </label>
+
+      {err && <div className="font-mono text-[10px] text-octo-rouge">{err}</div>}
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={submit}
+          className="rounded-md px-4 py-2 font-serif text-[13px] text-octo-brass"
+          style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+        >
+          Add a provider
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-octo-hairline px-4 py-2 text-[12px] text-octo-sage hover:text-octo-ivory"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── ProviderRow (extended) ───────────────────────────────────────────
+
 function ProviderRow({
-  provider, value, baseUrl, show, onChange, onChangeBaseUrl, onToggleShow,
+  provider,
+  value,
+  baseUrl,
+  show,
+  onChange,
+  onChangeBaseUrl,
+  onToggleShow,
+  onChangeProvider,
+  isBuiltin,
+  onRemove,
+  onResetToDefaults,
 }: {
   provider: ProviderConfig;
   value: string;
@@ -397,15 +705,62 @@ function ProviderRow({
   onChange: (v: string) => void;
   onChangeBaseUrl: (v: string) => void;
   onToggleShow: () => void;
+  onChangeProvider: (updated: ProviderConfig) => void;
+  isBuiltin: boolean;
+  onRemove: () => void;
+  onResetToDefaults: () => void;
 }) {
   const displayName = provider.name[0].toUpperCase() + provider.name.slice(1);
+  const [showAddModel, setShowAddModel] = useState(false);
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
+  const [confirmRemoveModelId, setConfirmRemoveModelId] = useState<string | null>(null);
+
+  function handleAddModel(m: ModelInfo) {
+    onChangeProvider({ ...provider, models: [...provider.models, m] });
+    setShowAddModel(false);
+  }
+
+  function handleEditModel(updated: ModelInfo) {
+    onChangeProvider({
+      ...provider,
+      models: provider.models.map((m) => m.id === editingModelId ? updated : m),
+    });
+    setEditingModelId(null);
+  }
+
+  function handleRemoveModel(id: string) {
+    onChangeProvider({ ...provider, models: provider.models.filter((m) => m.id !== id) });
+    setConfirmRemoveModelId(null);
+  }
+
   return (
-    <div>
+    <div className="relative">
       <div className="flex items-baseline justify-between">
         <span className="font-serif text-[16px] text-octo-ivory">{displayName}</span>
-        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-octo-mute">
-          {provider.models.length} models · {provider.local ? "local" : "cloud"}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-octo-mute">
+            {provider.models.length} models · {provider.local ? "local" : "cloud"}
+          </span>
+          {isBuiltin ? (
+            <button
+              type="button"
+              onClick={onResetToDefaults}
+              className="font-mono text-[9px] uppercase tracking-[0.18em] text-octo-mute transition hover:text-octo-sage"
+              title="Reset to defaults"
+            >
+              Reset to defaults
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="font-mono text-[9px] uppercase tracking-[0.18em] text-octo-mute transition hover:text-octo-rouge"
+              title="Remove provider"
+            >
+              Remove
+            </button>
+          )}
+        </div>
       </div>
       <div className="mt-1 text-[12px] text-octo-sage">
         {providerDescription(provider)}
@@ -441,6 +796,87 @@ function ProviderRow({
           className="w-full rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-[11px] text-octo-ivory outline-none placeholder:text-octo-mute focus:border-octo-brass"
         />
       </div>
+
+      {/* Model list */}
+      {provider.models.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-2 font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute">Models</div>
+          <ul className="space-y-1">
+            {provider.models.map((m) => (
+              <li key={m.id}>
+                {editingModelId === m.id ? (
+                  <ModelEditor
+                    initial={m}
+                    onSubmit={handleEditModel}
+                    onCancel={() => setEditingModelId(null)}
+                  />
+                ) : (
+                  <div className="flex items-center justify-between rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <span className="font-mono text-[11px] text-octo-ivory">{m.id}</span>
+                      {m.displayName && m.displayName !== m.id && (
+                        <span className="ml-2 font-sans text-[10px] text-octo-sage">{m.displayName}</span>
+                      )}
+                      <span className="ml-2 font-mono text-[9px] text-octo-mute">
+                        ${m.inputCostPerM}/{m.outputCostPerM} · {(m.maxContext / 1000).toFixed(0)}k ctx
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setEditingModelId(m.id)}
+                        className="rounded p-1 text-octo-mute transition hover:text-octo-sage"
+                        aria-label={`Edit model ${m.id}`}
+                        title="Edit model"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmRemoveModelId(m.id)}
+                        className="rounded p-1 text-octo-mute transition hover:text-octo-rouge"
+                        aria-label={`Remove model ${m.id}`}
+                        title="Remove model"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Add a model CTA / form */}
+      {showAddModel ? (
+        <ModelEditor
+          onSubmit={handleAddModel}
+          onCancel={() => setShowAddModel(false)}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setShowAddModel(true)}
+          className="mt-2 rounded-md px-3 py-1.5 font-serif text-[12px] text-octo-brass transition"
+          style={{ background: "var(--brass-ghost)", border: "1px solid var(--brass-dim)" }}
+          aria-label="Add a model"
+        >
+          Add a model
+        </button>
+      )}
+
+      {/* Confirm remove model */}
+      {confirmRemoveModelId && (
+        <ConfirmDialog
+          title={`Remove model "${confirmRemoveModelId}"?`}
+          body="This model will be removed from the provider's catalog."
+          destructiveLabel="Remove model"
+          onConfirm={() => handleRemoveModel(confirmRemoveModelId)}
+          onCancel={() => setConfirmRemoveModelId(null)}
+        />
+      )}
     </div>
   );
 }
