@@ -261,6 +261,7 @@ fn dispatch(
         RequestPayload::Shutdown => cmd_shutdown(state),
         RequestPayload::Version => ResponsePayload::Version {
             version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol_version: crate::protocol::DAEMON_PROTOCOL_VERSION,
         },
     };
     Response::with_reqid(inner, reqid)

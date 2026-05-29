@@ -294,7 +294,11 @@ impl DaemonClient {
     // -----------------------------------------------------------------------
 
     /// Attempt one reconnect: re-spawn daemon if needed and swap in a new socket.
-    pub fn try_reconnect(self: &Arc<Self>) -> AppResult<()> {
+    ///
+    /// Also heals a stub client (built when the daemon was unavailable at
+    /// startup): `ensure_daemon_running()` (re)starts the daemon, and we swap
+    /// the stub's NullWriter for the real socket and clear `broken`.
+    pub fn try_reconnect(&self) -> AppResult<()> {
         let sock_path = pty_daemon::ensure_daemon_running()?;
         let stream = UnixStream::connect(&sock_path)
             .map_err(|e| AppError::Other(format!("reconnect to daemon: {e}")))?;
@@ -332,7 +336,18 @@ impl DaemonClient {
 
     /// Send a JSON request, wait for the matching response, return it.
     fn send_request(&self, mut payload: Value) -> AppResult<Value> {
-        // Check if the connection is broken before sending.
+        // If the connection is broken — the daemon was replaced during an
+        // Octopush update, the socket EOF'd, or we fell back to the stub client
+        // at startup — try to heal it once before giving up. `try_reconnect`
+        // re-runs `ensure_daemon_running` (restarting the daemon if needed) and
+        // reconnects the socket. We read the flag into a local first so the
+        // lock is released before calling `try_reconnect` (parking_lot's Mutex
+        // is not reentrant).
+        let is_broken = self.inner.lock().broken.load(Ordering::SeqCst);
+        if is_broken {
+            let _ = self.try_reconnect();
+        }
+        // If it's still broken after the heal attempt, surface the error.
         {
             let inner = self.inner.lock();
             if inner.broken.load(Ordering::SeqCst) {
@@ -626,9 +641,13 @@ mod tests {
 
     #[test]
     #[serial]
-    fn client_reconnect_after_socket_close() {
+    fn client_self_heals_after_daemon_death() {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path();
+        // Point THIS process's $HOME at the temp dir so the self-heal's
+        // `ensure_daemon_running()` targets the temp socket — not the real
+        // `~/.octopush` daemon on the dev machine.
+        std::env::set_var("HOME", home);
         let base = home.join(".octopush");
         fs::create_dir_all(&base).unwrap();
         let sock_path = base.join("pty-server.sock");
@@ -642,20 +661,32 @@ mod tests {
         let client = DaemonClient::connect_to(sock_path.to_str().unwrap()).unwrap();
 
         // Verify basic comms work.
-        let terminals = client.list_terminals().expect("list_terminals before kill");
-        assert!(terminals.is_empty());
+        assert!(client.list_terminals().expect("list before kill").is_empty());
 
-        // Kill the daemon.
+        // Kill the daemon + clear its socket → the client's connection breaks.
         daemon.kill().ok();
         let _ = daemon.wait();
         fs::remove_file(&sock_path).ok();
-
-        // Wait for the reader thread to notice.
+        // Let the reader thread notice EOF and mark the connection broken.
         std::thread::sleep(Duration::from_millis(200));
 
-        // The connection is now broken. The next call should fail gracefully.
-        let result = client.list_terminals();
-        assert!(result.is_err(), "expected error after daemon death, got Ok");
+        // Self-heal: the next call must transparently respawn the daemon and
+        // reconnect (returning Ok), NOT stay "daemon connection is broken".
+        let healed = client.list_terminals();
+        assert!(
+            healed.is_ok(),
+            "expected the client to self-heal after daemon death, got {healed:?}"
+        );
+        assert!(healed.unwrap().is_empty());
+
+        // Clean up the daemon the heal respawned (detached → kill via pid file).
+        if let Ok(pid_str) = fs::read_to_string(base.join("pty-server.pid")) {
+            if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                unsafe {
+                    libc::kill(pid, libc::SIGTERM);
+                }
+            }
+        }
     }
 
     /// Helper: drain any pending events on a receiver (non-blocking-ish).

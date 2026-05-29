@@ -6,6 +6,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Wire-protocol version of the daemon. Bump this ONLY when the
+/// JSON-over-socket protocol — or daemon behavior the app relies on — changes
+/// incompatibly. The app keeps a running daemon whose protocol matches even
+/// across Octopush *version* bumps, so live PTY sessions survive compatible
+/// updates (and the daemon is only force-replaced on a protocol break).
+///
+/// MUST stay in sync with `EXPECTED_PROTOCOL_VERSION` in `src/pty_daemon.rs`.
+pub const DAEMON_PROTOCOL_VERSION: u32 = 1;
+
 // ---------------------------------------------------------------------------
 // Requests
 // ---------------------------------------------------------------------------
@@ -131,8 +140,10 @@ pub enum ResponsePayload {
     Ok {},
     /// Error response.
     Error { message: String },
-    /// `version` → the daemon's compile-time version string.
-    Version { version: String },
+    /// `version` → the daemon's compile-time version string + wire-protocol
+    /// version. The app compares `protocol_version` (not `version`) to decide
+    /// whether a running daemon is compatible.
+    Version { version: String, protocol_version: u32 },
     /// Sentinel: the handler already sent its own response via the tx channel.
     /// `handle_connection` must NOT send this to the wire.
     #[serde(skip)]
@@ -200,5 +211,26 @@ impl Event {
         let mut buf = serde_json::to_vec(self).expect("Event serialization is infallible");
         buf.push(b'\n');
         buf
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_response_carries_protocol_version() {
+        let line = Response::with_reqid(
+            ResponsePayload::Version {
+                version: "9.9.9".into(),
+                protocol_version: DAEMON_PROTOCOL_VERSION,
+            },
+            Some(1),
+        )
+        .to_line();
+        let s = String::from_utf8(line).unwrap();
+        assert!(s.contains("\"type\":\"version\""), "got: {s}");
+        assert!(s.contains(&format!("\"protocol_version\":{DAEMON_PROTOCOL_VERSION}")), "got: {s}");
+        assert!(s.contains("\"version\":\"9.9.9\""), "got: {s}");
     }
 }

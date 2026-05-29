@@ -22,11 +22,16 @@ const SOCKET_READY_TIMEOUT: Duration = Duration::from_millis(2500);
 /// Polling interval while waiting.
 const SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Expected daemon version — must match the binary Octopush bundled for
-/// this build. Mismatches mean an older daemon process is still alive
-/// (the PID file's lockout would otherwise keep us connected to it
-/// forever, missing every feature added in the new build).
-const EXPECTED_DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Wire-protocol version this Octopush build speaks. The app reuses a running
+/// daemon whose reported `protocol_version` matches this — even across Octopush
+/// *version* bumps — so live PTY sessions survive compatible updates. Only a
+/// protocol MISMATCH (or a daemon too old to report one) forces a replace,
+/// which kills its child shells. Bump this ONLY when the daemon's wire protocol
+/// (or behavior the app depends on) changes incompatibly.
+///
+/// MUST stay in sync with `DAEMON_PROTOCOL_VERSION` in
+/// `bin/octopush-pty-server/protocol.rs`.
+const EXPECTED_PROTOCOL_VERSION: u32 = 1;
 
 /// Return the path to the PTY daemon's Unix socket, starting the daemon
 /// first if it is not already running OR replacing it if the running
@@ -34,25 +39,27 @@ const EXPECTED_DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn ensure_daemon_running() -> AppResult<PathBuf> {
     let sock_path = socket_path()?;
 
-    // Fast path: daemon already up *and* speaking our version.
+    // Fast path: daemon already up *and* protocol-compatible. We reuse a
+    // compatible daemon even if it's from a different Octopush version, so its
+    // live PTY sessions survive the update.
     if is_socket_ready(&sock_path) {
-        match query_daemon_version(&sock_path) {
-            Ok(v) if v == EXPECTED_DAEMON_VERSION => {
+        match query_daemon_protocol(&sock_path) {
+            Ok(p) if p == EXPECTED_PROTOCOL_VERSION => {
                 return Ok(sock_path);
             }
-            Ok(v) => {
+            Ok(p) => {
                 tracing::warn!(
-                    running = %v,
-                    expected = %EXPECTED_DAEMON_VERSION,
-                    "stale PTY daemon detected — replacing"
+                    running_protocol = p,
+                    expected = EXPECTED_PROTOCOL_VERSION,
+                    "incompatible PTY daemon protocol — replacing"
                 );
             }
             Err(e) => {
-                // Daemon responded but didn't implement `version` — this
-                // is pre-0.1.12 and definitely stale.
+                // Daemon responded but didn't report a protocol version — it
+                // predates protocol versioning (≤ v0.1.22), so it's incompatible.
                 tracing::warn!(
                     error = %e,
-                    "running PTY daemon predates version handshake — replacing"
+                    "running PTY daemon predates the protocol handshake — replacing"
                 );
             }
         }
@@ -93,9 +100,10 @@ pub fn ensure_daemon_running() -> AppResult<PathBuf> {
     ))
 }
 
-/// Send a `version` request to the daemon and return the reported
-/// version string. Times out at ~1 second.
-fn query_daemon_version(sock_path: &PathBuf) -> Result<String, String> {
+/// Send a `version` request to the daemon and return its reported wire-protocol
+/// version. Times out at ~1 second. A daemon that predates protocol versioning
+/// (≤ v0.1.22) omits the field → reported as `0` (always a mismatch → replace).
+fn query_daemon_protocol(sock_path: &PathBuf) -> Result<u32, String> {
     use std::io::{BufRead, BufReader, Write};
     let mut stream =
         UnixStream::connect(sock_path).map_err(|e| format!("connect: {e}"))?;
@@ -113,12 +121,12 @@ fn query_daemon_version(sock_path: &PathBuf) -> Result<String, String> {
     reader
         .read_line(&mut line)
         .map_err(|e| format!("read: {e}"))?;
-    // Defensive: any non-{type:"version"} response (e.g. an old
-    // daemon returning Error) is "wrong version".
+    // Defensive: any non-{type:"version"} response (e.g. an old daemon
+    // returning Error) is treated as incompatible.
     let v: serde_json::Value =
         serde_json::from_str(&line).map_err(|e| format!("parse: {e}"))?;
     if v["type"] == "version" {
-        Ok(v["version"].as_str().unwrap_or("").to_string())
+        Ok(v["protocol_version"].as_u64().unwrap_or(0) as u32)
     } else {
         Err(format!("non-version response: {}", v))
     }
