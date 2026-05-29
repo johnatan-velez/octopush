@@ -422,7 +422,13 @@ export interface PerfStats {
   app: ProcGroup;
   daemon: ProcGroup;
   total: ProcGroup;
+  disk: { freeBytes: number; totalBytes: number };
   ts: number;
+}
+
+export interface WorkspaceCacheSizes {
+  entries: { name: string; bytes: number }[];
+  totalBytes: number;
 }
 
 // ─── Templates ────────────────────────────────────────────────────

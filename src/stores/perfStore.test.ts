@@ -12,6 +12,7 @@ const SAMPLE: PerfStats = {
   app: { rssBytes: 100, cpuPct: 1, processCount: 2 },
   daemon: { rssBytes: 50, cpuPct: 0.5, processCount: 1 },
   total: { rssBytes: 150, cpuPct: 1.5, processCount: 3 },
+  disk: { freeBytes: 18 * 1024 * 1024 * 1024, totalBytes: 460 * 1024 * 1024 * 1024 },
   ts: 1,
 };
 

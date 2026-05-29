@@ -1230,7 +1230,7 @@ function App() {
         </div>
       </main>
       </div>
-      <PerfMonitorBar />
+      <PerfMonitorBar workspacePath={activeWorkspace?.worktreePath ?? project?.path} />
 
       {customizingWorkspace && (
         <div

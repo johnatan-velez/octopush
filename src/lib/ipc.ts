@@ -35,6 +35,7 @@ import type {
   TokenReport,
   UsageBreakdown,
   Workspace,
+  WorkspaceCacheSizes,
 } from "./types";
 
 export const ipc = {
@@ -307,4 +308,7 @@ export const ipc = {
 
   // ─── Performance ──────────────────────────────────────────────
   getPerfStats: () => invoke<PerfStats>("get_perf_stats"),
+
+  getWorkspaceCacheSizes: (workspacePath: string) =>
+    invoke<WorkspaceCacheSizes>("get_workspace_cache_sizes", { workspacePath }),
 };
