@@ -561,6 +561,7 @@ function App() {
 
   // ── Computed values ──
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
+  const activeProject = recentProjects.find((p) => p.id === activeWorkspace?.projectId) ?? (project?.id === activeWorkspace?.projectId ? project : null) ?? null;
   const activeIssueKey = activeWorkspace ? detectIssueKey(activeWorkspace.branch) : null;
   const activeChatId = activeWorkspaceId
     ? activeChatPerWorkspace[activeWorkspaceId] ?? activeWorkspaceId
@@ -1252,8 +1253,10 @@ function App() {
             contextProps={companionContextProps}
             historyProps={companionHistoryProps}
             fileTree={fileTreeProps}
-            activeIssueKey={activeIssueKey}
+            workspace={activeWorkspace ?? null}
+            project={activeProject ?? null}
             issueTrackerConfigured={issueTrackerConfigured}
+            onLinkProject={() => setSettingsTab("integrations")}
           />
         </div>
         </div>
