@@ -377,6 +377,7 @@ pub struct ProjectInfo {
     pub id: String,
     pub name: String,
     pub path: String,
+    pub jira_project_key: Option<String>,
 }
 
 #[tauri::command]
@@ -409,7 +410,7 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
         // Heal projects opened by older Octopush versions that didn't auto-
         // create a main workspace.
         ensure_main_workspace(&db, &id, &p)?;
-        Ok(ProjectInfo { id, name, path: p })
+        Ok(ProjectInfo { id, name, path: p, jira_project_key: None })
     } else {
         let id = uuid::Uuid::new_v4().to_string();
         let name = std::path::Path::new(&path).file_name()
@@ -417,14 +418,14 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
             .unwrap_or_else(|| path.clone());
         db.insert_project(&id, &name, &path)?;
         ensure_main_workspace(&db, &id, &path)?;
-        Ok(ProjectInfo { id, name, path })
+        Ok(ProjectInfo { id, name, path, jira_project_key: None })
     }
 }
 
 #[tauri::command]
 pub async fn list_recent_projects(state: State<'_, AppState>) -> AppResult<Vec<ProjectInfo>> {
     let rows = state.db.lock().list_projects()?;
-    Ok(rows.into_iter().map(|(id, name, path, _)| ProjectInfo { id, name, path }).collect())
+    Ok(rows.into_iter().map(|(id, name, path, _, jira_project_key)| ProjectInfo { id, name, path, jira_project_key }).collect())
 }
 
 /// Auto-creates a workspace pointing at the project's default branch and root
@@ -470,7 +471,7 @@ pub async fn create_project(state: State<'_, AppState>, path: String, name: Stri
     let db = state.db.lock();
     db.insert_project(&id, &name, &full_path_str)?;
     ensure_main_workspace(&db, &id, &full_path_str)?;
-    Ok(ProjectInfo { id, name, path: full_path_str })
+    Ok(ProjectInfo { id, name, path: full_path_str, jira_project_key: None })
 }
 
 // ─── Workspace commands ───────────────────────────────────────────
@@ -522,6 +523,15 @@ pub async fn update_workspace_link(
     dismissed: bool,
 ) -> AppResult<()> {
     state.db.lock().update_workspace_link(&workspace_id, linked_issue_key, dismissed)
+}
+
+#[tauri::command]
+pub async fn update_project_jira_key(
+    state: State<'_, AppState>,
+    project_id: String,
+    jira_project_key: Option<String>,
+) -> AppResult<()> {
+    state.db.lock().update_project_jira_key(&project_id, jira_project_key)
 }
 
 #[tauri::command]
@@ -1038,6 +1048,7 @@ pub async fn clone_project(
         id,
         name: target_name,
         path: path_str,
+        jira_project_key: None,
     })
 }
 

@@ -275,6 +275,22 @@ mod workspace_tests {
     }
 
     #[test]
+    fn project_jira_key_round_trip() {
+        let db = test_db();
+        db.insert_project("proj-jira", "Test Project", "/tmp/proj-jira")
+            .unwrap();
+
+        db.update_project_jira_key("proj-jira", Some("CLPNSNS".into()))
+            .unwrap();
+        let p = db.get_project("proj-jira").unwrap().unwrap();
+        assert_eq!(p.jira_project_key.as_deref(), Some("CLPNSNS"));
+
+        db.update_project_jira_key("proj-jira", None).unwrap();
+        let p = db.get_project("proj-jira").unwrap().unwrap();
+        assert_eq!(p.jira_project_key, None);
+    }
+
+    #[test]
     fn insert_and_list_error_message() {
         let db = test_db();
         db.insert_project("proj-err", "Test Project", "/tmp/proj-err")

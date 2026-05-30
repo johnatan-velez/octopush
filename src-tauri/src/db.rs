@@ -548,14 +548,43 @@ impl Db {
         Ok(())
     }
 
-    pub fn list_projects(&self) -> AppResult<Vec<(String, String, String, String)>> {
+    pub fn list_projects(&self) -> AppResult<Vec<(String, String, String, String, Option<String>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, last_opened FROM projects ORDER BY created_at ASC",
+            "SELECT id, name, path, last_opened, jira_project_key FROM projects ORDER BY created_at ASC",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_project(&self, project_id: &str) -> AppResult<Option<crate::commands::ProjectInfo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, path, jira_project_key FROM projects WHERE id = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![project_id], |r| {
+                Ok(crate::commands::ProjectInfo {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    path: r.get(2)?,
+                    jira_project_key: r.get(3)?,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn update_project_jira_key(
+        &self,
+        project_id: &str,
+        jira_project_key: Option<String>,
+    ) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE projects SET jira_project_key = ?1 WHERE id = ?2",
+            rusqlite::params![jira_project_key, project_id],
+        )?;
+        Ok(())
     }
 
     pub fn touch_project(&self, id: &str) -> AppResult<()> {
