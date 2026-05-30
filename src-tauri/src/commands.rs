@@ -410,7 +410,11 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
         // Heal projects opened by older Octopush versions that didn't auto-
         // create a main workspace.
         ensure_main_workspace(&db, &id, &p)?;
-        Ok(ProjectInfo { id, name, path: p, jira_project_key: None })
+        // Carry the saved Jira project key (if any) so the frontend that
+        // builds its project map from this return value doesn't silently
+        // zero out a previously-configured mapping.
+        let jira_project_key = db.get_project(&id)?.and_then(|p| p.jira_project_key);
+        Ok(ProjectInfo { id, name, path: p, jira_project_key })
     } else {
         let id = uuid::Uuid::new_v4().to_string();
         let name = std::path::Path::new(&path).file_name()
