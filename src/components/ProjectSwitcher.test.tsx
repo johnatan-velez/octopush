@@ -8,6 +8,7 @@ function makeProject(overrides: Partial<ProjectInfo> = {}): ProjectInfo {
     id: "proj-1",
     name: "octopus-sh",
     path: "/Users/jonathan/TYPEFY/octopus/octopus-sh",
+    jiraProjectKey: null,
     ...overrides,
   };
 }

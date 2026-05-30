@@ -117,6 +117,7 @@ export interface ProjectInfo {
   id: string;
   name: string;
   path: string;
+  jiraProjectKey: string | null;
 }
 
 // ─── Workspaces ───────────────────────────────────────────────────
@@ -137,6 +138,8 @@ export interface Workspace {
   glyph: string | null;
   tint: TintName | null;
   testCommand?: string | null;
+  linkedIssueKey: string | null;
+  issueLinkDismissed: boolean;
 }
 
 // ─── File edits ───────────────────────────────────────────────────

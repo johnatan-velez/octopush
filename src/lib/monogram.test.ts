@@ -16,6 +16,8 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     lastActive: "2026-05-16T00:00:00Z",
     glyph: null,
     tint: null,
+    linkedIssueKey: null,
+    issueLinkDismissed: false,
     ...overrides,
   };
 }

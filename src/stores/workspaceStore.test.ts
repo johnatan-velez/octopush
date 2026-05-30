@@ -28,6 +28,8 @@ function makeWorkspace(projectId: string, name: string): Workspace {
     lastActive: "",
     glyph: null,
     tint: null,
+    linkedIssueKey: null,
+    issueLinkDismissed: false,
   };
 }
 
