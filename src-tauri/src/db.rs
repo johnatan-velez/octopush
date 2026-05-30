@@ -35,6 +35,11 @@ impl Db {
         Ok(db)
     }
 
+    /// Returns a reference to the underlying connection. Intended for tests only.
+    pub fn conn_ref(&self) -> &Connection {
+        &self.conn
+    }
+
     pub fn default_path() -> PathBuf {
         let base = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -157,6 +162,20 @@ impl Db {
         add_column_if_missing(&self.conn, "ALTER TABLE workspaces ADD COLUMN glyph TEXT")?;
         add_column_if_missing(&self.conn, "ALTER TABLE workspaces ADD COLUMN tint TEXT")?;
         add_column_if_missing(&self.conn, "ALTER TABLE workspaces ADD COLUMN test_command TEXT")?;
+
+        // ── v2 contextual issue tracker ────────────────────────────
+        add_column_if_missing(
+            &self.conn,
+            "ALTER TABLE projects ADD COLUMN jira_project_key TEXT",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "ALTER TABLE workspaces ADD COLUMN linked_issue_key TEXT",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "ALTER TABLE workspaces ADD COLUMN issue_link_dismissed INTEGER NOT NULL DEFAULT 0",
+        )?;
 
         // Phase 9 — drop the FK from token_events.session_id. The original
         // schema only ever expected CLI session ids, so chat-driven token

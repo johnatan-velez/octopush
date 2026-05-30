@@ -231,6 +231,28 @@ mod workspace_tests {
     }
 
     #[test]
+    fn migrate_adds_contextual_issue_tracker_columns() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::open(tmp.path()).unwrap();
+        // After migrate() the new columns must exist on their tables.
+        let has_col = |table: &str, col: &str| -> bool {
+            let q = format!("PRAGMA table_info({})", table);
+            let mut stmt = db.conn_ref().prepare(&q).unwrap();
+            let mut rows = stmt.query([]).unwrap();
+            while let Some(row) = rows.next().unwrap() {
+                let name: String = row.get(1).unwrap();
+                if name == col {
+                    return true;
+                }
+            }
+            false
+        };
+        assert!(has_col("projects", "jira_project_key"), "projects.jira_project_key missing");
+        assert!(has_col("workspaces", "linked_issue_key"), "workspaces.linked_issue_key missing");
+        assert!(has_col("workspaces", "issue_link_dismissed"), "workspaces.issue_link_dismissed missing");
+    }
+
+    #[test]
     fn insert_and_list_error_message() {
         let db = test_db();
         db.insert_project("proj-err", "Test Project", "/tmp/proj-err")
