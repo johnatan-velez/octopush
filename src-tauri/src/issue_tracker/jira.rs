@@ -56,7 +56,10 @@ const FIELDS: &str = "summary,status,issuetype,priority,parent";
 
 impl IssueTracker for JiraClient {
     async fn list_my_issues(&self) -> AppResult<Vec<Issue>> {
-        let url = format!("{}/rest/api/3/search", self.base());
+        // Atlassian sunset POST /rest/api/3/search on Jira Cloud (returns 410);
+        // the replacement is /rest/api/3/search/jql with the same body + response.
+        // https://developer.atlassian.com/changelog/#CHANGE-2046
+        let url = format!("{}/rest/api/3/search/jql", self.base());
         let body = serde_json::json!({
             "jql": super::my_issues_jql(),
             "fields": FIELDS.split(',').collect::<Vec<_>>(),
