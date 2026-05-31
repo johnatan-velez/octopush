@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ipc } from "../lib/ipc";
 import { useIssuesStore } from "../stores/issuesStore";
 import { useParentIssuesStore } from "../stores/parentIssuesStore";
+import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { Issue } from "../lib/types";
 import type { LinkageState } from "../lib/issueTrackerSelectors";
 import { InlineTicketPicker } from "./InlineTicketPicker";
@@ -17,9 +18,13 @@ interface Props {
   candidates: Issue[];
   projectKey: string | null;
   workspaceId: string;
+  /** Octopush Project id used to reload the workspaceStore after a link
+   *  mutation. Without this the UI keeps the stale `linkedIssueKey` /
+   *  `issueLinkDismissed` until the next manual refresh / app reload. */
+  projectId: string;
 }
 
-export function ActiveTicketPanel({ state, activeIssue, issuesLoaded, candidates, projectKey, workspaceId }: Props) {
+export function ActiveTicketPanel({ state, activeIssue, issuesLoaded, candidates, projectKey, workspaceId, projectId }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [picking, setPicking] = useState(false);
   const parents = useParentIssuesStore((s) => s.parents);
@@ -29,18 +34,28 @@ export function ActiveTicketPanel({ state, activeIssue, issuesLoaded, candidates
     if (activeIssue?.parentKey) void loadParent(activeIssue.parentKey);
   }, [activeIssue?.parentKey, loadParent]);
 
+  // Reload the workspaceStore so the Companion sees the fresh
+  // `linkedIssueKey` / `issueLinkDismissed` without an app reload.
+  async function reloadWorkspaces() {
+    await useWorkspaceStore.getState().load(projectId);
+  }
+
   async function dismiss() {
     await ipc.updateWorkspaceLink(workspaceId, null, true);
+    await reloadWorkspaces();
   }
   async function undismiss() {
     await ipc.updateWorkspaceLink(workspaceId, null, false);
+    await reloadWorkspaces();
   }
   async function unlink() {
     await ipc.updateWorkspaceLink(workspaceId, null, false);
+    await reloadWorkspaces();
   }
   async function confirmPick(key: string) {
     await ipc.updateWorkspaceLink(workspaceId, key, false);
     setPicking(false);
+    await reloadWorkspaces();
     // The picked ticket may not be in the global issues list (e.g. it was
     // confirmed via the exact-key fallback for a ticket not assigned to the
     // user). Trigger a single refresh so the card has data immediately.

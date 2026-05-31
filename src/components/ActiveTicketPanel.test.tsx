@@ -6,9 +6,19 @@ import type { Issue } from "../lib/types";
 vi.mock("../lib/ipc", () => ({
   ipc: {
     openFileInSystem: vi.fn(),
-    updateWorkspaceLink: vi.fn(),
+    updateWorkspaceLink: vi.fn().mockResolvedValue(undefined),
     getIssue: vi.fn(),
   },
+}));
+
+// Mock the workspaceStore so the post-link reload in ActiveTicketPanel
+// doesn't hit a real ipc.listWorkspaces during component tests.
+const loadWorkspacesMock = vi.fn().mockResolvedValue(undefined);
+vi.mock("../stores/workspaceStore", () => ({
+  useWorkspaceStore: Object.assign(
+    vi.fn(() => ({ load: loadWorkspacesMock })),
+    { getState: () => ({ load: loadWorkspacesMock }) },
+  ),
 }));
 
 import { ipc } from "../lib/ipc";
@@ -38,6 +48,7 @@ describe("ActiveTicketPanel", () => {
         candidates={[issue]}
         projectKey="CLPNSNS"
         workspaceId="w1"
+        projectId="p1"
       />,
     );
     expect(screen.getByText("CLPNSNS-92")).toBeInTheDocument();
@@ -58,6 +69,7 @@ describe("ActiveTicketPanel", () => {
         candidates={[]}
         projectKey={null}
         workspaceId="w1"
+        projectId="p1"
       />,
     );
     expect(screen.getByText(/sin ticket vinculado/i)).toBeInTheDocument();
@@ -78,6 +90,7 @@ describe("ActiveTicketPanel", () => {
         candidates={[issue]}
         projectKey="CLPNSNS"
         workspaceId="w1"
+        projectId="p1"
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /vincular/i }));
@@ -93,6 +106,7 @@ describe("ActiveTicketPanel", () => {
         candidates={[]}
         projectKey={null}
         workspaceId="w1"
+        projectId="p1"
       />,
     );
     expect(screen.getByText(/active ticket/i)).toBeInTheDocument();
@@ -108,6 +122,7 @@ describe("ActiveTicketPanel", () => {
         candidates={[]}
         projectKey="CLPNSNS"
         workspaceId="w1"
+        projectId="p1"
       />,
     );
     expect(screen.getByText(/no se pudo cargar/i)).toBeInTheDocument();
@@ -115,6 +130,25 @@ describe("ActiveTicketPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /desvincular/i }));
     await waitFor(() => {
       expect(updateWorkspaceLinkMock).toHaveBeenCalledWith("w1", null, false);
+    });
+  });
+
+  it("reloads workspaceStore after updateWorkspaceLink so the UI reflects the link without reload", async () => {
+    render(
+      <ActiveTicketPanel
+        state={{ kind: "unlinked" }}
+        activeIssue={null}
+        issuesLoaded={true}
+        candidates={[]}
+        projectKey={null}
+        workspaceId="w1"
+        projectId="p1"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /no usar ticket aqu/i }));
+    await waitFor(() => {
+      expect(updateWorkspaceLinkMock).toHaveBeenCalledWith("w1", null, true);
+      expect(loadWorkspacesMock).toHaveBeenCalledWith("p1");
     });
   });
 
@@ -127,6 +161,7 @@ describe("ActiveTicketPanel", () => {
         candidates={[]}
         projectKey="CLPNSNS"
         workspaceId="w1"
+        projectId="p1"
       />,
     );
     // Eyebrow still renders, but the error card + Desvincular button must not

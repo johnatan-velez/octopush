@@ -88,6 +88,7 @@ export function Companion({
             candidates={issues ?? []}
             projectKey={projectKey}
             workspaceId={workspace.id}
+            projectId={workspace.projectId}
           />
           <BacklogPanel
             configured={issueTrackerConfigured}
