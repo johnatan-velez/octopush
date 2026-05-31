@@ -48,7 +48,7 @@ export function BacklogPanel({ configured, projectKey = null, activeKey, onLinkP
                 {filtered.length}
               </>
             ) : (
-              <> · <span className="text-octo-mute">(sin proyecto)</span></>
+              <> · <span className="text-octo-mute">(no project)</span></>
             )}
           </span>
           <span className="mr-1">{collapsed ? "▸" : "▾"}</span>
