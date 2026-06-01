@@ -51,18 +51,29 @@ export function WorkspaceCreator({ projectId, projectPath, onCreated, onCancel, 
     if (!taskValid) return;
     setCreating(true);
     setError(null);
+    let newWs;
     try {
-      const newWs = await create(projectId, projectPath, workspaceName, task.trim(), branch, "main", setupScript);
-      if (linkIssueKeyOnCreate) {
-        await ipc.updateWorkspaceLink(newWs.id, linkIssueKeyOnCreate, false);
-        await useWorkspaceStore.getState().load(newWs.projectId);
-      }
-      onCreated();
+      newWs = await create(projectId, projectPath, workspaceName, task.trim(), branch, "main", setupScript);
     } catch (e) {
       setError(String(e));
-    } finally {
       setCreating(false);
+      return;
     }
+    if (linkIssueKeyOnCreate) {
+      try {
+        await ipc.updateWorkspaceLink(newWs.id, linkIssueKeyOnCreate, false);
+        await useWorkspaceStore.getState().load(newWs.projectId);
+      } catch (e) {
+        // Workspace was created OK but the Jira link did not persist. Keep the
+        // creator open with a clear, actionable message — the user can dismiss
+        // and link the ticket later via the workspace's right-click menu.
+        setError(`Workspace was created but linking the Jira ticket failed: ${String(e)}. You can link it later via right-click on the workspace.`);
+        setCreating(false);
+        return;
+      }
+    }
+    setCreating(false);
+    onCreated();
   }
 
   return (

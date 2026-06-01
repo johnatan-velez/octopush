@@ -1631,7 +1631,12 @@ function App() {
         const targetProject = getProjectById(creatorForTicket.projectId);
         return targetProject ? (
           <div className="absolute inset-0 z-50 bg-octo-bg">
+            {/* The `key` forces a remount when the ticket-driven creator
+             *  opens for a different ticket — `useState(initialTask)` only
+             *  reads at mount, so without this prop a back-to-back flow on
+             *  two tickets would keep the first ticket's pre-fill. */}
             <WorkspaceCreator
+              key={creatorForTicket.linkIssueKeyOnCreate}
               projectId={targetProject.id}
               projectPath={targetProject.path}
               initialTask={creatorForTicket.initialTask}

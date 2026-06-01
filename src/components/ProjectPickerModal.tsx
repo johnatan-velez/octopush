@@ -31,6 +31,7 @@ export function ProjectPickerModal({ candidates, title, onPick, onClose }: Props
     <div
       ref={overlayRef}
       role="dialog"
+      aria-modal="true"
       aria-label="Select Octopush Project"
       className="fixed inset-0 z-50 flex items-center justify-center bg-octo-onyx/80 p-6"
       onClick={handleOverlayClick}

@@ -33,6 +33,7 @@ export function JiraTicketPickerModal({ candidates, projectKey, title, onPick, o
     <div
       ref={overlayRef}
       role="dialog"
+      aria-modal="true"
       aria-label={title}
       className="fixed inset-0 z-50 flex items-center justify-center bg-octo-onyx/80 p-6"
       onClick={handleOverlayClick}
