@@ -4,7 +4,7 @@ import { ContextHeader } from "./ContextHeader";
 import { useIssuesStore } from "../stores/issuesStore";
 import { useParentIssuesStore } from "../stores/parentIssuesStore";
 import { ipc } from "../lib/ipc";
-import type { Workspace } from "../lib/types";
+import type { Pr, Workspace } from "../lib/types";
 
 // Stub ipc so getIssue + openFileInSystem resolve without hitting Tauri
 vi.mock("../lib/ipc", () => ({
@@ -42,7 +42,14 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   };
 }
 
-function renderHeader(props: { workspace: Workspace; issueTrackerConfigured: boolean }) {
+function renderHeader(props: {
+  workspace: Workspace;
+  issueTrackerConfigured?: boolean;
+  pr?: Pr | null;
+  onOpenPr?: (url: string) => void;
+  openPr?: Pr | null; // legacy alias → forwarded as pr
+}) {
+  const prProp = props.pr ?? props.openPr ?? null;
   return render(
     <ContextHeader
       {...baseProps}
@@ -50,7 +57,9 @@ function renderHeader(props: { workspace: Workspace; issueTrackerConfigured: boo
       branch={props.workspace.branch}
       gitStatus={null}
       workspace={props.workspace}
-      issueTrackerConfigured={props.issueTrackerConfigured}
+      issueTrackerConfigured={props.issueTrackerConfigured ?? false}
+      pr={prProp}
+      onOpenPr={props.onOpenPr}
     />,
   );
 }
@@ -414,6 +423,42 @@ describe("ContextHeader", () => {
     renderHeader({ workspace, issueTrackerConfigured: true });
 
     expect(await screen.findByText("SPIKE-1")).toHaveClass("text-octo-brass");
+  });
+
+  it("PR chip in open state uses brass", () => {
+    const workspace = makeWorkspace({ branch: "feat/x" });
+    renderHeader({
+      workspace,
+      pr: { number: 1, url: "u", title: "t", isDraft: false, state: "open" },
+    });
+    expect(screen.getByText("PR · #1")).toHaveClass("text-octo-brass");
+  });
+
+  it("PR chip in draft state uses mute", () => {
+    const workspace = makeWorkspace({ branch: "feat/x" });
+    renderHeader({
+      workspace,
+      pr: { number: 2, url: "u", title: "t", isDraft: true, state: "draft" },
+    });
+    expect(screen.getByText("PR · #2")).toHaveClass("text-octo-mute");
+  });
+
+  it("PR chip in merged state uses state-purple", () => {
+    const workspace = makeWorkspace({ branch: "feat/x" });
+    renderHeader({
+      workspace,
+      pr: { number: 3, url: "u", title: "t", isDraft: false, state: "merged" },
+    });
+    expect(screen.getByText("PR · #3")).toHaveClass("text-state-purple");
+  });
+
+  it("PR chip in closed state uses rouge", () => {
+    const workspace = makeWorkspace({ branch: "feat/x" });
+    renderHeader({
+      workspace,
+      pr: { number: 4, url: "u", title: "t", isDraft: false, state: "closed" },
+    });
+    expect(screen.getByText("PR · #4")).toHaveClass("text-octo-rouge");
   });
 
   it("status text uses the correct token per statusCategory", async () => {

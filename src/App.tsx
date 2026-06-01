@@ -49,7 +49,7 @@ import type { SettingsTab } from "./lib/settingsTabs";
 import { resolveMonogram } from "./lib/monogram";
 import { type WorkspaceMode } from "./lib/modes";
 import { ipc } from "./lib/ipc";
-import type { GitStatus, OpenPr, TintName, Issue, ProjectInfo } from "./lib/types";
+import type { GitStatus, Pr, TintName, Issue, ProjectInfo } from "./lib/types";
 import { resolveLinkage } from "./lib/issueTrackerSelectors";
 import { useIssuesStore } from "./stores/issuesStore";
 import { detectIssueKey } from "./lib/detectIssueKey";
@@ -217,7 +217,7 @@ function App() {
   // Per-workspace cache of the most recently fetched open PR (or null when
   // there isn't one). Keyed by workspace id so switching back to a
   // workspace doesn't flicker until the next refresh.
-  const [openPrByWs, setOpenPrByWs] = useState<Record<string, OpenPr | null>>({});
+  const [openPrByWs, setOpenPrByWs] = useState<Record<string, Pr | null>>({});
 
   // Layout version (forces TerminalPane fit-resize when sidebar/companion toggle)
   const layoutVersionRef = useRef(0);
@@ -452,7 +452,7 @@ function App() {
     let cancelled = false;
     const fetchPr = () => {
       ipc
-        .findOpenPr(path)
+        .findPrForBranch(path)
         .then((pr) => {
           if (!cancelled) {
             setOpenPrByWs((prev) => ({ ...prev, [ws.id]: pr }));
@@ -1117,7 +1117,7 @@ function App() {
             workspaceName={activeWorkspace.name}
             branch={activeWorkspace.branch}
             gitStatus={gitStatus}
-            openPr={openPrByWs[activeWorkspace.id] ?? null}
+            pr={openPrByWs[activeWorkspace.id] ?? null}
             onOpenPr={(url) => ipc.openFileInSystem(url)}
             workspace={activeWorkspace}
             issueTrackerConfigured={issueTrackerConfigured}

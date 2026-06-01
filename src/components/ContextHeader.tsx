@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { GitStatus, OpenPr, Issue, StatusCategory, Workspace } from "../lib/types";
+import type { GitStatus, Pr, PrState, Issue, StatusCategory, Workspace } from "../lib/types";
 import { ScratchpadIcon } from "./ScratchpadIcon";
 import { useScratchpadStore } from "../stores/scratchpadStore";
 import { useIssuesStore } from "../stores/issuesStore";
@@ -31,11 +31,38 @@ const STATUS_TOKEN: Record<StatusCategory, string> = {
   unknown: "text-octo-sage",
 };
 
+const PR_STATE_STYLE: Record<PrState, { color: string; bg: string; border: string; glyph: string }> = {
+  open: {
+    color: "text-octo-brass",
+    bg: "var(--brass-ghost)",
+    border: "var(--brass-dim)",
+    glyph: "●",
+  },
+  draft: {
+    color: "text-octo-mute",
+    bg: "rgba(109, 99, 84, 0.12)",
+    border: "rgba(109, 99, 84, 0.4)",
+    glyph: "◐",
+  },
+  merged: {
+    color: "text-state-purple",
+    bg: "var(--state-purple-ghost)",
+    border: "var(--state-purple-dim)",
+    glyph: "✓",
+  },
+  closed: {
+    color: "text-octo-rouge",
+    bg: "var(--rouge-active-bg)",
+    border: "var(--rouge-border)",
+    glyph: "✕",
+  },
+};
+
 interface Props {
   workspaceName: string;
   branch: string;
   gitStatus: GitStatus | null;
-  openPr?: OpenPr | null;
+  pr?: Pr | null;
   /** Called with the PR's html_url when the chip is clicked. Typically
    *  routes through `ipc.openFileInSystem` to launch the browser. */
   onOpenPr?: (url: string) => void;
@@ -52,7 +79,7 @@ export function ContextHeader({
   workspaceName,
   branch,
   gitStatus,
-  openPr,
+  pr,
   onOpenPr,
   workspace = null,
   issueTrackerConfigured = false,
@@ -146,26 +173,24 @@ export function ContextHeader({
           {unstaged > 0 && <span>· {unstaged} unstaged</span>}
         </div>
 
-        {openPr && (
-          <button
-            type="button"
-            onClick={() => onOpenPr?.(openPr.url)}
-            title={`${openPr.isDraft ? "Draft" : "Open"} pull request — ${openPr.title}`}
-            className="flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[10px] uppercase tracking-[0.15em] text-octo-brass transition-colors"
-            style={{
-              background: "var(--brass-ghost)",
-              border: "1px solid var(--brass-dim)",
-            }}
-          >
-            <span aria-hidden style={{ fontSize: 11, lineHeight: 1 }}>
-              {openPr.isDraft ? "◐" : "●"}
-            </span>
-            <span>PR · #{openPr.number}</span>
-            <span aria-hidden style={{ fontSize: 9, opacity: 0.6 }}>
-              ↗
-            </span>
-          </button>
-        )}
+        {pr && (() => {
+          const style = PR_STATE_STYLE[pr.state];
+          return (
+            <button
+              type="button"
+              onClick={() => onOpenPr?.(pr.url)}
+              title={`${pr.state.charAt(0).toUpperCase() + pr.state.slice(1)} pull request — ${pr.title}`}
+              className="flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[10px] uppercase tracking-[0.15em] transition-colors"
+              style={{ background: style.bg, border: `1px solid ${style.border}` }}
+            >
+              <span aria-hidden className={style.color} style={{ fontSize: 11, lineHeight: 1 }}>
+                {style.glyph}
+              </span>
+              <span className={style.color}>PR · #{pr.number}</span>
+              <span aria-hidden style={{ fontSize: 9, opacity: 0.6 }}>↗</span>
+            </button>
+          );
+        })()}
 
         {rightSlot && (
           <>

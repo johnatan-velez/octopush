@@ -234,14 +234,20 @@ export interface FileChange {
   unstaged: boolean;
 }
 
-/** A single open pull request on the current branch (GitHub only for now). */
-export interface OpenPr {
+export type PrState = "open" | "draft" | "merged" | "closed";
+
+/** A single pull request on the current branch (GitHub only for now).
+ *  State is derived server-side: open/draft for live PRs, merged/closed for completed ones. */
+export interface Pr {
   number: number;
   title: string;
   url: string;
   isDraft: boolean;
-  state: string;
+  state: PrState;
 }
+
+/** @deprecated Use `Pr` instead. */
+export type OpenPr = Pr;
 
 /** A single text-search hit (line-level match) within the workspace. */
 export interface SearchHit {

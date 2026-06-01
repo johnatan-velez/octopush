@@ -17,7 +17,7 @@ import type {
   IssueTrackerConfig,
   ModelSuggestion,
   ModelWithProvider,
-  OpenPr,
+  Pr,
   PerfStats,
   ProjectInfo,
   ProviderConfig,
@@ -277,11 +277,11 @@ export const ipc = {
       caseSensitive,
     }),
 
-  /** Look up an open pull request on GitHub for the current branch.
+  /** Look up a pull request on GitHub for the current branch (any state).
    *  Resolves to `null` when there's no PR, no GitHub remote, or any
    *  network error — UI is expected to hide the chip silently. */
-  findOpenPr: (workspacePath: string) =>
-    invoke<OpenPr | null>("find_open_pr", { workspacePath }),
+  findPrForBranch: (workspacePath: string) =>
+    invoke<Pr | null>("find_pr_for_branch", { workspacePath }),
 
   // ─── Test runner ──────────────────────────────────────────────
   runTestCommand: (workspacePath: string, command: string) =>
