@@ -6,7 +6,7 @@ import { selectBacklog } from "../lib/issueTrackerSelectors";
 
 const STATUS_DOT_COLOR: Record<StatusCategory, string> = {
   todo: "text-octo-mute",
-  inProgress: "text-octo-brass",
+  inProgress: "text-state-blue",
   done: "text-octo-verdigris",
   unknown: "text-octo-sage",
 };

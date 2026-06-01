@@ -25,7 +25,7 @@ function useActiveIssue(key: string | null): Issue | null {
 }
 
 const STATUS_TOKEN: Record<StatusCategory, string> = {
-  inProgress: "text-octo-brass",
+  inProgress: "text-state-blue",
   todo: "text-octo-mute",
   done: "text-octo-verdigris",
   unknown: "text-octo-sage",

@@ -298,7 +298,7 @@ describe("ContextHeader", () => {
       linkedIssueKey: null, issueLinkDismissed: false,
     };
     const cases: Array<["todo" | "inProgress" | "done" | "unknown", string]> = [
-      ["inProgress", "text-octo-brass"],
+      ["inProgress", "text-state-blue"],   // changed from text-octo-brass
       ["todo", "text-octo-mute"],
       ["done", "text-octo-verdigris"],
       ["unknown", "text-octo-sage"],
