@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { BacklogRowContextMenu } from "./BacklogRowContextMenu";
 
 describe("BacklogRowContextMenu", () => {
-  it("renders the 'Create workspace for this ticket' menu item", () => {
+  it("renders the 'Create workspace' menu item", () => {
     render(
       <BacklogRowContextMenu
         x={100}
@@ -12,9 +12,7 @@ describe("BacklogRowContextMenu", () => {
         onClose={vi.fn()}
       />
     );
-    expect(screen.getByRole("menuitem")).toHaveTextContent(
-      "Create workspace for this ticket"
-    );
+    expect(screen.getByRole("menuitem")).toHaveTextContent("Create workspace");
   });
 
   it("clicking the menu item calls onCreateWorkspace and onClose", () => {

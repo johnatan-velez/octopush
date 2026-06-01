@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { FilePlus2 } from "lucide-react";
 
 interface Props {
   x: number;
@@ -39,7 +40,7 @@ export function BacklogRowContextMenu({ x, y, onCreateWorkspace, onClose }: Prop
       ref={ref}
       role="menu"
       aria-label="Ticket actions"
-      className="absolute z-50 w-[220px] rounded-md border border-octo-hairline bg-octo-panel shadow-2xl"
+      className="absolute z-50 w-[200px] rounded-md border border-octo-hairline bg-octo-panel shadow-2xl"
       style={{ left: x, top: y }}
     >
       <button
@@ -49,9 +50,10 @@ export function BacklogRowContextMenu({ x, y, onCreateWorkspace, onClose }: Prop
           onCreateWorkspace();
           onClose();
         }}
-        className="flex w-full items-center rounded-md px-3 py-2 font-mono text-[11px] text-octo-sage transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass"
+        className="flex w-full items-center gap-2 rounded-md px-3 py-2 font-mono text-[11px] text-octo-sage transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass"
       >
-        Create workspace for this ticket
+        <FilePlus2 size={12} className="shrink-0" />
+        Create workspace
       </button>
     </div>
   );
