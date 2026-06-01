@@ -18,7 +18,6 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { BacklogRowContextMenu } from "./components/BacklogRowContextMenu";
 import { ProjectPickerModal } from "./components/ProjectPickerModal";
 import { ExistingWorkspaceAlertModal } from "./components/ExistingWorkspaceAlertModal";
-import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { EmptyProjectState } from "./components/EmptyProjectState";
 import { ChatView } from "./components/ChatView";
 import { ChangesPanel } from "./components/ChangesPanel";
@@ -183,7 +182,6 @@ function App() {
   const [showCreator, setShowCreator] = useState(false);
   const [creatorProjectId, setCreatorProjectId] = useState<string | null>(null);
   const [customizingWorkspaceId, setCustomizingWorkspaceId] = useState<string | null>(null);
-  const [showProjectSwitcher, setShowProjectSwitcher] = useState(false);
   // When the user opens NewProjectFlow from the switcher (not from the welcome
   // screen), we render it as an overlay on top of the current project — the
   // !project early-return path doesn't fire and the create/clone form needs to
@@ -1569,24 +1567,6 @@ function App() {
         <div className="absolute inset-0 z-50 bg-octo-bg">
           <NewProjectFlow
             onBack={() => setShowAddProject(false)}
-          />
-        </div>
-      )}
-
-      {showProjectSwitcher && project && (
-        <div className="absolute inset-0 z-50">
-          <ProjectSwitcher
-            activeProjectId={project.id}
-            projects={recentProjects}
-            onSelect={(p) => {
-              openProject(p.path);
-              setShowProjectSwitcher(false);
-            }}
-            onAddProject={() => {
-              setShowProjectSwitcher(false);
-              setShowAddProject(true);
-            }}
-            onClose={() => setShowProjectSwitcher(false)}
           />
         </div>
       )}
