@@ -7,7 +7,6 @@ vi.mock("./CompanionContext",   () => ({ CompanionContext:   () => <div data-tes
 vi.mock("./CompanionHistory",   () => ({ CompanionHistory:   () => <div data-testid="hist" />  }));
 vi.mock("./CompanionTerminals", () => ({ CompanionTerminals: () => <div data-testid="term" />  }));
 vi.mock("./CompanionFileTree",  () => ({ CompanionFileTree:  () => <div data-testid="tree" />  }));
-vi.mock("./ActiveTicketPanel",  () => ({ ActiveTicketPanel:  () => <div data-testid="active" /> }));
 vi.mock("./BacklogPanel",       () => ({ BacklogPanel:       () => <div data-testid="backlog" /> }));
 vi.mock("./ElsewhereFooter",    () => ({ ElsewhereFooter:    () => <div data-testid="else" />  }));
 
@@ -31,7 +30,6 @@ const baseProps = {
 describe("Companion cross-mode visibility of issue tracker block", () => {
   it("renders BacklogPanel in TALK when projectKey is resolved", () => {
     render(<Companion mode="talk" {...baseProps} />);
-    // BacklogPanel renders whenever projectKey != null (linked workspace shows ActiveTicketPanel too)
     expect(screen.getByTestId("backlog")).toBeInTheDocument();
   });
 

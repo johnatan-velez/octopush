@@ -5,7 +5,6 @@ import { CompanionContext } from "./CompanionContext";
 import { CompanionHistory, type CompanionHistoryChat } from "./CompanionHistory";
 import { CompanionTerminals } from "./CompanionTerminals";
 import { CompanionFileTree } from "./CompanionFileTree";
-import { ActiveTicketPanel } from "./ActiveTicketPanel";
 import { BacklogPanel } from "./BacklogPanel";
 import { ElsewhereFooter } from "./ElsewhereFooter";
 import { ElsewhereModal } from "./ElsewhereModal";
@@ -70,8 +69,6 @@ export function Companion({
   const projectKey =
     workspace && project ? resolveJiraProjectKey(project, workspace, branch) : null;
   const activeKey = linkage.kind === "linked" ? linkage.key : null;
-  const activeIssue =
-    activeKey ? (issues ?? []).find((i) => i.key === activeKey) ?? null : null;
   const elsewhereCount = selectElsewhereCount(issues ?? [], projectKey);
 
   // Gate: only show Jira panels when tracker is configured AND we have a
@@ -86,17 +83,6 @@ export function Companion({
     >
       {showJiraBlock && (
         <>
-          {linkage.kind === "linked" && (
-            <ActiveTicketPanel
-              state={linkage}
-              activeIssue={activeIssue}
-              issuesLoaded={issues !== null}
-              candidates={issues ?? []}
-              projectKey={projectKey}
-              workspaceId={workspace!.id}
-              projectId={workspace!.projectId}
-            />
-          )}
           <BacklogPanel
             configured={issueTrackerConfigured}
             projectKey={projectKey}
