@@ -1685,29 +1685,16 @@ pub async fn commit_changes(workspace_path: String, message: String) -> AppResul
     Ok(sha)
 }
 
-/// A single open pull request for the current branch.
-///
-/// Returned by `find_open_pr` so the UI can show a "PR · #42" chip and link
-/// the user back to the GitHub web interface. Only the fields the UI
-/// actually renders are deserialised — extra GitHub fields are ignored.
-#[derive(serde::Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct OpenPr {
-    pub number: u64,
-    pub title: String,
-    pub url: String,
-    pub is_draft: bool,
-    pub state: String,
-}
-
-/// Ask the `gh` CLI for an open PR on `branch`. Returns `None` if gh isn't
-/// installed, isn't authed, or there's no matching PR. Runs in the user's
-/// login shell so PATH and keychain credentials behave like in a terminal.
-async fn try_gh_cli(workspace_path: &str, branch: &str) -> Option<OpenPr> {
+/// Ask the `gh` CLI for the most recent PR on `branch` (any state). Returns
+/// `None` if gh isn't installed, isn't authed, or there's no matching PR.
+/// Runs in the user's login shell so PATH and keychain credentials behave
+/// like in a terminal.
+async fn try_gh_cli(workspace_path: &str, branch: &str) -> Option<crate::github::Pr> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-    // `gh pr list --json …` returns a JSON array. Field names map to OpenPr.
+    // `gh pr list --json …` returns a JSON array. `--state all` covers
+    // open, draft, merged, and closed PRs. `--limit 1` gives the most recent.
     let cmd = format!(
-        "gh pr list --state open --head '{}' --json number,title,url,state,isDraft --limit 1",
+        "gh pr list --state all --head '{}' --json number,title,url,state,isDraft,mergedAt --limit 1",
         branch.replace('\'', "'\\''"),
     );
 
@@ -1721,35 +1708,39 @@ async fn try_gh_cli(workspace_path: &str, branch: &str) -> Option<OpenPr> {
     if !output.status.success() {
         tracing::info!(
             stderr = %String::from_utf8_lossy(&output.stderr).chars().take(200).collect::<String>(),
-            "find_open_pr: gh cli not usable, falling back to API",
+            "find_pr_for_branch: gh cli not usable, falling back to API",
         );
         return None;
     }
 
     let prs: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).ok()?;
-    let pr = prs.into_iter().next()?;
-
-    Some(OpenPr {
-        number: pr.get("number").and_then(|n| n.as_u64()).unwrap_or(0),
-        title: pr.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string(),
-        url: pr.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
-        is_draft: pr.get("isDraft").and_then(|d| d.as_bool()).unwrap_or(false),
-        state: pr.get("state").and_then(|s| s.as_str()).unwrap_or("open").to_lowercase(),
-    })
+    // gh cli returns "state" as "OPEN"/"CLOSED"/"MERGED" (uppercase), and a
+    // separate "isDraft" bool. Normalise to lowercase for pr_from_json.
+    let mut pr = prs.into_iter().next()?;
+    if let Some(s) = pr.get("state").and_then(|v| v.as_str()) {
+        let lower = s.to_lowercase();
+        pr["state"] = serde_json::Value::String(lower);
+    }
+    // gh cli uses "mergedAt" (camelCase); map it to "merged_at" for pr_from_json.
+    if let Some(merged_at) = pr.get("mergedAt").cloned() {
+        pr["merged_at"] = merged_at;
+    }
+    Some(crate::github::pr_from_json(&pr))
 }
 
-/// Look up an open pull request for the current branch on GitHub.
+/// Look up the most recent pull request for the current branch on GitHub
+/// (any state: open, draft, merged, or closed).
 ///
 /// Returns `None` (encoded as null on the JS side) when:
 ///   - the workspace is not a git repo
 ///   - the `origin` remote is missing or not on GitHub
-///   - the branch has no open PR
+///   - the branch has no PR at all
 ///
 /// Uses the saved GitHub PAT (Settings → Git credentials → github.com) if
 /// available; otherwise hits the API unauthenticated, which is fine for
 /// public repos but rate-limited to 60 requests/hour per IP.
 #[tauri::command]
-pub async fn find_open_pr(workspace_path: String) -> AppResult<Option<OpenPr>> {
+pub async fn find_pr_for_branch(workspace_path: String) -> AppResult<Option<crate::github::Pr>> {
     let workspace_path = expand_tilde(&workspace_path);
     let path = std::path::Path::new(&workspace_path);
 
@@ -1761,40 +1752,40 @@ pub async fn find_open_pr(workspace_path: String) -> AppResult<Option<OpenPr>> {
         let repo = match crate::git_ops::open_repo(path) {
             Ok(r) => r,
             Err(e) => {
-                tracing::info!(error = %e, "find_open_pr: cannot open repo");
+                tracing::info!(error = %e, "find_pr_for_branch: cannot open repo");
                 return Ok(None);
             }
         };
         let branch = match crate::git_ops::current_branch(&repo) {
             Some(b) => b,
             None => {
-                tracing::info!("find_open_pr: detached HEAD");
+                tracing::info!("find_pr_for_branch: detached HEAD");
                 return Ok(None);
             }
         };
         let remote = match repo.find_remote("origin") {
             Ok(r) => r,
             Err(e) => {
-                tracing::info!(error = %e, "find_open_pr: no `origin` remote");
+                tracing::info!(error = %e, "find_pr_for_branch: no `origin` remote");
                 return Ok(None);
             }
         };
         let url = match remote.url() {
             Some(u) => u.to_string(),
             None => {
-                tracing::info!("find_open_pr: remote `origin` has no url");
+                tracing::info!("find_pr_for_branch: remote `origin` has no url");
                 return Ok(None);
             }
         };
         let parsed = match crate::git_url::parse_git_url(&url) {
             Some(p) => p,
             None => {
-                tracing::info!(url = %url, "find_open_pr: could not parse remote url");
+                tracing::info!(url = %url, "find_pr_for_branch: could not parse remote url");
                 return Ok(None);
             }
         };
         if parsed.host != "github.com" {
-            tracing::info!(host = %parsed.host, "find_open_pr: non-github host");
+            tracing::info!(host = %parsed.host, "find_pr_for_branch: non-github host");
             return Ok(None);
         }
         (branch, parsed.owner, parsed.repo)
@@ -1805,12 +1796,14 @@ pub async fn find_open_pr(workspace_path: String) -> AppResult<Option<OpenPr>> {
     //    shell so PATH and macOS keychain credential storage work as if
     //    they invoked `gh` from a terminal.
     if let Some(pr) = try_gh_cli(&workspace_path, &branch).await {
-        tracing::info!(number = pr.number, "find_open_pr: resolved via gh cli");
+        tracing::info!(number = pr.number, "find_pr_for_branch: resolved via gh cli");
         return Ok(Some(pr));
     }
 
     // 2. Fall back to a direct GitHub API call, optionally authenticated
     //    with a saved Octopush PAT or a GITHUB_TOKEN / GH_TOKEN env var.
+    //    `state=all` returns open, draft, merged, and closed PRs; sorted by
+    //    most recently updated so the first result is the most relevant PR.
     let token = crate::settings::get_git_credentials("github.com")
         .map(|c| c.token)
         .or_else(|| std::env::var("GITHUB_TOKEN").ok())
@@ -1818,7 +1811,7 @@ pub async fn find_open_pr(workspace_path: String) -> AppResult<Option<OpenPr>> {
     let has_token = token.is_some();
 
     let api = format!(
-        "https://api.github.com/repos/{}/{}/pulls?head={}:{}&state=open&per_page=1",
+        "https://api.github.com/repos/{}/{}/pulls?head={}:{}&state=all&sort=updated&direction=desc&per_page=1",
         owner,
         repo_name,
         owner,
@@ -1832,7 +1825,7 @@ pub async fn find_open_pr(workspace_path: String) -> AppResult<Option<OpenPr>> {
         repo = %repo_name,
         branch = %branch,
         authenticated = has_token,
-        "find_open_pr: querying github",
+        "find_pr_for_branch: querying github",
     );
 
     let client = reqwest::Client::builder()
@@ -1849,7 +1842,7 @@ pub async fn find_open_pr(workspace_path: String) -> AppResult<Option<OpenPr>> {
         .send()
         .await
         .map_err(|e| {
-            tracing::warn!(error = %e, "find_open_pr: network error");
+            tracing::warn!(error = %e, "find_pr_for_branch: network error");
             AppError::Other(format!("github request failed: {e}"))
         })?;
 
@@ -1863,7 +1856,7 @@ pub async fn find_open_pr(workspace_path: String) -> AppResult<Option<OpenPr>> {
             status = %status,
             authenticated = has_token,
             body = %body.chars().take(200).collect::<String>(),
-            "find_open_pr: non-success response",
+            "find_pr_for_branch: non-success response",
         );
         return Ok(None);
     }
@@ -1873,39 +1866,12 @@ pub async fn find_open_pr(workspace_path: String) -> AppResult<Option<OpenPr>> {
         .await
         .map_err(|e| AppError::Other(format!("github response parse: {e}")))?;
 
-    tracing::info!(count = prs.len(), "find_open_pr: github returned");
+    tracing::info!(count = prs.len(), "find_pr_for_branch: github returned");
     let Some(pr) = prs.into_iter().next() else {
         return Ok(None);
     };
 
-    let number = pr.get("number").and_then(|n| n.as_u64()).unwrap_or(0);
-    let title = pr
-        .get("title")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string();
-    let html_url = pr
-        .get("html_url")
-        .and_then(|u| u.as_str())
-        .unwrap_or("")
-        .to_string();
-    let is_draft = pr
-        .get("draft")
-        .and_then(|d| d.as_bool())
-        .unwrap_or(false);
-    let state = pr
-        .get("state")
-        .and_then(|s| s.as_str())
-        .unwrap_or("open")
-        .to_string();
-
-    Ok(Some(OpenPr {
-        number,
-        title,
-        url: html_url,
-        is_draft,
-        state,
-    }))
+    Ok(Some(crate::github::pr_from_json(&pr)))
 }
 
 /// Push the current branch to its tracked upstream (creating it on the remote

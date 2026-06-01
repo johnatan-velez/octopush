@@ -22,6 +22,7 @@ pub mod theme;
 pub mod token_engine;
 pub mod perf;
 pub mod issue_tracker;
+pub mod github;
 
 #[cfg(test)]
 mod tests;
@@ -207,7 +208,7 @@ pub fn run() {
             commands::unstage_all_changes,
             commands::commit_changes,
             commands::push_branch,
-            commands::find_open_pr,
+            commands::find_pr_for_branch,
             // Workspace-wide file & text search
             commands::list_workspace_files,
             commands::search_workspace_text,

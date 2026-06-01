@@ -1458,3 +1458,46 @@ mod provider_catalog_tests {
         assert!(names.contains(&"openai"));
     }
 }
+
+#[cfg(test)]
+mod pr_state_tests {
+    #[test]
+    fn pr_state_open_when_open_not_draft() {
+        let raw = serde_json::json!({
+            "number": 42, "html_url": "https://x/pr/42", "title": "Add",
+            "state": "open", "draft": false, "merged_at": null
+        });
+        let pr = crate::github::pr_from_json(&raw);
+        assert_eq!(pr.state, crate::github::PrState::Open);
+    }
+
+    #[test]
+    fn pr_state_draft_when_open_and_draft() {
+        let raw = serde_json::json!({
+            "number": 43, "html_url": "https://x/pr/43", "title": "WIP",
+            "state": "open", "draft": true, "merged_at": null
+        });
+        let pr = crate::github::pr_from_json(&raw);
+        assert_eq!(pr.state, crate::github::PrState::Draft);
+    }
+
+    #[test]
+    fn pr_state_merged_when_closed_and_merged_at_set() {
+        let raw = serde_json::json!({
+            "number": 41, "html_url": "https://x/pr/41", "title": "Ship",
+            "state": "closed", "draft": false, "merged_at": "2026-05-30T15:00:00Z"
+        });
+        let pr = crate::github::pr_from_json(&raw);
+        assert_eq!(pr.state, crate::github::PrState::Merged);
+    }
+
+    #[test]
+    fn pr_state_closed_when_closed_and_merged_at_null() {
+        let raw = serde_json::json!({
+            "number": 40, "html_url": "https://x/pr/40", "title": "Nope",
+            "state": "closed", "draft": false, "merged_at": null
+        });
+        let pr = crate::github::pr_from_json(&raw);
+        assert_eq!(pr.state, crate::github::PrState::Closed);
+    }
+}
