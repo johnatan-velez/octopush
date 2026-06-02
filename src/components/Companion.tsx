@@ -109,8 +109,8 @@ export function Companion({
       {/* Mode-specific content (unchanged behavior) */}
       {mode === "talk" && (
         <div className="flex flex-col gap-4 p-4">
-          <CompanionContext {...contextProps} workspaceId={workspaceId ?? undefined} />
           <CompanionHistory {...historyProps} />
+          <CompanionContext {...contextProps} workspaceId={workspaceId ?? undefined} />
         </div>
       )}
       {mode === "run" && workspaceId && (

@@ -19,7 +19,7 @@ export function CompanionHistory({ chats, activeChatId, onSelectChat, onNewChat,
     <section>
       <div className="flex items-center justify-between border-b border-octo-hairline pb-2">
         <h3 className="font-mono text-[8px] uppercase tracking-[0.3em] text-octo-brass">
-          History
+          Chats
         </h3>
         <button
           type="button"
@@ -33,7 +33,7 @@ export function CompanionHistory({ chats, activeChatId, onSelectChat, onNewChat,
       </div>
       <ul className="mt-2 space-y-1">
         {chats.length === 0 && (
-          <li className="px-2 py-1 text-[11px] text-octo-mute">No previous chats.</li>
+          <li className="px-2 py-1 text-[11px] text-octo-mute">No active chats.</li>
         )}
         {chats.map((c) => {
           const active = c.id === activeChatId;
