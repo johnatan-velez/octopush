@@ -536,6 +536,26 @@ function App() {
     [activeWorkspaceId],
   );
 
+  // Delete a non-primary chat (the primary chat's id === activeWorkspaceId
+  // and can't be removed — it's the workspace's canonical conversation).
+  // The list passes a `deletable: false` flag for it so the button never
+  // renders, but we re-check here as a defense and as a clear no-op.
+  const handleDeleteChat = useCallback(
+    (id: string) => {
+      if (!activeWorkspaceId || id === activeWorkspaceId) return;
+      void ipc.deleteSession(id).catch(console.error);
+      setChatsPerWorkspace((p) => {
+        const list = p[activeWorkspaceId] ?? [];
+        return { ...p, [activeWorkspaceId]: list.filter((c) => c.id !== id) };
+      });
+      setActiveChatPerWorkspace((p) => {
+        if (p[activeWorkspaceId] !== id) return p;
+        return { ...p, [activeWorkspaceId]: activeWorkspaceId };
+      });
+    },
+    [activeWorkspaceId],
+  );
+
   // ── Keyboard shortcuts (spec §3.6) ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -736,10 +756,14 @@ function App() {
       // Derive its title + meta from those messages so the history row
       // becomes self-describing instead of the literal "Conversation · NOW".
       const chats = rawChats.map((c) => {
-        if (c.id !== activeWorkspaceId) return c;
+        // Primary chat (id === workspace id) is non-deletable by design —
+        // it's the workspace's canonical conversation.
+        const deletable = c.id !== activeWorkspaceId;
+        if (c.id !== activeWorkspaceId) return { ...c, deletable };
         const msgs = allChatMessages[c.id] ?? [];
         return {
           ...c,
+          deletable,
           title: deriveChatTitle(msgs),
           meta: deriveChatMeta(msgs, tickerNow),
         };
@@ -749,6 +773,7 @@ function App() {
         activeChatId,
         onSelectChat: handleSelectChat,
         onNewChat: handleNewChat,
+        onDeleteChat: handleDeleteChat,
       };
     },
     [
@@ -757,6 +782,7 @@ function App() {
       activeChatId,
       handleSelectChat,
       handleNewChat,
+      handleDeleteChat,
       allChatMessages,
       tickerNow,
     ],

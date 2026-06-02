@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { Plus, X } from "lucide-react";
 import { useTerminalsStore } from "../stores/terminalsStore";
 
 // Re-export for backward-compat with Companion.tsx type imports.
@@ -74,10 +75,11 @@ export function CompanionTerminals({ workspaceId }: Props) {
         <button
           type="button"
           onClick={() => createTerminal(workspaceId).catch(console.error)}
-          className="font-mono text-[10px] text-octo-mute transition hover:text-octo-brass"
+          aria-label="New terminal"
           title="New terminal"
+          className="flex items-center justify-center rounded p-1 text-octo-mute transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass"
         >
-          +
+          <Plus size={16} />
         </button>
       </div>
       <ul className="mt-2 space-y-1">
@@ -159,13 +161,14 @@ export function CompanionTerminals({ workspaceId }: Props) {
                     </span>
                   )}
 
-                  {/* Delete button — visible on hover, sized for a real
-                      tap target (20×20). */}
+                  {/* Delete button — visible on hover. Stays in the rouge
+                      family to telegraph destructive intent, but shares the
+                      lucide / p-1 chrome of every other icon button. */}
                   {!isEditing && (
                     <button
                       type="button"
                       data-testid={`delete-btn-${t.id}`}
-                      className="ml-auto flex h-5 w-5 flex-shrink-0 items-center justify-center rounded font-mono text-[14px] leading-none text-octo-mute opacity-0 transition hover:bg-octo-rouge/15 hover:text-octo-rouge group-hover:opacity-100"
+                      className="ml-auto flex flex-shrink-0 items-center justify-center rounded p-1 text-octo-mute opacity-0 transition hover:bg-octo-rouge/15 hover:text-octo-rouge group-hover:opacity-100"
                       title="Close terminal"
                       aria-label="Close terminal"
                       onClick={(e) => {
@@ -173,7 +176,7 @@ export function CompanionTerminals({ workspaceId }: Props) {
                         deleteTerminal(workspaceId, t.id).catch(console.error);
                       }}
                     >
-                      ×
+                      <X size={14} />
                     </button>
                   )}
                 </div>

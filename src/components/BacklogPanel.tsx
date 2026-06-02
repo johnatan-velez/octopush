@@ -59,11 +59,13 @@ export function BacklogPanel({ configured, projectKey = null, activeKey, onTicke
           <button
             type="button"
             onClick={() => void load()}
-            title="Refresh backlog"
-            aria-label="Refresh backlog"
-            className="flex items-center justify-center rounded p-1 text-octo-mute transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass"
+            disabled={loading}
+            title={loading ? "Refreshing backlog…" : "Refresh backlog"}
+            aria-label={loading ? "Refreshing backlog" : "Refresh backlog"}
+            aria-busy={loading}
+            className="flex items-center justify-center rounded p-1 text-octo-mute transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-octo-brass"
           >
-            <RotateCcw size={16} />
+            <RotateCcw size={16} className={loading ? "animate-spin" : ""} />
           </button>
         )}
       </div>

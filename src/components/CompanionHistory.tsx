@@ -1,9 +1,12 @@
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 
 export interface CompanionHistoryChat {
   id: string;
   title: string;
   meta: string;
+  /** False marks the workspace's primary chat — it has no delete affordance.
+   *  Defaults to true (= deletable) so older call-sites still render normally. */
+  deletable?: boolean;
 }
 
 interface Props {
@@ -11,9 +14,10 @@ interface Props {
   activeChatId: string | null;
   onSelectChat: (id: string) => void;
   onNewChat: () => void;
+  onDeleteChat?: (id: string) => void;
 }
 
-export function CompanionHistory({ chats, activeChatId, onSelectChat, onNewChat }: Props) {
+export function CompanionHistory({ chats, activeChatId, onSelectChat, onNewChat, onDeleteChat }: Props) {
   return (
     <section>
       <div className="flex items-center justify-between border-b border-octo-hairline pb-2">
@@ -36,24 +40,41 @@ export function CompanionHistory({ chats, activeChatId, onSelectChat, onNewChat 
         )}
         {chats.map((c) => {
           const active = c.id === activeChatId;
+          const deletable = c.deletable !== false && !!onDeleteChat;
           return (
-            <li key={c.id}>
+            <li key={c.id} className="group relative">
               <button
                 type="button"
                 onClick={() => onSelectChat(c.id)}
-                className="w-full rounded-md px-2 py-1.5 text-left transition"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition"
                 style={
                   active
                     ? { borderLeft: "1px solid var(--brass-dim)", background: "var(--brass-ghost)" }
                     : undefined
                 }
               >
-                <div className="font-serif text-[12px] leading-tight text-octo-ivory">
-                  {c.title}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-serif text-[12px] leading-tight text-octo-ivory">
+                    {c.title}
+                  </div>
+                  <div className="mt-0.5 font-mono text-[8px] uppercase tracking-[0.15em] text-octo-mute">
+                    {c.meta}
+                  </div>
                 </div>
-                <div className="mt-0.5 font-mono text-[8px] uppercase tracking-[0.15em] text-octo-mute">
-                  {c.meta}
-                </div>
+                {deletable && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteChat?.(c.id);
+                    }}
+                    title="Delete conversation"
+                    aria-label="Delete conversation"
+                    className="flex flex-shrink-0 items-center justify-center rounded p-1 text-octo-mute opacity-0 transition hover:bg-octo-rouge/15 hover:text-octo-rouge group-hover:opacity-100"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
               </button>
             </li>
           );
