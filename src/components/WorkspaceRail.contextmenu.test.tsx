@@ -50,6 +50,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-alpha"
           onSelect={onSelect}
+          isCollapsed={false}
           onCustomize={onCustomize}
           onContextMenu={onContextMenu}
         />,
@@ -81,6 +82,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-beta"
           onSelect={onSelect}
+          isCollapsed={false}
           onCustomize={onCustomize}
           onContextMenu={onContextMenu}
         />,
@@ -108,6 +110,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-gamma"
           onSelect={onSelect}
+          isCollapsed={false}
           onCustomize={onCustomize}
           onContextMenu={onContextMenu}
         />,
@@ -134,6 +137,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-alpha"
           onSelect={onSelect}
+          isCollapsed={false}
           onCustomize={onCustomize}
           onContextMenu={onContextMenu}
         />,
@@ -187,6 +191,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-1a"
           onSelect={onSelect}
+          isCollapsed={false}
           onCustomize={onCustomize}
           onContextMenu={onContextMenu}
         />,
@@ -224,6 +229,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-1b"
           onSelect={onSelect}
+          isCollapsed={false}
           onCustomize={onCustomize}
           onContextMenu={onContextMenu}
         />,
@@ -261,6 +267,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-2a"
           onSelect={onSelect}
+          isCollapsed={false}
           onCustomize={onCustomize}
           onContextMenu={onContextMenu}
         />,
@@ -298,6 +305,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-2b"
           onSelect={onSelect}
+          isCollapsed={false}
           onCustomize={onCustomize}
           onContextMenu={onContextMenu}
         />,
@@ -335,6 +343,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-1a"
           onSelect={onSelect}
+          isCollapsed={false}
           onCustomize={onCustomize}
           onContextMenu={onContextMenu}
         />,
@@ -381,6 +390,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-1"
           onSelect={vi.fn()}
+          isCollapsed={false}
           onCustomize={vi.fn()}
           onProjectContextMenu={onProjectContextMenu}
         />,
@@ -415,6 +425,7 @@ describe("WorkspaceRail - Context Menu - EXHAUSTIVE", () => {
           projects={projects}
           activeWorkspaceId="ws-2"
           onSelect={vi.fn()}
+          isCollapsed={false}
           onCustomize={vi.fn()}
           onProjectContextMenu={onProjectContextMenu}
         />,

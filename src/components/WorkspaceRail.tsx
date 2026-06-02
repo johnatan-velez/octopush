@@ -24,6 +24,8 @@ interface Props {
   onAddProject?: () => void;
   /** Called when user right-clicks on a project header. */
   onProjectContextMenu?: (projectId: string, x: number, y: number) => void;
+  /** Collapsed state is owned by the parent — the toggle lives in the footer. */
+  isCollapsed: boolean;
 }
 
 export function WorkspaceRail({
@@ -35,9 +37,8 @@ export function WorkspaceRail({
   onNewWorkspaceForProject,
   onAddProject,
   onProjectContextMenu,
+  isCollapsed,
 }: Props) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
   return (
     <aside
       className={`flex h-full flex-col items-center border-r border-octo-hairline bg-octo-panel pb-3 pt-9 transition-all duration-[220ms] ${
@@ -121,18 +122,6 @@ export function WorkspaceRail({
         </button>
       )}
 
-      {/* Toggle button at bottom */}
-      <button
-        type="button"
-        onClick={() => setIsCollapsed(!isCollapsed)}
-        title={`${isCollapsed ? "Expand" : "Collapse"} workspace rail`}
-        aria-label={`${isCollapsed ? "Expand" : "Collapse"} workspace rail`}
-        className={`w-full border border-octo-hairline text-octo-mute transition hover:border-octo-brass hover:text-octo-sage ${
-          isCollapsed ? "px-1" : "px-3"
-        } py-1 text-center font-mono text-[11px]`}
-      >
-        {isCollapsed ? "▶" : "◀ Collapse"}
-      </button>
     </aside>
   );
 }

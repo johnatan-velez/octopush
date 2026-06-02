@@ -24,7 +24,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
 }
 
 describe("WorkspaceRail", () => {
-  it("renders one button per workspace plus toggle button", () => {
+  it("renders one button per workspace", () => {
     const workspaces = [
       makeWorkspace({ id: "a", name: "Alpha" }),
       makeWorkspace({ id: "b", name: "Beta" }),
@@ -38,11 +38,11 @@ describe("WorkspaceRail", () => {
         projects={projects}
         activeWorkspaceId="a"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
       />,
     );
-    // workspace buttons + toggle button
-    expect(screen.getAllByRole("button")).toHaveLength(workspaces.length + 1);
+    expect(screen.getAllByRole("button")).toHaveLength(workspaces.length);
   });
 
   it("renders the workspace monogram glyph", () => {
@@ -55,6 +55,7 @@ describe("WorkspaceRail", () => {
         projects={projects}
         activeWorkspaceId="ws-1"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
       />,
     );
@@ -75,6 +76,7 @@ describe("WorkspaceRail", () => {
         projects={projects}
         activeWorkspaceId="a"
         onSelect={onSelect}
+        isCollapsed={false}
         onCustomize={vi.fn()}
       />,
     );
@@ -93,6 +95,7 @@ describe("WorkspaceRail", () => {
         projects={projects}
         activeWorkspaceId="a"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={onCustomize}
       />,
     );
@@ -111,6 +114,7 @@ describe("WorkspaceRail", () => {
         projects={projects}
         activeWorkspaceId="a"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
         onContextMenu={onContextMenu}
       />,
@@ -119,30 +123,33 @@ describe("WorkspaceRail", () => {
     expect(onContextMenu).toHaveBeenCalledWith("a", 50, 80);
   });
 
-  it("should toggle rail width on button click", () => {
+  it("renders at the expanded width when isCollapsed=false and the collapsed width when isCollapsed=true", () => {
     const workspaces = [makeWorkspace({ id: "a", name: "Alpha" })];
     const projects: ProjectGroup[] = [
       { id: "proj-1", name: "Project", workspaces },
     ];
-    const { container } = render(
+    const { container, rerender } = render(
       <WorkspaceRail
         projects={projects}
         activeWorkspaceId="a"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
       />,
     );
     const aside = container.querySelector("aside");
     expect(aside).toHaveClass("w-[280px]");
 
-    // Find and click toggle button
-    const toggleButton = screen.getByTitle(/collapse workspace rail/i);
-    fireEvent.click(toggleButton);
+    rerender(
+      <WorkspaceRail
+        projects={projects}
+        activeWorkspaceId="a"
+        onSelect={vi.fn()}
+        isCollapsed={true}
+        onCustomize={vi.fn()}
+      />,
+    );
     expect(aside).toHaveClass("w-[50px]");
-
-    // Click again to expand
-    fireEvent.click(toggleButton);
-    expect(aside).toHaveClass("w-[280px]");
   });
 
   it("should render project headers in expanded mode", () => {
@@ -159,6 +166,7 @@ describe("WorkspaceRail", () => {
         projects={projects}
         activeWorkspaceId="a"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
       />,
     );
@@ -185,24 +193,29 @@ describe("WorkspaceRail", () => {
       { id: "proj-1", name: "Frontend", workspaces: [workspaces[0]] },
       { id: "proj-2", name: "Backend", workspaces: [workspaces[1]] },
     ];
-    render(
+    const { rerender } = render(
       <WorkspaceRail
         projects={projects}
         activeWorkspaceId="a"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
       />,
     );
 
-    // Verify headers are visible initially
     expect(screen.getByText("— Frontend")).toBeInTheDocument();
     expect(screen.getByText("— Backend")).toBeInTheDocument();
 
-    // Click toggle button to collapse
-    const toggleButton = screen.getByTitle(/collapse workspace rail/i);
-    fireEvent.click(toggleButton);
+    rerender(
+      <WorkspaceRail
+        projects={projects}
+        activeWorkspaceId="a"
+        onSelect={vi.fn()}
+        isCollapsed={true}
+        onCustomize={vi.fn()}
+      />,
+    );
 
-    // Headers should no longer be in the document
     expect(screen.queryByText("— Frontend")).not.toBeInTheDocument();
     expect(screen.queryByText("— Backend")).not.toBeInTheDocument();
   });
@@ -212,11 +225,12 @@ describe("WorkspaceRail", () => {
     const projects: ProjectGroup[] = [
       { id: "proj-1", name: "Project", workspaces },
     ];
-    const { container } = render(
+    const { container, rerender } = render(
       <WorkspaceRail
         projects={projects}
         activeWorkspaceId="a"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
       />,
     );
@@ -236,9 +250,15 @@ describe("WorkspaceRail", () => {
     });
     expect(expandedMonogramFound).toBe(true);
 
-    // Click toggle to collapse
-    const toggleButton = screen.getByTitle(/collapse workspace rail/i);
-    fireEvent.click(toggleButton);
+    rerender(
+      <WorkspaceRail
+        projects={projects}
+        activeWorkspaceId="a"
+        onSelect={vi.fn()}
+        isCollapsed={true}
+        onCustomize={vi.fn()}
+      />,
+    );
 
     // Monogram should still be visible in collapsed mode
     expect(screen.getByText("H")).toBeInTheDocument();
@@ -260,11 +280,12 @@ describe("WorkspaceRail", () => {
     const projects: ProjectGroup[] = [
       { id: "proj-1", name: "Project", workspaces },
     ];
-    render(
+    const { rerender } = render(
       <WorkspaceRail
         projects={projects}
         activeWorkspaceId="a"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
       />,
     );
@@ -272,9 +293,15 @@ describe("WorkspaceRail", () => {
     // Workspace name should be visible in expanded mode
     expect(screen.getByText("Alpha")).toBeInTheDocument();
 
-    // Click toggle to collapse
-    const toggleButton = screen.getByTitle(/collapse workspace rail/i);
-    fireEvent.click(toggleButton);
+    rerender(
+      <WorkspaceRail
+        projects={projects}
+        activeWorkspaceId="a"
+        onSelect={vi.fn()}
+        isCollapsed={true}
+        onCustomize={vi.fn()}
+      />,
+    );
 
     // In collapsed mode, the workspace name is only shown in the title attribute (tooltip)
     // Find the monogram button and check it has the title attribute
@@ -296,6 +323,7 @@ describe("WorkspaceRail", () => {
         projects={projects}
         activeWorkspaceId="a"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
       />,
     );

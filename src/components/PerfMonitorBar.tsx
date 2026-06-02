@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { usePerfStore } from "../stores/perfStore";
 import { formatBytes } from "../lib/formatBytes";
 import { ipc } from "../lib/ipc";
@@ -15,7 +16,20 @@ function PerfRow({ label, g }: { label: string; g: ProcGroup }) {
   );
 }
 
-export function PerfMonitorBar({ workspacePath }: { workspacePath?: string }) {
+interface PerfMonitorBarProps {
+  workspacePath?: string;
+  /** Rail collapsed state — when provided, a toggle button appears on the
+   *  left of the footer. The collapse icon was relocated here from the rail
+   *  itself so the rail's own chrome stays clean. */
+  isRailCollapsed?: boolean;
+  onToggleRail?: () => void;
+}
+
+export function PerfMonitorBar({
+  workspacePath,
+  isRailCollapsed,
+  onToggleRail,
+}: PerfMonitorBarProps) {
   const stats = usePerfStore((s) => s.stats);
   const [open, setOpen] = useState(false);
   const [caches, setCaches] = useState<WorkspaceCacheSizes | null>(null);
@@ -37,6 +51,18 @@ export function PerfMonitorBar({ workspacePath }: { workspacePath?: string }) {
 
   return (
     <div className="relative flex h-[22px] w-full flex-shrink-0 items-center justify-end border-t border-octo-hairline bg-octo-panel px-3 font-mono text-[11px] text-octo-mute">
+      {onToggleRail && (
+        <button
+          type="button"
+          onClick={onToggleRail}
+          aria-label={`${isRailCollapsed ? "Expand" : "Collapse"} workspace rail`}
+          aria-pressed={isRailCollapsed}
+          title={`${isRailCollapsed ? "Expand" : "Collapse"} workspace rail`}
+          className="mr-auto flex items-center justify-center rounded p-0.5 text-octo-mute transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass"
+        >
+          {isRailCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+        </button>
+      )}
       {!stats ? (
         <span className="flex items-center gap-2">
           <span className="text-octo-brass">⌗</span>

@@ -40,6 +40,7 @@ describe("WorkspaceRail - Integration Tests", () => {
         projects={projects}
         activeWorkspaceId="ws-alpha"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
         onContextMenu={onContextMenu}
       />,
@@ -96,6 +97,7 @@ describe("WorkspaceRail - Integration Tests", () => {
         projects={projects}
         activeWorkspaceId="ws-1"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
         onContextMenu={onContextMenu}
       />,
@@ -123,6 +125,7 @@ describe("WorkspaceRail - Integration Tests", () => {
         projects={projects}
         activeWorkspaceId="ws-2"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
         onContextMenu={onContextMenu}
       />,
@@ -152,6 +155,7 @@ describe("WorkspaceRail - Integration Tests", () => {
         projects={projects}
         activeWorkspaceId="ws-2"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
         onContextMenu={onContextMenu}
       />,
@@ -176,6 +180,7 @@ describe("WorkspaceRail - Integration Tests", () => {
         projects={projects}
         activeWorkspaceId="ws-1"
         onSelect={vi.fn()}
+        isCollapsed={false}
         onCustomize={vi.fn()}
         onContextMenu={onContextMenu}
       />,

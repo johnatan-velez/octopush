@@ -178,6 +178,11 @@ function App() {
   // Scratchpad toggle exposed to AppTopBar (and any future top-level call site).
   const toggleScratchpad = useScratchpadStore((s) => s.toggleOpen);
 
+  // Workspace rail collapsed state. State is owned here so the collapse
+  // toggle can live in the footer (PerfMonitorBar) while still driving the
+  // rail's width — see WorkspaceRail.isCollapsed and PerfMonitorBar.onToggleRail.
+  const [isRailCollapsed, setIsRailCollapsed] = useState(false);
+
   // Overlay/menu state
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [showPalette, setShowPalette] = useState(false);
@@ -1113,6 +1118,7 @@ function App() {
         }}
         onAddProject={() => setShowAddProject(true)}
         onProjectContextMenu={handleProjectContextMenu}
+        isCollapsed={isRailCollapsed}
       />
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -1372,7 +1378,11 @@ function App() {
         </div>
       </main>
       </div>
-      <PerfMonitorBar workspacePath={activeWorkspace?.worktreePath ?? project?.path} />
+      <PerfMonitorBar
+        workspacePath={activeWorkspace?.worktreePath ?? project?.path}
+        isRailCollapsed={isRailCollapsed}
+        onToggleRail={() => setIsRailCollapsed((v) => !v)}
+      />
 
       {customizingWorkspace && (
         <div
