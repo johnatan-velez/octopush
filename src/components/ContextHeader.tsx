@@ -112,43 +112,49 @@ export function ContextHeader({
   return (
     <div className="m-4 flex items-center gap-4 rounded-xl border border-octo-hairline bg-octo-panel px-4 py-2">
       {activeIssue ? (
-        <button
-          type="button"
-          aria-label="Open ticket in Jira"
-          title={
-            `${activeIssue.key} · ${activeIssue.issueType.toUpperCase()}` +
-            (activeIssue.priority ? ` · ${activeIssue.priority.toUpperCase()}` : "") +
-            (parentIssue?.summary
-              ? ` · ${parentIssue.issueType}: ${parentIssue.summary}`
-              : "") +
-            (grandparentIssue?.summary
-              ? ` · ${grandparentIssue.issueType}: ${grandparentIssue.summary}`
-              : "") +
-            ` · ${activeIssue.summary}`
-          }
-          onClick={() => { void ipc.openFileInSystem(activeIssue.url).catch(() => {}); }}
-          className="-mx-1 flex min-w-0 flex-1 items-center gap-2.5 rounded px-1 transition hover:bg-[var(--brass-ghost)]"
-        >
+        <div className="-mx-1 flex min-w-0 flex-1 items-center gap-2.5 rounded px-1">
           <span className="text-octo-brass" aria-hidden style={{ fontSize: 16, lineHeight: 1 }}>◈</span>
           {grandparentIssue && (
             <>
-              <span className={`font-mono text-[12px] ${issueTypeToken(grandparentIssue)}`}>
+              <button
+                type="button"
+                aria-label={`Open ${grandparentIssue.key} in Jira`}
+                title={`${grandparentIssue.issueType}: ${grandparentIssue.summary}`}
+                onClick={() => { void ipc.openFileInSystem(grandparentIssue.url).catch(() => {}); }}
+                className={`-mx-0.5 rounded px-0.5 font-mono text-[12px] ${issueTypeToken(grandparentIssue)} transition hover:bg-[var(--brass-ghost)]`}
+              >
                 {grandparentIssue.key}
-              </span>
+              </button>
               <span className="font-mono text-[12px] text-octo-mute" aria-hidden>·</span>
             </>
           )}
           {parentIssue && (
             <>
-              <span className={`font-mono text-[12px] ${issueTypeToken(parentIssue)}`}>
+              <button
+                type="button"
+                aria-label={`Open ${parentIssue.key} in Jira`}
+                title={`${parentIssue.issueType}: ${parentIssue.summary}`}
+                onClick={() => { void ipc.openFileInSystem(parentIssue.url).catch(() => {}); }}
+                className={`-mx-0.5 rounded px-0.5 font-mono text-[12px] ${issueTypeToken(parentIssue)} transition hover:bg-[var(--brass-ghost)]`}
+              >
                 {parentIssue.key}
-              </span>
+              </button>
               <span className="font-mono text-[12px] text-octo-mute" aria-hidden>·</span>
             </>
           )}
-          <span className={`font-mono text-[12px] ${issueTypeToken(activeIssue)}`}>
+          <button
+            type="button"
+            aria-label={`Open ${activeIssue.key} in Jira`}
+            title={
+              `${activeIssue.issueType.toUpperCase()}` +
+              (activeIssue.priority ? ` · ${activeIssue.priority.toUpperCase()}` : "") +
+              ` — ${activeIssue.summary}`
+            }
+            onClick={() => { void ipc.openFileInSystem(activeIssue.url).catch(() => {}); }}
+            className={`-mx-0.5 rounded px-0.5 font-mono text-[12px] ${issueTypeToken(activeIssue)} transition hover:bg-[var(--brass-ghost)]`}
+          >
             {activeIssue.key}
-          </span>
+          </button>
           <span className={`font-mono text-[10px] uppercase tracking-[0.15em] ${STATUS_TOKEN[activeIssue.statusCategory]}`}>
             {activeIssue.statusName}
           </span>
@@ -156,7 +162,7 @@ export function ContextHeader({
           <span className="min-w-0 truncate font-serif text-[15px] leading-tight text-octo-ivory">
             {activeIssue.summary}
           </span>
-        </button>
+        </div>
       ) : (
         <div className="flex min-w-0 flex-col gap-0.5">
           <div className="font-mono text-[9px] uppercase tracking-[0.3em] text-octo-brass">

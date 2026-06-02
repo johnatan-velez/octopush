@@ -168,6 +168,18 @@ i {
   font-style: normal;
 }
 
+/* Clickable elements get the pointer (hand) cursor on hover. Tauri/WebKit
+   does NOT give native <button> a pointer cursor by default — this was
+   previously addressed piecemeal with `cursor-pointer` Tailwind classes on
+   specific components. This global rule covers native buttons, ARIA
+   buttons, and menu items, and skips anything actually disabled. Native
+   <a href> already gets the pointer cursor by default and is not listed. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+[role="menuitem"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
 /* xterm container — must be overflow:hidden to prevent the terminal
    from expanding beyond its flex/grid parent. The FitAddon measures
    this element to determine how many cols/rows fit. */

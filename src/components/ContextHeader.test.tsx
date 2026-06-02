@@ -296,8 +296,47 @@ describe("ContextHeader", () => {
     });
     renderHeader({ workspace, issueTrackerConfigured: true });
 
-    fireEvent.click(await screen.findByRole("button", { name: /open ticket/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /open clpnsns-92/i }));
     expect(openFileInSystemMock).toHaveBeenCalledWith("https://acme.atlassian.net/browse/CLPNSNS-92");
+  });
+
+  it("per-key chip: clicking each ancestor opens THAT issue's url (not the active one)", async () => {
+    const openFileInSystemMock = vi.mocked(ipc.openFileInSystem);
+    openFileInSystemMock.mockResolvedValue(undefined);
+    const workspace = makeWorkspace({ branch: "feat/CLPNSNS-92" });
+    useIssuesStore.setState({
+      issues: [
+        {
+          key: "CLPNSNS-92", summary: "Story",
+          statusName: "In Progress", statusCategory: "inProgress",
+          issueType: "Story", priority: null,
+          url: "https://acme.atlassian.net/browse/CLPNSNS-92",
+          parentKey: "EPIC-50",
+          subtask: false, hierarchyLevel: 0,
+        },
+      ],
+      loading: false, error: null, load: vi.fn().mockResolvedValue(undefined),
+    });
+    useParentIssuesStore.setState({
+      parents: {
+        "EPIC-50": {
+          key: "EPIC-50", summary: "Epic summary",
+          statusName: "In Progress", statusCategory: "inProgress",
+          issueType: "Epic", priority: null,
+          url: "https://acme.atlassian.net/browse/EPIC-50",
+          parentKey: null,
+          subtask: false, hierarchyLevel: 1,
+        },
+      },
+      loading: {},
+    });
+    renderHeader({ workspace, issueTrackerConfigured: true });
+
+    fireEvent.click(await screen.findByRole("button", { name: /open epic-50/i }));
+    expect(openFileInSystemMock).toHaveBeenLastCalledWith("https://acme.atlassian.net/browse/EPIC-50");
+
+    fireEvent.click(screen.getByRole("button", { name: /open clpnsns-92/i }));
+    expect(openFileInSystemMock).toHaveBeenLastCalledWith("https://acme.atlassian.net/browse/CLPNSNS-92");
   });
 
   it("Story with Epic parent: chip shows EPIC-KEY (purple) · STORY-KEY (verdigris)", async () => {
