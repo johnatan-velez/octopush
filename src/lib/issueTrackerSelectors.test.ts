@@ -4,9 +4,14 @@ import {
   resolveJiraProjectKey,
   selectBacklog,
   selectElsewhereCount,
+  selectBlocking,
+  selectBlockedBy,
+  selectSubtasksOrSiblings,
+  selectEpicSiblings,
+  resolveEpicKey,
   issueTypeToken,
 } from "./issueTrackerSelectors";
-import type { Issue, ProjectInfo, Workspace } from "./types";
+import type { Issue, LinkedIssueRef, ProjectInfo, Workspace } from "./types";
 
 function ws(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -184,5 +189,121 @@ describe("issueTypeToken", () => {
   it("Unmapped types fall back to text-octo-brass", () => {
     expect(issueTypeToken(issue("X-1", "Spike"))).toBe("text-octo-brass");
     expect(issueTypeToken(issue("X-1", "Improvement"))).toBe("text-octo-brass");
+  });
+});
+
+function ref(key: string, overrides: Partial<LinkedIssueRef> = {}): LinkedIssueRef {
+  return {
+    key,
+    summary: "ref " + key,
+    statusName: "To Do",
+    statusCategory: "todo",
+    issueType: "Story",
+    url: "https://x/browse/" + key,
+    ...overrides,
+  };
+}
+
+describe("selectBlocking / selectBlockedBy", () => {
+  it("returns the active issue's blocks list", () => {
+    const active = issue("A-1", "Story", {
+      blocks: [ref("A-2"), ref("A-3")],
+    });
+    expect(selectBlocking(active).map((r) => r.key)).toEqual(["A-2", "A-3"]);
+  });
+
+  it("returns the active issue's blockedBy list", () => {
+    const active = issue("A-1", "Story", {
+      blockedBy: [ref("A-4")],
+    });
+    expect(selectBlockedBy(active).map((r) => r.key)).toEqual(["A-4"]);
+  });
+
+  it("returns [] when activeIssue is null or fields are absent", () => {
+    expect(selectBlocking(null)).toEqual([]);
+    expect(selectBlockedBy(null)).toEqual([]);
+    expect(selectBlocking(issue("A-1"))).toEqual([]);
+    expect(selectBlockedBy(issue("A-1"))).toEqual([]);
+  });
+});
+
+describe("selectSubtasksOrSiblings", () => {
+  it("returns the active's own subtasks when active is not a sub-task", () => {
+    const active = issue("A-1", "Story", {
+      subtask: false,
+      subtasks: [ref("A-1.1"), ref("A-1.2")],
+    });
+    const out = selectSubtasksOrSiblings(active, {});
+    expect(out.map((r) => r.key)).toEqual(["A-1.1", "A-1.2"]);
+  });
+
+  it("returns siblings (parent's subtasks minus self) when active IS a sub-task", () => {
+    const parent = issue("A-1", "Story", {
+      subtasks: [ref("A-1.1"), ref("A-1.2"), ref("A-1.3")],
+    });
+    const active = issue("A-1.2", "Sub-task", { subtask: true, parentKey: "A-1" });
+    const out = selectSubtasksOrSiblings(active, { "A-1": parent });
+    expect(out.map((r) => r.key)).toEqual(["A-1.1", "A-1.3"]);
+  });
+
+  it("returns [] for a sub-task whose parent is not in the parents cache yet", () => {
+    const active = issue("A-1.2", "Sub-task", { subtask: true, parentKey: "A-1" });
+    expect(selectSubtasksOrSiblings(active, {})).toEqual([]);
+  });
+
+  it("returns [] when active is null", () => {
+    expect(selectSubtasksOrSiblings(null, {})).toEqual([]);
+  });
+});
+
+describe("selectEpicSiblings", () => {
+  it("excludes the active ticket and sorts by status/priority/key", () => {
+    const list = [
+      issue("E-3", "Story", { statusCategory: "todo", priority: "Low" }),
+      issue("E-1", "Story", { statusCategory: "inProgress" }),
+      issue("E-2", "Story", { statusCategory: "todo", priority: "High" }),
+      issue("E-active", "Story", { statusCategory: "inProgress" }),
+    ];
+    const out = selectEpicSiblings(list, "E-active");
+    expect(out.map((i) => i.key)).toEqual(["E-1", "E-2", "E-3"]);
+  });
+
+  it("returns [] when the epic cache is undefined (not yet fetched)", () => {
+    expect(selectEpicSiblings(undefined, "E-active")).toEqual([]);
+  });
+});
+
+describe("resolveEpicKey", () => {
+  it("returns the active key when active itself is the epic", () => {
+    expect(resolveEpicKey(issue("EPIC-1", "Epic", { hierarchyLevel: 1 }), {})).toBe("EPIC-1");
+  });
+
+  it("returns the parent key when the parent is an epic", () => {
+    const parents = { "EPIC-1": issue("EPIC-1", "Epic", { hierarchyLevel: 1 }) };
+    const story = issue("S-1", "Story", { parentKey: "EPIC-1" });
+    expect(resolveEpicKey(story, parents)).toBe("EPIC-1");
+  });
+
+  it("returns the grandparent key when active is a sub-task under a story under an epic", () => {
+    const parents = {
+      "S-1":  issue("S-1",  "Story", { parentKey: "EPIC-1" }),
+      "EPIC-1": issue("EPIC-1", "Epic",  { hierarchyLevel: 1 }),
+    };
+    const sub = issue("S-1.1", "Sub-task", { subtask: true, parentKey: "S-1" });
+    expect(resolveEpicKey(sub, parents)).toBe("EPIC-1");
+  });
+
+  it("falls back to parentKey for non-sub-tasks when the parents cache is empty", () => {
+    const story = issue("S-1", "Story", { parentKey: "EPIC-1" });
+    expect(resolveEpicKey(story, {})).toBe("EPIC-1");
+  });
+
+  it("returns null for a sub-task with no parent loaded — we can't guess one level up safely", () => {
+    const sub = issue("S-1.1", "Sub-task", { subtask: true, parentKey: "S-1" });
+    expect(resolveEpicKey(sub, {})).toBeNull();
+  });
+
+  it("returns null when active is null", () => {
+    expect(resolveEpicKey(null, {})).toBeNull();
   });
 });

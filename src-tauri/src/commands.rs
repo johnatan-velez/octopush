@@ -1376,6 +1376,16 @@ pub async fn get_issue(key: String) -> AppResult<crate::issue_tracker::Issue> {
     jira_client()?.get_issue(&key).await
 }
 
+/// All open tickets under `epic_key` (regardless of assignee). Backs the
+/// WorkContext "Epic" pill.
+#[tauri::command]
+pub async fn list_issues_in_epic(
+    epic_key: String,
+) -> AppResult<Vec<crate::issue_tracker::Issue>> {
+    use crate::issue_tracker::IssueTracker;
+    jira_client()?.list_issues_in_epic(&epic_key).await
+}
+
 /// Read the saved tracker config (token included so the Settings form can
 /// show it — same trust model as provider keys, on-device only).
 #[tauri::command]

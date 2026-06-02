@@ -17,6 +17,21 @@ pub enum StatusCategory {
     Unknown,
 }
 
+/// A lightweight reference to a related ticket — enough to render in a row
+/// without a second round-trip. Returned by Jira's `issuelinks` /
+/// `subtasks` arrays inline, so we never need to refetch the linked
+/// issues' summaries or statuses to show them in the WorkContext pills.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedIssueRef {
+    pub key: String,
+    pub summary: String,
+    pub status_name: String,
+    pub status_category: StatusCategory,
+    pub issue_type: String,
+    pub url: String,
+}
+
 /// A tracker-agnostic ticket.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +46,20 @@ pub struct Issue {
     pub parent_key: Option<String>,
     pub subtask: bool,
     pub hierarchy_level: i32,
+    /// Tickets THIS ticket blocks (outward "blocks" links). Empty for
+    /// list endpoints that don't fetch issuelinks; populated by
+    /// get_issue.
+    #[serde(default)]
+    pub blocks: Vec<LinkedIssueRef>,
+    /// Tickets that block THIS ticket (inward "blocks" links — Jira
+    /// renders them as "is blocked by" from the active ticket's POV).
+    #[serde(default)]
+    pub blocked_by: Vec<LinkedIssueRef>,
+    /// Direct children of this ticket. Empty when the ticket itself is
+    /// a sub-task or a leaf. For sub-task siblings, the caller queries
+    /// the parent's `subtasks`.
+    #[serde(default)]
+    pub subtasks: Vec<LinkedIssueRef>,
 }
 
 /// Read capabilities v1 needs. Implemented per tracker (native async-in-trait;
@@ -38,6 +67,10 @@ pub struct Issue {
 pub trait IssueTracker {
     async fn list_my_issues(&self) -> crate::error::AppResult<Vec<Issue>>;
     async fn get_issue(&self, key: &str) -> crate::error::AppResult<Issue>;
+    /// All open tickets that live under `epic_key`. Used by the WorkContext
+    /// "Epic" pill — the user wants visibility into what the rest of their
+    /// team is doing in the same epic, not only their own assignments.
+    async fn list_issues_in_epic(&self, epic_key: &str) -> crate::error::AppResult<Vec<Issue>>;
 }
 
 /// Map a Jira-style `statusCategory.key` to our normalized category.

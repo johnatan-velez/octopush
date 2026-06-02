@@ -219,6 +219,7 @@ pub fn run() {
             // Issue tracker
             commands::list_my_issues,
             commands::get_issue,
+            commands::list_issues_in_epic,
             commands::get_issue_tracker_config,
             commands::save_issue_tracker_config,
         ])

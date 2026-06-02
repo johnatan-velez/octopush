@@ -444,6 +444,18 @@ export interface WorkspaceCacheSizes {
 
 export type StatusCategory = "todo" | "inProgress" | "done" | "unknown";
 
+/** Lightweight reference to a related ticket — emitted inline by Jira's
+ *  issuelinks / subtasks arrays. Enough data to render a row without a
+ *  second round-trip. */
+export interface LinkedIssueRef {
+  key: string;
+  summary: string;
+  statusName: string;
+  statusCategory: StatusCategory;
+  issueType: string;
+  url: string;
+}
+
 export interface Issue {
   key: string;
   summary: string;
@@ -455,6 +467,13 @@ export interface Issue {
   parentKey: string | null;
   subtask: boolean;
   hierarchyLevel: number;
+  /** Tickets this ticket blocks. Populated by getIssue; empty for the
+   *  list_my_issues payload, which doesn't request issuelinks. */
+  blocks?: LinkedIssueRef[];
+  /** Tickets that block this ticket. */
+  blockedBy?: LinkedIssueRef[];
+  /** Direct children of this ticket. */
+  subtasks?: LinkedIssueRef[];
 }
 
 export interface IssueTrackerConfig {

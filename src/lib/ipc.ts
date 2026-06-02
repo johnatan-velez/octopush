@@ -317,6 +317,8 @@ export const ipc = {
   // ─── Issue Tracker ────────────────────────────────────────────
   listMyIssues: () => invoke<Issue[]>("list_my_issues"),
   getIssue: (key: string) => invoke<Issue>("get_issue", { key }),
+  listIssuesInEpic: (epicKey: string) =>
+    invoke<Issue[]>("list_issues_in_epic", { epicKey }),
   getIssueTrackerConfig: () =>
     invoke<IssueTrackerConfig | null>("get_issue_tracker_config"),
   saveIssueTrackerConfig: (config: IssueTrackerConfig) =>

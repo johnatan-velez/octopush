@@ -5,7 +5,7 @@ import { CompanionContext } from "./CompanionContext";
 import { CompanionHistory, type CompanionHistoryChat } from "./CompanionHistory";
 import { CompanionTerminals } from "./CompanionTerminals";
 import { CompanionFileTree } from "./CompanionFileTree";
-import { BacklogPanel } from "./BacklogPanel";
+import { WorkContextPanel } from "./WorkContextPanel";
 import { ElsewhereFooter } from "./ElsewhereFooter";
 import { ElsewhereModal } from "./ElsewhereModal";
 import { ModeSwitcher } from "./ModeSwitcher";
@@ -94,7 +94,7 @@ export function Companion({
 
       {showJiraBlock && (
         <>
-          <BacklogPanel
+          <WorkContextPanel
             configured={issueTrackerConfigured}
             projectKey={projectKey}
             activeKey={activeKey}

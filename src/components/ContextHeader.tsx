@@ -1,26 +1,9 @@
-import { useEffect, useState } from "react";
-import type { GitStatus, Pr, PrState, Issue, StatusCategory, Workspace } from "../lib/types";
-import { useIssuesStore } from "../stores/issuesStore";
+import { useEffect } from "react";
+import type { GitStatus, Pr, PrState, StatusCategory, Workspace } from "../lib/types";
 import { useParentIssuesStore } from "../stores/parentIssuesStore";
+import { useActiveIssue } from "../hooks/useActiveIssue";
 import { ipc } from "../lib/ipc";
 import { resolveLinkage, issueTypeToken } from "../lib/issueTrackerSelectors";
-
-/** Resolve an issue by key — prefers the store, falls back to getIssue() once
- *  per key change. Returns null until an issue is found or the lookup fails. */
-function useActiveIssue(key: string | null): Issue | null {
-  const storeIssues = useIssuesStore((s) => s.issues);
-  const [fallback, setFallback] = useState<Issue | null>(null);
-  useEffect(() => {
-    setFallback(null);
-    if (!key) return;
-    const hit = (storeIssues ?? []).find((i) => i.key === key);
-    if (hit) return;
-    ipc.getIssue(key).then(setFallback).catch(() => setFallback(null));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
-  if (!key) return null;
-  return storeIssues?.find((i) => i.key === key) ?? fallback;
-}
 
 const STATUS_TOKEN: Record<StatusCategory, string> = {
   inProgress: "text-state-blue",
