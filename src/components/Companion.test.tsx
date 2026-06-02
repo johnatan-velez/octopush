@@ -25,6 +25,7 @@ const baseProps = {
   },
   // jiraProjectKey drives resolveJiraProjectKey — set it so projectKey != null
   project: { id: "p1", name: "Test", path: "/tmp/repo", jiraProjectKey: "CLPNSNS" },
+  onModeChange: vi.fn(),
 };
 
 describe("Companion cross-mode visibility of issue tracker block", () => {

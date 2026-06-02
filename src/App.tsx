@@ -7,7 +7,6 @@ import { AppTopBar } from "./components/AppTopBar";
 import { useScratchpadStore } from "./stores/scratchpadStore";
 import { usePerfStore } from "./stores/perfStore";
 import { ContextHeader } from "./components/ContextHeader";
-import { ModeSwitcher } from "./components/ModeSwitcher";
 import { Companion } from "./components/Companion";
 import { WorkspaceCustomizeMenu } from "./components/WorkspaceCustomizeMenu";
 import { WorkspaceCreator } from "./components/WorkspaceCreator";
@@ -1130,13 +1129,6 @@ function App() {
             onOpenPr={(url) => ipc.openFileInSystem(url)}
             workspace={activeWorkspace}
             issueTrackerConfigured={issueTrackerConfigured}
-            rightSlot={
-              <ModeSwitcher
-                mode={activeMode}
-                onChange={setMode}
-                workspaceId={activeWorkspaceId ?? undefined}
-              />
-            }
           />
         )}
 
@@ -1374,6 +1366,7 @@ function App() {
             project={activeProject ?? null}
             issueTrackerConfigured={issueTrackerConfigured}
             onBacklogTicketContextMenu={(issue, x, y) => setBacklogTicketMenu({ issue, x, y })}
+            onModeChange={setMode}
           />
         </div>
         </div>

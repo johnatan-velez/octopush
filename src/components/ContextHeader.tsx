@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
 import type { GitStatus, Pr, PrState, Issue, StatusCategory, Workspace } from "../lib/types";
-import { ScratchpadIcon } from "./ScratchpadIcon";
-import { useScratchpadStore } from "../stores/scratchpadStore";
 import { useIssuesStore } from "../stores/issuesStore";
 import { useParentIssuesStore } from "../stores/parentIssuesStore";
 import { ipc } from "../lib/ipc";
@@ -72,7 +70,6 @@ interface Props {
   /** Whether the issue tracker is configured. When false, no ticket is
    *  shown even if a key is present — the degraded WORKSPACE block renders. */
   issueTrackerConfigured?: boolean;
-  rightSlot?: React.ReactNode;
 }
 
 export function ContextHeader({
@@ -83,10 +80,8 @@ export function ContextHeader({
   onOpenPr,
   workspace = null,
   issueTrackerConfigured = false,
-  rightSlot,
 }: Props) {
   const unstaged = gitStatus?.changedFiles.length ?? 0;
-  const toggleScratchpad = useScratchpadStore((s) => s.toggleOpen);
   const linkage = workspace ? resolveLinkage(workspace, branch) : { kind: "unlinked" as const };
   const activeKey =
     linkage.kind === "linked" && issueTrackerConfigured ? linkage.key : null;
@@ -203,15 +198,6 @@ export function ContextHeader({
           );
         })()}
 
-        {rightSlot && (
-          <>
-            <span className="h-6 w-px bg-octo-hairline" aria-hidden />
-            <div className="flex items-center gap-2">
-              <ScratchpadIcon onClick={toggleScratchpad} />
-              {rightSlot}
-            </div>
-          </>
-        )}
       </div>
     </div>
   );

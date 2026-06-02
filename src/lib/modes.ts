@@ -3,7 +3,11 @@
 
 export type WorkspaceMode = "talk" | "run" | "review";
 
-export const MODES: WorkspaceMode[] = ["talk", "run", "review"];
+// Visual rendering order in the ModeSwitcher. RUN sits leftmost because it's
+// the most-used mode (terminals + companion backlog) — TALK and REVIEW take
+// the inner positions. Keyboard shortcuts (MODE_SHORTCUTS) stay mapped to the
+// modes by intent, not by position.
+export const MODES: WorkspaceMode[] = ["run", "talk", "review"];
 
 export const MODE_LABELS: Record<WorkspaceMode, string> = {
   talk: "Talk",
