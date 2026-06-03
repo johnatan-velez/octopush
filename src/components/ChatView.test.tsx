@@ -393,7 +393,7 @@ describe("ChatView — arrow-key prompt history", () => {
   });
 
   function getTextarea() {
-    return screen.getByPlaceholderText(/Ask Octopus anything/i) as HTMLTextAreaElement;
+    return screen.getByPlaceholderText(/Ask anything/i) as HTMLTextAreaElement;
   }
 
   // Helper: type text, press Enter, then emit the `done` stream event so

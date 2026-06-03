@@ -272,7 +272,6 @@ export function ChatView({
           <ModelPicker
             activeModel={model}
             onSelectModel={setModel}
-            onOpenSettings={onOpenSettings}
           />
         </div>
 
@@ -292,7 +291,7 @@ export function ChatView({
             onChange={handleInput}
             onKeyDown={handleKeyDown}
             disabled={streaming}
-            placeholder="Ask Octopus anything…"
+            placeholder="Ask anything…"
             rows={1}
             className="w-full resize-none bg-transparent px-4 py-3 text-[14px] leading-[1.5] text-octo-ivory outline-none placeholder:font-serif placeholder:not-italic placeholder:text-octo-mute"
             style={{ maxHeight: "calc(6 * 1.25rem + 1.5rem)" }}

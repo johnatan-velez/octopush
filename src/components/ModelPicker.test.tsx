@@ -195,23 +195,9 @@ describe("ModelPicker", () => {
     localStorage.clear();
   });
 
-  it("renders Settings button when onOpenSettings is provided", async () => {
-    listProvidersMock.mockResolvedValueOnce(twoProviders);
-    const onSettings = vi.fn();
-    render(
-      <ModelPicker
-        activeModel="claude-opus-4-6"
-        onSelectModel={vi.fn()}
-        onOpenSettings={onSettings}
-      />,
-    );
-    await act(async () => { await Promise.resolve(); });
-
-    const settingsBtn = screen.getByText(/Settings →/i);
-    expect(settingsBtn).toBeInTheDocument();
-    fireEvent.click(settingsBtn);
-    expect(onSettings).toHaveBeenCalledTimes(1);
-  });
+  // The in-component Settings link was removed in favor of the
+  // global AppTopBar Settings button — the model row no longer
+  // duplicates that access point.
 
   it("shows Recommended section with intent rows when tags match", async () => {
     listProvidersMock.mockResolvedValueOnce([

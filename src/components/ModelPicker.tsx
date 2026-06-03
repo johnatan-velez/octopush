@@ -58,13 +58,11 @@ function formatCtx(maxContext: number): string {
 interface Props {
   activeModel: string;
   onSelectModel: (model: string) => void;
-  onOpenSettings?: () => void;
 }
 
 export function ModelPicker({
   activeModel,
   onSelectModel,
-  onOpenSettings,
 }: Props) {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [open, setOpen] = useState(false);
@@ -343,16 +341,6 @@ export function ModelPicker({
         </div>
       )}
 
-      {/* Settings link (right side of the row — rendered by parent, but
-          expose as a slot prop so caller can place it wherever) */}
-      {onOpenSettings && (
-        <button
-          onClick={onOpenSettings}
-          className="ml-auto font-mono text-[10px] uppercase tracking-[0.15em] text-octo-sage transition-colors hover:text-octo-brass"
-        >
-          Settings →
-        </button>
-      )}
     </div>
   );
 }

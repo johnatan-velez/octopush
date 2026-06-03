@@ -1154,7 +1154,7 @@ function App() {
         isCollapsed={isRailCollapsed}
       />
 
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="mx-4 flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* TOP HEADER BAND — spans the full main width and includes the mode
             switcher on its right, so the entire top of the app reads as one
             unified header card instead of two floating containers in
