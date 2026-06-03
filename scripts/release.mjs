@@ -36,7 +36,12 @@ const REPO = resolve(__dirname, "..");
 const PKG = join(REPO, "package.json");
 const CARGO = join(REPO, "src-tauri/Cargo.toml");
 const TAURI_CONF = join(REPO, "src-tauri/tauri.conf.json");
-const BUNDLE_DIR = join(REPO, "src-tauri/target/release/bundle");
+// Universal build emits to a per-target dir. Releases always ship
+// universal so the same DMG runs on Intel + Apple Silicon.
+const BUNDLE_DIR = join(
+  REPO,
+  "src-tauri/target/universal-apple-darwin/release/bundle",
+);
 const KEY_PATH = join(process.env.HOME, ".octopush-keys/updater_key");
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -125,7 +130,7 @@ step("Building release bundle (signed) — this takes a few minutes");
 // (The `_PATH` variant in some docs isn't honored by the bundler.)
 const privateKey = readFileSync(KEY_PATH, "utf8");
 
-run("npm run tauri:build", {
+run("npm run tauri:build:universal", {
   env: {
     ...process.env,
     TAURI_SIGNING_PRIVATE_KEY: privateKey,
@@ -169,31 +174,27 @@ ok(`Signature: ${sigFile}`);
 
 step("Writing latest.json");
 
-// macOS arch detection. Tauri's tarball filename doesn't always carry
-// the arch suffix, so we trust the host: Node's `process.arch` is
-// `arm64` on Apple Silicon and `x64` on Intel. The Tauri updater
-// expects platform keys like `darwin-aarch64` and `darwin-x86_64`.
-const platformKey =
-  process.arch === "arm64" ? "darwin-aarch64" : "darwin-x86_64";
-
+// Universal bundles work on both architectures, so latest.json points
+// both `darwin-aarch64` and `darwin-x86_64` to the same tarball URL.
+// The Tauri updater on each client picks whichever key matches its
+// host arch — both resolve to the same lipo-merged .app.tar.gz.
 const releaseUrl = `https://github.com/johnatan-velez/octopush/releases/download/v${newVersion}/${encodeURIComponent(
   tarball,
 )}`;
 
+const updaterEntry = { signature, url: releaseUrl };
 const latestJson = {
   version: newVersion,
   notes: `Octopush ${newVersion}`,
   pub_date: new Date().toISOString(),
   platforms: {
-    [platformKey]: {
-      signature,
-      url: releaseUrl,
-    },
+    "darwin-aarch64": updaterEntry,
+    "darwin-x86_64": updaterEntry,
   },
 };
 const latestPath = join(BUNDLE_DIR, "latest.json");
 writeFileSync(latestPath, JSON.stringify(latestJson, null, 2));
-ok(`latest.json written (${platformKey})`);
+ok(`latest.json written (darwin-aarch64 + darwin-x86_64 → universal)`);
 
 // ── 5. Commit, tag, push ─────────────────────────────────────────
 
@@ -215,10 +216,12 @@ step("Creating GitHub release + uploading assets");
 // Tauri updater — they never see this notice.
 const notesBody = `Octopush ${newVersion}
 
+Universal binary — runs natively on both **Apple Silicon** and **Intel** Macs.
+
 ## Install (first time only)
 
-1. Download \`Octopush_${newVersion}_aarch64.dmg\` below.
-2. Open the DMG and drag **Octopush.app** to **Applications**.
+1. Download the \`.dmg\` below.
+2. Open it and drag **Octopush.app** to **Applications**.
 3. Open Terminal and run:
 
    \`\`\`
