@@ -14,6 +14,8 @@ describe("WorkspaceContextMenu", () => {
     onOpenInEditor: vi.fn(),
     onOpenInTerminal: vi.fn(),
     onCustomize: vi.fn(),
+    onRename: vi.fn(),
+    onArchive: vi.fn(),
     onDelete: vi.fn(),
     onClose: vi.fn(),
   };

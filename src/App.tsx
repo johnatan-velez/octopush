@@ -11,6 +11,7 @@ import { Companion } from "./components/Companion";
 import { WorkspaceCustomizeMenu } from "./components/WorkspaceCustomizeMenu";
 import { WorkspaceCreator } from "./components/WorkspaceCreator";
 import { WorkspaceContextMenu } from "./components/WorkspaceContextMenu";
+import { RenameDialog } from "./components/RenameDialog";
 import { ProjectContextMenu } from "./components/ProjectContextMenu";
 import { ProjectCustomizeMenu } from "./components/ProjectCustomizeMenu";
 import { JiraTicketPickerModal } from "./components/JiraTicketPickerModal";
@@ -200,6 +201,7 @@ function App() {
   const [showCreator, setShowCreator] = useState(false);
   const [creatorProjectId, setCreatorProjectId] = useState<string | null>(null);
   const [customizingWorkspaceId, setCustomizingWorkspaceId] = useState<string | null>(null);
+  const [renamingWorkspace, setRenamingWorkspace] = useState<{ id: string; name: string } | null>(null);
   // When the user opens NewProjectFlow from the switcher (not from the welcome
   // screen), we render it as an overlay on top of the current project — the
   // !project early-return path doesn't fire and the create/clone form needs to
@@ -1491,6 +1493,26 @@ function App() {
         </div>
       )}
 
+      {renamingWorkspace && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-2"
+          onClick={() => setRenamingWorkspace(null)}
+        >
+          <div onClick={(e) => e.stopPropagation()}>
+            <RenameDialog
+              title="Rename workspace"
+              label="Name"
+              initialValue={renamingWorkspace.name}
+              onSubmit={(name) => {
+                void useWorkspaceStore.getState().rename(renamingWorkspace.id, name);
+                setRenamingWorkspace(null);
+              }}
+              onCancel={() => setRenamingWorkspace(null)}
+            />
+          </div>
+        </div>
+      )}
+
       <CommandPalette
         open={showPalette}
         onClose={() => setShowPalette(false)}
@@ -1710,6 +1732,17 @@ function App() {
             onCustomize={() => {
               setContextMenu(null);
               setCustomizingWorkspaceId(contextMenu.workspaceId);
+            }}
+            onRename={() => {
+              setRenamingWorkspace({ id: workspace.id, name: workspace.name });
+              setContextMenu(null);
+            }}
+            onArchive={() => {
+              setContextMenu(null);
+              void useWorkspaceStore.getState()
+                .archive(workspace.id, proj?.path ?? "", workspace.branch ?? "", workspace.worktreePath ?? null)
+                .then(() => pushToast({ level: "success", title: "Workspace archived", body: "The branch is kept." }))
+                .catch((err) => pushToast({ level: "error", title: "Archive failed", body: String(err) }));
             }}
             onDelete={() => {
               setContextMenu(null);

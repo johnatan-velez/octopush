@@ -5,6 +5,8 @@ import {
   PanelsTopLeft,
   SquareTerminal,
   Pencil,
+  Palette,
+  Archive,
   Link2,
   Link2Off,
   Trash2,
@@ -24,6 +26,8 @@ interface Props {
   onOpenInEditor: () => void;
   onOpenInTerminal: () => void;
   onCustomize: () => void;
+  onRename: () => void;
+  onArchive: () => void;
   onDelete: () => void;
   /** Dismiss the menu. */
   onClose: () => void;
@@ -51,6 +55,8 @@ export function WorkspaceContextMenu({
   onOpenInEditor,
   onOpenInTerminal,
   onCustomize,
+  onRename,
+  onArchive,
   onDelete,
   onClose,
   linkageKind,
@@ -95,8 +101,11 @@ export function WorkspaceContextMenu({
 
       <div className={SEP} />
 
+      <button type="button" role="menuitem" className={ITEM} onClick={run(onRename)}>
+        <Pencil size={12} className="shrink-0" /> Rename workspace…
+      </button>
       <button type="button" role="menuitem" className={ITEM} onClick={run(onCustomize)}>
-        <Pencil size={12} className="shrink-0" /> Customize…
+        <Palette size={12} className="shrink-0" /> Customize…
       </button>
 
       {linkageKind && (
@@ -123,6 +132,13 @@ export function WorkspaceContextMenu({
       {!isMain && (
         <>
           <div className={SEP} />
+          <button type="button" role="menuitem" className={`${ITEM} items-start`} onClick={run(onArchive)}>
+            <Archive size={12} className="mt-0.5 shrink-0" />
+            <span className="flex flex-col text-left">
+              <span>Archive workspace</span>
+              <span className="text-octo-mute">Keeps the branch; removes the worktree</span>
+            </span>
+          </button>
           <button type="button" role="menuitem" className={DANGER} onClick={run(onDelete)}>
             <Trash2 size={12} className="shrink-0" /> Delete workspace…
           </button>
