@@ -189,8 +189,25 @@ pub fn get_status(path: &Path) -> AppResult<GitStatus> {
 /// Thin wrapper over [`get_status`]; lives here so it can be unit-tested
 /// against a temp repo without the Tauri command/DB layer.
 pub fn dirty_ahead_behind(path: &Path) -> AppResult<(bool, usize, usize)> {
-    let status = get_status(path)?;
-    Ok((!status.changed_files.is_empty(), status.ahead, status.behind))
+    let dirty = is_dirty(path)?;
+    let repo = open_repo(path)?;
+    let (ahead, behind) = upstream_ahead_behind(&repo).unwrap_or((0, 0));
+    Ok((dirty, ahead, behind))
+}
+
+/// Fast "has any uncommitted change?" check. Unlike `get_status`, this does
+/// NOT recurse into untracked directories — an untracked folder counts as a
+/// single entry — so a directory of hundreds of untracked files costs one
+/// stat instead of hundreds. Used for the rail's dirty indicator where only
+/// the boolean matters.
+pub fn is_dirty(path: &Path) -> AppResult<bool> {
+    let repo = open_repo(path)?;
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true).recurse_untracked_dirs(false);
+    let statuses = repo
+        .statuses(Some(&mut opts))
+        .map_err(|e| AppError::Other(format!("git status: {e}")))?;
+    Ok(!statuses.is_empty())
 }
 
 /// Return (ahead, behind) commits relative to the configured upstream of
@@ -380,5 +397,20 @@ mod tests {
         fs::write(dir.path().join("a.txt"), "hello").unwrap();
         let (dirty2, _, _) = dirty_ahead_behind(dir.path()).unwrap();
         assert!(dirty2, "untracked file should mark the worktree dirty");
+    }
+
+    #[test]
+    fn is_dirty_detects_untracked_dir_without_recursing() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        assert!(!is_dirty(dir.path()).unwrap(), "fresh repo is clean");
+
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs/a.md"), "x").unwrap();
+        fs::write(dir.path().join("docs/b.md"), "y").unwrap();
+        assert!(is_dirty(dir.path()).unwrap(), "untracked dir marks dirty");
+        let (dirty, _, _) = dirty_ahead_behind(dir.path()).unwrap();
+        assert!(dirty);
     }
 }
