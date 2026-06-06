@@ -170,6 +170,13 @@ impl Db {
             &self.conn,
             "ALTER TABLE projects ADD COLUMN jira_project_key TEXT",
         )?;
+        // ── v3 soft-close: a non-null timestamp means the project is hidden
+        // from the rail but its row, workspaces, terminals and chats survive,
+        // so it can be reopened later (Plan 2 / bug B1).
+        add_column_if_missing(
+            &self.conn,
+            "ALTER TABLE projects ADD COLUMN closed_at TEXT",
+        )?;
         add_column_if_missing(
             &self.conn,
             "ALTER TABLE workspaces ADD COLUMN linked_issue_key TEXT",
@@ -550,7 +557,8 @@ impl Db {
 
     pub fn list_projects(&self) -> AppResult<Vec<(String, String, String, String, Option<String>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, last_opened, jira_project_key FROM projects ORDER BY created_at ASC",
+            "SELECT id, name, path, last_opened, jira_project_key FROM projects \
+             WHERE closed_at IS NULL ORDER BY created_at ASC",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
@@ -629,6 +637,40 @@ impl Db {
             )?;
         }
         Ok(())
+    }
+
+    /// Soft-close: hide the project from the rail without deleting anything.
+    pub fn close_project(&self, id: &str) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE projects SET closed_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), id],
+        )?;
+        Ok(())
+    }
+
+    /// Reopen a soft-closed project: clear `closed_at` and bump `last_opened`
+    /// so it returns to the rail in its prior (creation-order) place.
+    pub fn reopen_project(&self, id: &str) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE projects SET closed_at = NULL, last_opened = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), id],
+        )?;
+        Ok(())
+    }
+
+    /// The most recently closed projects (for the "Recently closed" drawer),
+    /// newest first, capped at 10. Same tuple shape as `list_projects`.
+    pub fn list_closed_projects(
+        &self,
+    ) -> AppResult<Vec<(String, String, String, String, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, path, last_opened, jira_project_key FROM projects \
+             WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 10",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn delete_project(&self, id: &str) -> AppResult<()> {

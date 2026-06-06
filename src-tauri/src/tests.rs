@@ -231,6 +231,27 @@ mod workspace_tests {
     }
 
     #[test]
+    fn soft_close_hides_then_reopen_restores_project() {
+        let db = test_db();
+        db.insert_project("p1", "Proj One", "/tmp/octo-p1").unwrap();
+
+        // Open by default: in list_projects, absent from closed list.
+        assert!(db.list_projects().unwrap().iter().any(|(id, ..)| id == "p1"));
+        assert!(db.list_closed_projects().unwrap().is_empty());
+
+        // Soft-close: gone from the rail list, present in closed list, row survives.
+        db.close_project("p1").unwrap();
+        assert!(!db.list_projects().unwrap().iter().any(|(id, ..)| id == "p1"));
+        assert!(db.list_closed_projects().unwrap().iter().any(|(id, ..)| id == "p1"));
+        assert!(db.get_project_by_id("p1").unwrap().is_some());
+
+        // Reopen: back in the rail list, gone from closed list.
+        db.reopen_project("p1").unwrap();
+        assert!(db.list_projects().unwrap().iter().any(|(id, ..)| id == "p1"));
+        assert!(db.list_closed_projects().unwrap().is_empty());
+    }
+
+    #[test]
     fn workspace_link_round_trip() {
         let db = test_db();
         db.insert_project("proj-link", "Test Project", "/tmp/proj-link")
