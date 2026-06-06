@@ -8,14 +8,15 @@ interface Props {
 }
 
 export function WelcomeScreen({ onNewProject }: Props) {
-  const { open, loadRecent, recent, loading, error } = useProjectStore();
+  const { open, loadRecent, recent, loading, error, closed, loadClosed } = useProjectStore();
   const [showPathInput, setShowPathInput] = useState(false);
   const [pathValue, setPathValue] = useState("");
   const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
     loadRecent();
-  }, [loadRecent]);
+    loadClosed();
+  }, [loadRecent, loadClosed]);
 
   function handleOpenClick() {
     setShowPathInput(true);
@@ -177,37 +178,62 @@ export function WelcomeScreen({ onNewProject }: Props) {
         />
       )}
 
-      {/* Recent projects */}
-      {recent.length > 0 && (
-        <div className="absolute bottom-10 left-1/2 -translate-x-1/2">
-          <div className="mb-3 text-center font-mono text-[9px] uppercase tracking-[0.3em] text-octo-mute">
-            Recent
-          </div>
-          <ul className="flex items-stretch gap-3">
-            {recent.slice(0, 5).map((project: ProjectInfo) => (
-              <li key={project.id}>
-                <button
-                  type="button"
-                  onClick={() => open(project.path)}
-                  className="flex items-center gap-2.5 rounded-md px-3 py-2 transition hover:bg-octo-panel"
-                  title={project.path}
-                >
-                  <span
-                    className="flex h-7 w-7 items-center justify-center rounded-md font-serif text-[14px] text-octo-brass"
-                    style={{
-                      background: "var(--brass-ghost)",
-                      border: "1px solid var(--brass-dim)",
-                    }}
-                  >
-                    {project.name.charAt(0).toUpperCase() || "?"}
-                  </span>
-                  <span className="font-serif text-[13px] text-octo-ivory">
-                    {project.name}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+      {/* Recent + Recently closed, stacked at the foot */}
+      {(recent.length > 0 || closed.length > 0) && (
+        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-5">
+          {recent.length > 0 && (
+            <div>
+              <div className="mb-3 text-center font-mono text-[9px] uppercase tracking-[0.3em] text-octo-mute">
+                Recent
+              </div>
+              <ul className="flex items-stretch gap-3">
+                {recent.slice(0, 5).map((project: ProjectInfo) => (
+                  <li key={project.id}>
+                    <button
+                      type="button"
+                      onClick={() => open(project.path)}
+                      className="flex items-center gap-2.5 rounded-md px-3 py-2 transition hover:bg-octo-panel"
+                      title={project.path}
+                    >
+                      <span
+                        className="flex h-7 w-7 items-center justify-center rounded-md font-serif text-[14px] text-octo-brass"
+                        style={{
+                          background: "var(--brass-ghost)",
+                          border: "1px solid var(--brass-dim)",
+                        }}
+                      >
+                        {project.name.charAt(0).toUpperCase() || "?"}
+                      </span>
+                      <span className="font-serif text-[13px] text-octo-ivory">
+                        {project.name}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {closed.length > 0 && (
+            <div>
+              <div className="mb-2 text-center font-mono text-[9px] uppercase tracking-[0.3em] text-octo-mute">
+                ⟲ Recently closed
+              </div>
+              <ul className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+                {closed.slice(0, 5).map((project: ProjectInfo) => (
+                  <li key={project.id}>
+                    <button
+                      type="button"
+                      onClick={() => open(project.path)}
+                      className="font-mono text-[11px] text-octo-sage transition hover:text-octo-brass"
+                      title={`Reopen ${project.path}`}
+                    >
+                      {project.name}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>
