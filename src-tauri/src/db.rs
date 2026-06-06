@@ -187,6 +187,12 @@ impl Db {
             &self.conn,
             "ALTER TABLE projects ADD COLUMN sort_order INTEGER",
         )?;
+        // Project tint (parity with workspaces.tint). Without this,
+        // update_project(..., Some(tint)) errors with "no such column".
+        add_column_if_missing(
+            &self.conn,
+            "ALTER TABLE projects ADD COLUMN tint TEXT",
+        )?;
         add_column_if_missing(
             &self.conn,
             "ALTER TABLE workspaces ADD COLUMN linked_issue_key TEXT",

@@ -1070,7 +1070,8 @@ function App() {
       // Trigger re-render so projectGroups recalculates with new customizations
       setProjectCustomizationsVersion((v) => v + 1);
 
-      // Call IPC to update backend (will be implemented in Task 6)
+      // Durably persist to the backend too (survives a localStorage clear).
+      await ipc.updateProjectCustomization(customizingProjectId, name, tint);
       pushToast({ level: "success", title: "Project updated" });
     } catch (err) {
       pushToast({ level: "error", title: "Failed to update project", body: String(err) });

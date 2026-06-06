@@ -261,6 +261,16 @@ mod workspace_tests {
     }
 
     #[test]
+    fn update_project_sets_name_and_tint_without_error() {
+        let db = test_db();
+        db.insert_project("p", "Old", "/tmp/octo-upd-p").unwrap();
+        // Before the tint migration this errored ("no such column: tint").
+        db.update_project("p", Some("New"), Some("verdigris")).unwrap();
+        let row = db.list_projects().unwrap().into_iter().find(|t| t.0 == "p").unwrap();
+        assert_eq!(row.1, "New");
+    }
+
+    #[test]
     fn soft_close_hides_then_reopen_restores_project() {
         let db = test_db();
         db.insert_project("p1", "Proj One", "/tmp/octo-p1").unwrap();
