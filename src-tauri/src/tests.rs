@@ -1642,4 +1642,19 @@ mod pr_state_tests {
         let pr = crate::github::pr_from_json(&raw);
         assert_eq!(pr.state, crate::github::PrState::Merged);
     }
+
+    #[test]
+    fn parse_open_pr_list_maps_branch_and_normalises_state() {
+        use crate::commands::parse_open_pr_list;
+        let json = serde_json::json!([
+            { "number": 7, "title": "Feat", "url": "https://x/7", "state": "OPEN", "isDraft": false, "headRefName": "feat/a" },
+            { "number": 8, "title": "WIP",  "url": "https://x/8", "state": "OPEN", "isDraft": true,  "headRefName": "feat/b" },
+            { "number": 9, "title": "no-branch", "url": "https://x/9", "state": "OPEN", "isDraft": false }
+        ]);
+        let out = parse_open_pr_list(json.as_array().unwrap());
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].branch, "feat/a");
+        assert_eq!(out[0].pr.number, 7);
+        assert_eq!(out[1].branch, "feat/b");
+    }
 }

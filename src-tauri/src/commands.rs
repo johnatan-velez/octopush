@@ -2016,6 +2016,34 @@ pub async fn commit_changes(workspace_path: String, message: String) -> AppResul
     Ok(sha)
 }
 
+/// A branch and its open PR, for the rail's per-workspace PR indicator.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchPr {
+    pub branch: String,
+    pub pr: crate::github::Pr,
+}
+
+/// Parse `gh pr list --json number,title,url,state,isDraft,headRefName` output
+/// (a JSON array) into branch→PR pairs. Pure (no IO), unit-testable. Skips
+/// entries without a headRefName; normalises gh's UPPERCASE `state`.
+pub(crate) fn parse_open_pr_list(values: &[serde_json::Value]) -> Vec<BranchPr> {
+    values
+        .iter()
+        .filter_map(|v| {
+            let branch = v.get("headRefName")?.as_str()?.to_string();
+            let mut pr_val = v.clone();
+            if let Some(s) = pr_val.get("state").and_then(|x| x.as_str()) {
+                pr_val["state"] = serde_json::Value::String(s.to_lowercase());
+            }
+            Some(BranchPr {
+                branch,
+                pr: crate::github::pr_from_json(&pr_val),
+            })
+        })
+        .collect()
+}
+
 /// Ask the `gh` CLI for the most recent PR on `branch` (any state). Returns
 /// `None` if gh isn't installed, isn't authed, or there's no matching PR.
 /// Runs in the user's login shell so PATH and keychain credentials behave
@@ -2203,6 +2231,37 @@ pub async fn find_pr_for_branch(workspace_path: String) -> AppResult<Option<crat
     };
 
     Ok(Some(crate::github::pr_from_json(&pr)))
+}
+
+/// Batch: all OPEN pull requests for the project's GitHub repo, keyed by head
+/// branch, for the rail's PR indicator. Uses `gh` in the user's login shell
+/// (gh resolves owner/repo from origin). Returns an empty list — never an
+/// error — when gh is missing/unauthed, the repo isn't on GitHub, or there are
+/// no open PRs.
+#[tauri::command]
+pub async fn open_prs_for_project(project_path: String) -> AppResult<Vec<BranchPr>> {
+    let project_path = expand_tilde(&project_path);
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+    let cmd = "gh pr list --state open --json number,title,url,state,isDraft,headRefName --limit 200";
+    let output = match tokio::process::Command::new(&shell)
+        .arg("-l")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(&project_path)
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let values: Vec<serde_json::Value> = match serde_json::from_slice(&output.stdout) {
+        Ok(v) => v,
+        Err(_) => return Ok(Vec::new()),
+    };
+    Ok(parse_open_pr_list(&values))
 }
 
 /// Push the current branch to its tracked upstream (creating it on the remote

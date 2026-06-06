@@ -221,6 +221,7 @@ pub fn run() {
             commands::commit_changes,
             commands::push_branch,
             commands::find_pr_for_branch,
+            commands::open_prs_for_project,
             // Workspace-wide file & text search
             commands::list_workspace_files,
             commands::search_workspace_text,
