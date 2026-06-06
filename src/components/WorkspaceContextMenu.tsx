@@ -39,6 +39,8 @@ interface Props {
 
 const ITEM =
   "flex w-full items-center gap-2 px-3 py-2 font-mono text-[11px] text-octo-sage transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass";
+const ITEM_MULTILINE =
+  "flex w-full items-start gap-2 px-3 py-2 font-mono text-[11px] text-octo-sage transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass";
 const DANGER =
   "flex w-full items-center gap-2 px-3 py-2 font-mono text-[11px] text-octo-rouge transition hover:bg-[var(--rouge-ghost)] hover:text-octo-rouge";
 const SEP = "h-px bg-octo-hairline";
@@ -132,7 +134,7 @@ export function WorkspaceContextMenu({
       {!isMain && (
         <>
           <div className={SEP} />
-          <button type="button" role="menuitem" className={`${ITEM} items-start`} onClick={run(onArchive)}>
+          <button type="button" role="menuitem" className={ITEM_MULTILINE} onClick={run(onArchive)}>
             <Archive size={12} className="mt-0.5 shrink-0" />
             <span className="flex flex-col text-left">
               <span>Archive workspace</span>
