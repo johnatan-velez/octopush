@@ -246,6 +246,7 @@ function App() {
   // Layout version (forces TerminalPane fit-resize when sidebar/companion toggle)
   const layoutVersionRef = useRef(0);
   const gitSigRef = useRef<string>("");
+  const gitDiffRef = useRef<string>("");
   const [layoutVersion, setLayoutVersion] = useState(0);
   const bumpLayout = useCallback(() => {
     layoutVersionRef.current += 1;
@@ -474,6 +475,7 @@ function App() {
       setGitStatus(null);
       setGitDiff("");
       gitSigRef.current = "";
+      gitDiffRef.current = "";
       return;
     }
     let cancelled = false;
@@ -484,17 +486,20 @@ function App() {
           ipc.getGitDiff(path).catch(() => ""),
         ]);
         if (cancelled) return;
-        // Only re-render when status/diff actually changed — otherwise the
-        // 3s poll re-renders every gitStatus subscriber with the full
-        // changed-files payload (laggy on repos with many changes).
+        // Status change-detection (file metadata). hasUpstream is intentionally
+        // omitted — no App-level gitStatus consumer reads it (ChangesPanel keeps
+        // its own git status). The diff is compared separately, by content.
         const sig =
           `${s?.branch ?? ""}|${s?.ahead ?? 0}|${s?.behind ?? 0}|` +
-          `${(s?.changedFiles ?? []).map((f) => `${f.path}:${f.status}:${f.staged ? 1 : 0}:${f.unstaged ? 1 : 0}`).join(",")}` +
-          `|${d.length}`;
-        if (sig === gitSigRef.current) return;
-        gitSigRef.current = sig;
-        setGitStatus(s);
-        setGitDiff(d);
+          `${(s?.changedFiles ?? []).map((f) => `${f.path}:${f.status}:${f.staged ? 1 : 0}:${f.unstaged ? 1 : 0}`).join(",")}`;
+        if (sig !== gitSigRef.current) {
+          gitSigRef.current = sig;
+          setGitStatus(s);
+        }
+        if (d !== gitDiffRef.current) {
+          gitDiffRef.current = d;
+          setGitDiff(d);
+        }
       } catch {
         /* non-fatal */
       }
