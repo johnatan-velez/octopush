@@ -15,6 +15,8 @@ interface ProjectState {
   loadClosed: () => Promise<void>;
   closeProject: (id: string) => Promise<void>;
   reopenProject: (id: string) => Promise<void>;
+  setPinned: (id: string, pinned: boolean) => Promise<void>;
+  setOrder: (ids: string[]) => Promise<void>;
   close: () => void;
   getLastOpenedPath: () => string | null;
   saveLastOpenedPath: (path: string) => void;
@@ -93,6 +95,18 @@ export const useProjectStore = create<ProjectState>((set) => ({
       ipc.listClosedProjects(),
     ]);
     set({ recent, closed });
+  },
+
+  setPinned: async (id, pinned) => {
+    await ipc.setProjectPinned(id, pinned);
+    const recent = await ipc.listRecentProjects();
+    set({ recent });
+  },
+
+  setOrder: async (ids) => {
+    await ipc.setProjectOrder(ids);
+    const recent = await ipc.listRecentProjects();
+    set({ recent });
   },
 
   close: () => set({ current: null }),

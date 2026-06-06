@@ -10,6 +10,8 @@ const mockIpc = {
   reopenProject: vi.fn<(id: string) => Promise<void>>(),
   listRecentProjects: vi.fn<() => Promise<ProjectInfo[]>>(),
   listClosedProjects: vi.fn<() => Promise<ProjectInfo[]>>(),
+  setProjectPinned: vi.fn<(id: string, pinned: boolean) => Promise<void>>(),
+  setProjectOrder: vi.fn<(ids: string[]) => Promise<void>>(),
 };
 
 vi.mock("../lib/ipc", () => ({ ipc: mockIpc }));
@@ -70,6 +72,35 @@ describe("projectStore — reopenProject", () => {
     expect(mockIpc.reopenProject).toHaveBeenCalledWith("a");
     expect(s.recent.map((p) => p.id)).toEqual(["a"]);
     expect(s.closed).toEqual([]);
+  });
+});
+
+describe("projectStore — pin & reorder", () => {
+  beforeEach(() => resetStore());
+
+  it("setPinned calls ipc and reloads recent", async () => {
+    const a = proj("a");
+    useProjectStore.setState({ recent: [a] });
+    mockIpc.setProjectPinned.mockResolvedValueOnce(undefined);
+    mockIpc.listRecentProjects.mockResolvedValueOnce([{ ...a, pinned: true }]);
+
+    await useProjectStore.getState().setPinned("a", true);
+
+    expect(mockIpc.setProjectPinned).toHaveBeenCalledWith("a", true);
+    expect(useProjectStore.getState().recent[0].pinned).toBe(true);
+  });
+
+  it("setOrder calls ipc with the id sequence and reloads recent", async () => {
+    const a = proj("a");
+    const b = proj("b");
+    useProjectStore.setState({ recent: [a, b] });
+    mockIpc.setProjectOrder.mockResolvedValueOnce(undefined);
+    mockIpc.listRecentProjects.mockResolvedValueOnce([b, a]);
+
+    await useProjectStore.getState().setOrder(["b", "a"]);
+
+    expect(mockIpc.setProjectOrder).toHaveBeenCalledWith(["b", "a"]);
+    expect(useProjectStore.getState().recent.map((p) => p.id)).toEqual(["b", "a"]);
   });
 });
 
