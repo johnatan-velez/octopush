@@ -228,14 +228,15 @@ function EditorCommandRow() {
         background: "var(--color-octo-panel)",
       }}
     >
-      <div className="font-serif text-[14px] leading-tight text-octo-ivory">
+      <label htmlFor="editor-command-input" className="block font-serif text-[14px] leading-tight text-octo-ivory">
         Editor command
-      </div>
+      </label>
       <div className="mt-1 text-[12px] leading-[1.55] text-octo-sage">
         Used by "Open in editor" in the rail. Leave empty to auto-detect.
         {detected.length > 0 && ` Detected: ${detected.map((e) => e.name).join(", ")}.`}
       </div>
       <input
+        id="editor-command-input"
         value={cmd}
         onChange={(e) => setCmd(e.target.value)}
         onBlur={persist}

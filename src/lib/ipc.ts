@@ -4,11 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AdapterInfo,
   AppSettings,
-  EditorChoice,
   Budget,
   BudgetPeriod,
   BudgetScope,
   BudgetStatus,
+  EditorChoice,
   ChatMessage,
   CreateSessionArgs,
   DirectoryEntry,
