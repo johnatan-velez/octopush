@@ -143,11 +143,23 @@ function WorkspaceRow({
   onCustomize,
   onContextMenu,
 }: WorkspaceRowProps) {
+  // Hooks must run unconditionally — before any early return (C4).
+  const attentionFlag = useAttentionStore(
+    (s) => s.flagsByWs?.[workspace?.id ?? ""],
+  );
+  const [showFadeOut, setShowFadeOut] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
   if (!workspace) return null;
 
   let mono: ReturnType<typeof resolveMonogram>;
   let tint: any;
-
   try {
     mono = resolveMonogram(workspace);
     tint = TINTS[mono.tint];
@@ -156,20 +168,7 @@ function WorkspaceRow({
     return null;
   }
 
-  const attentionFlag = useAttentionStore(
-    (s) => s.flagsByWs?.[workspace.id],
-  );
   const showPulse = !!attentionFlag && !active;
-
-  const [showFadeOut, setShowFadeOut] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  // Cleanup timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
 
   const handleMouseEnter = () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
