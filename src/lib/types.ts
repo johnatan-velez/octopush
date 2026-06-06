@@ -250,6 +250,12 @@ export interface Pr {
 /** @deprecated Use `Pr` instead. */
 export type OpenPr = Pr;
 
+/** A branch and its open PR, from open_prs_for_project (rail PR indicator). */
+export interface BranchPr {
+  branch: string;
+  pr: Pr;
+}
+
 /** A single text-search hit (line-level match) within the workspace. */
 export interface SearchHit {
   /** Path relative to the workspace root. */

@@ -8,6 +8,7 @@ import type {
   BudgetPeriod,
   BudgetScope,
   BudgetStatus,
+  BranchPr,
   EditorChoice,
   ChatMessage,
   CreateSessionArgs,
@@ -304,6 +305,9 @@ export const ipc = {
    *  network error — UI is expected to hide the chip silently. */
   findPrForBranch: (workspacePath: string) =>
     invoke<Pr | null>("find_pr_for_branch", { workspacePath }),
+
+  openPrsForProject: (projectPath: string) =>
+    invoke<BranchPr[]>("open_prs_for_project", { projectPath }),
 
   // ─── Test runner ──────────────────────────────────────────────
   runTestCommand: (workspacePath: string, command: string) =>
