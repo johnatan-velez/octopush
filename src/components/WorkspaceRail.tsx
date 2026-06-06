@@ -64,6 +64,7 @@ export function WorkspaceRail({
                 }}
               >
                 <div
+                  data-testid="project-header"
                   className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em]"
                   style={{ color: tint.accent }}
                 >

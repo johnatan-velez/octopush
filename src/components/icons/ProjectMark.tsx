@@ -14,6 +14,7 @@ export function ProjectMark({ size = 15, className }: ProjectMarkProps) {
       viewBox="0 0 20 20"
       fill="none"
       aria-hidden="true"
+      focusable="false"
       className={className}
     >
       <polygon

@@ -175,11 +175,19 @@ describe("WorkspaceRail", () => {
     expect(screen.getByText("Frontend")).toBeInTheDocument();
     expect(screen.getByText("Backend")).toBeInTheDocument();
 
-    // Check that they have correct classes (the wrapper div carries font-mono, uppercase, and style)
-    const frontendHeader = screen.getByText("Frontend").closest("div[style]");
+    // Check that headers render with correct styling via data-testid
+    const headers = screen.getAllByTestId("project-header");
+    expect(headers).toHaveLength(2);
+
+    const frontendHeader = headers.find((h) => h.textContent?.includes("Frontend"));
+    expect(frontendHeader).toBeTruthy();
     expect(frontendHeader).toHaveClass("font-mono");
     expect(frontendHeader).toHaveClass("uppercase");
     expect(frontendHeader?.getAttribute("style")).toBeTruthy();
+
+    const backendHeader = headers.find((h) => h.textContent?.includes("Backend"));
+    expect(backendHeader).toBeTruthy();
+    expect(backendHeader).toHaveClass("font-mono");
   });
 
   it("should hide project headers when collapsed", () => {
