@@ -169,6 +169,10 @@ export const ipc = {
     invoke<void>("archive_workspace", { workspaceId, projectPath, branch, worktreePath }),
   renameWorkspace: (workspaceId: string, name: string) =>
     invoke<void>("rename_workspace", { workspaceId, name }),
+  listArchivedWorkspaces: (projectId: string) =>
+    invoke<Workspace[]>("list_archived_workspaces", { projectId }),
+  restoreWorkspace: (workspaceId: string, projectPath: string, branch: string, worktreePath: string | null) =>
+    invoke<void>("restore_workspace", { workspaceId, projectPath, branch, worktreePath }),
   updateWorkspaceCustomization: (
     workspaceId: string,
     glyph: string | null,
