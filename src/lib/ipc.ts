@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AdapterInfo,
   AppSettings,
+  EditorChoice,
   Budget,
   BudgetPeriod,
   BudgetScope,
@@ -179,6 +180,9 @@ export const ipc = {
   // ─── File operations ───────────────────────────────────────────
   openFileInSystem: (path: string) => invoke<void>("open_file_in_system", { path }),
   revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
+  openInTerminal: (path: string) => invoke<void>("open_in_terminal", { path }),
+  openInEditor: (path: string) => invoke<void>("open_in_editor", { path }),
+  detectEditors: () => invoke<EditorChoice[]>("detect_editors"),
   readFile: (path: string) => invoke<string>("read_file", { path }),
   writeFile: (path: string, content: string) => invoke<void>("write_file", { path, content }),
 

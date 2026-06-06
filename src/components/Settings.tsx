@@ -15,7 +15,7 @@ import {
   SETTINGS_TAB_LABELS,
   type SettingsTab,
 } from "../lib/settingsTabs";
-import type { Budget, BudgetPeriod, BudgetScope, ModelInfo, ProjectInfo, ProviderConfig, UsageBreakdown } from "../lib/types";
+import type { Budget, BudgetPeriod, BudgetScope, EditorChoice, ModelInfo, ProjectInfo, ProviderConfig, UsageBreakdown } from "../lib/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { pushToast } from "./Toasts";
 
@@ -195,8 +195,62 @@ function GeneralPane() {
           checked={soundEnabled}
           onChange={setSoundEnabled}
         />
+
+        <SectionLabel>Editor</SectionLabel>
+        <EditorCommandRow />
       </div>
     </>
+  );
+}
+
+function EditorCommandRow() {
+  const [cmd, setCmd] = useState("");
+  const [detected, setDetected] = useState<EditorChoice[]>([]);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    ipc.getSettings().then((s) => setCmd(s.editorCommand ?? "")).catch(() => {});
+    ipc.detectEditors().then(setDetected).catch(() => {});
+  }, []);
+
+  async function persist() {
+    const s = await ipc.getSettings();
+    await ipc.saveSettings({ ...s, editorCommand: cmd.trim() || null });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  }
+
+  return (
+    <div
+      className="rounded-lg px-4 py-3"
+      style={{
+        border: "1px solid var(--color-octo-hairline)",
+        background: "var(--color-octo-panel)",
+      }}
+    >
+      <div className="font-serif text-[14px] leading-tight text-octo-ivory">
+        Editor command
+      </div>
+      <div className="mt-1 text-[12px] leading-[1.55] text-octo-sage">
+        Used by "Open in editor" in the rail. Leave empty to auto-detect.
+        {detected.length > 0 && ` Detected: ${detected.map((e) => e.name).join(", ")}.`}
+      </div>
+      <input
+        value={cmd}
+        onChange={(e) => setCmd(e.target.value)}
+        onBlur={persist}
+        placeholder={detected[0]?.command ?? "code"}
+        spellCheck={false}
+        className="mt-2 w-full rounded-md px-3 py-2 font-mono text-[12px] text-octo-ivory outline-none"
+        style={{
+          background: "var(--color-octo-onyx)",
+          border: "1px solid var(--color-octo-hairline)",
+        }}
+      />
+      {saved && (
+        <div className="mt-1 font-mono text-[10px] text-octo-verdigris">Saved</div>
+      )}
+    </div>
   );
 }
 

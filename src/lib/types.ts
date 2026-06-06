@@ -281,10 +281,18 @@ export interface AppSettings {
   gitCredentials: Record<string, GitCredentialEntry>;
   /** ISO-8601 timestamp of the last successful pricing refresh from LiteLLM. */
   lastPricingRefresh?: string | null;
+  /** Optional "Open in editor" command override; empty/undefined → autodetect. */
+  editorCommand?: string | null;
   /** @deprecated use providerKeys.anthropic */
   anthropicApiKey?: string | null;
   /** @deprecated use providerKeys.openai */
   openaiApiKey?: string | null;
+}
+
+export interface EditorChoice {
+  id: string;
+  name: string;
+  command: string;
 }
 
 // ─── Usage breakdown (cloud vs local) ─────────────────────────────
