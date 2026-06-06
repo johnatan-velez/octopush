@@ -417,8 +417,9 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
         // Carry the saved Jira project key (if any) so the frontend that
         // builds its project map from this return value doesn't silently
         // zero out a previously-configured mapping.
-        let jira_project_key = db.get_project(&id)?.and_then(|p| p.jira_project_key);
-        let pinned = db.get_project(&id)?.map(|x| x.pinned).unwrap_or(false);
+        let existing = db.get_project(&id)?;
+        let jira_project_key = existing.as_ref().and_then(|p| p.jira_project_key.clone());
+        let pinned = existing.map(|p| p.pinned).unwrap_or(false);
         Ok(ProjectInfo { id, name, path: p, jira_project_key, pinned })
     } else {
         let id = uuid::Uuid::new_v4().to_string();
