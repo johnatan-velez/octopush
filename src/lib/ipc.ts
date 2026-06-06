@@ -147,6 +147,9 @@ export const ipc = {
     invoke<void>("close_project", { projectId }),
   deleteProject: (projectId: string) =>
     invoke<void>("delete_project", { projectId }),
+  reopenProject: (projectId: string) =>
+    invoke<void>("reopen_project", { projectId }),
+  listClosedProjects: () => invoke<ProjectInfo[]>("list_closed_projects"),
 
   // ─── Workspaces ─────────────────────────────────────────────────
   createWorkspace: (projectId: string, projectPath: string, name: string, task: string,
