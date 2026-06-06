@@ -180,13 +180,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   updateCustomization: async (workspaceId, glyph, tint) => {
     await ipc.updateWorkspaceCustomization(workspaceId, glyph, tint as any);
-    set((s) => ({
-      workspaces: s.workspaces.map((w) =>
+    set((s) => {
+      const patch = (w: Workspace) =>
         w.id === workspaceId
-          ? { ...w, glyph: (glyph as any), tint: (tint as any) }
-          : w,
-      ),
-    }));
+          ? { ...w, glyph: glyph as any, tint: tint as any }
+          : w;
+      const nextByProject: Record<string, Workspace[]> = {};
+      for (const [pid, list] of Object.entries(s.workspacesByProjectId)) {
+        nextByProject[pid] = list.map(patch);
+      }
+      return {
+        workspaces: s.workspaces.map(patch),
+        workspacesByProjectId: nextByProject,
+      };
+    });
   },
 
   notify: (workspaceId) =>

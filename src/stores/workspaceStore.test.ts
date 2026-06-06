@@ -186,3 +186,28 @@ describe("workspaceStore — rememberActiveForProject", () => {
     expect(persisted["proj-9"]).toBe("ws-42");
   });
 });
+
+describe("workspaceStore — updateCustomization", () => {
+  beforeEach(() => {
+    resetStore();
+    const a = makeWorkspace("p1", "alpha");
+    useWorkspaceStore.setState({
+      workspaces: [a],
+      workspacesByProjectId: { p1: [a] },
+      activeId: a.id,
+    });
+  });
+
+  it("updates the rail map (workspacesByProjectId), not just workspaces", async () => {
+    mockIpc.updateWorkspaceCustomization.mockResolvedValueOnce(undefined);
+    const wsId = useWorkspaceStore.getState().workspaces[0].id;
+
+    await useWorkspaceStore
+      .getState()
+      .updateCustomization(wsId, "★", "verdigris");
+
+    const fromMap = useWorkspaceStore.getState().workspacesByProjectId.p1[0];
+    expect(fromMap.glyph).toBe("★");
+    expect(fromMap.tint).toBe("verdigris");
+  });
+});
