@@ -144,6 +144,8 @@ pub fn run() {
             commands::create_project,
             commands::update_project_customization,
             commands::close_project,
+            commands::list_closed_projects,
+            commands::reopen_project,
             commands::delete_project,
             // Workspaces
             commands::create_workspace,

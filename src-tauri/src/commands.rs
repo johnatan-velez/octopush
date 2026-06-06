@@ -406,7 +406,10 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
 
     let db = state.db.lock();
     if let Some((id, name, p)) = db.get_project_by_path(&path)? {
-        db.touch_project(&id)?;
+        // Opening a project always un-closes it (clears closed_at) and bumps
+        // last_opened — this is the welcome-screen path back for a closed
+        // sole project, when the rail's "Recently closed" drawer isn't visible.
+        db.reopen_project(&id)?;
         // Heal projects opened by older Octopush versions that didn't auto-
         // create a main workspace.
         ensure_main_workspace(&db, &id, &p)?;
@@ -430,6 +433,28 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
 pub async fn list_recent_projects(state: State<'_, AppState>) -> AppResult<Vec<ProjectInfo>> {
     let rows = state.db.lock().list_projects()?;
     Ok(rows.into_iter().map(|(id, name, path, _, jira_project_key)| ProjectInfo { id, name, path, jira_project_key }).collect())
+}
+
+#[tauri::command]
+pub async fn list_closed_projects(state: State<'_, AppState>) -> AppResult<Vec<ProjectInfo>> {
+    let rows = state.db.lock().list_closed_projects()?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, path, _, jira_project_key)| ProjectInfo {
+            id,
+            name,
+            path,
+            jira_project_key,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn reopen_project(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> AppResult<()> {
+    state.db.lock().reopen_project(&project_id)
 }
 
 /// Auto-creates a workspace pointing at the project's default branch and root
@@ -1214,7 +1239,9 @@ pub async fn close_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> AppResult<()> {
-    state.db.lock().delete_project(&project_id)
+    // Soft-close: the row, its workspaces, terminals and chats are preserved
+    // so the project can be reopened from "Recently closed" (B1).
+    state.db.lock().close_project(&project_id)
 }
 
 #[tauri::command]
