@@ -53,6 +53,7 @@
   --state-purple-ghost: rgba(168, 136, 184, 0.1);
 
   /* Rouge (destructive) alpha utilities */
+  --rouge-ghost:       rgba(209, 139, 139, 0.08);
   --rouge-active-bg:   rgba(209, 139, 139, 0.1);
   --rouge-disabled-bg: rgba(209, 139, 139, 0.05);
   --rouge-border:      rgba(209, 139, 139, 0.3);
