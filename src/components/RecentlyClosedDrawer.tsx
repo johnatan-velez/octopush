@@ -19,13 +19,14 @@ export function RecentlyClosedDrawer({ projects, onReopen }: Props) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
+        aria-controls="recently-closed-panel"
         className="flex w-full items-center justify-between px-3 py-1 font-mono text-[9px] uppercase tracking-[0.18em] text-octo-mute transition hover:text-octo-sage"
       >
         <span>⟲ Recently closed · {projects.length}</span>
-        <span className="text-[10px] leading-none">{open ? "⌄" : "›"}</span>
+        <span aria-hidden="true" className="text-[10px] leading-none">{open ? "⌄" : "›"}</span>
       </button>
       {open && (
-        <div className="mt-1 flex flex-col">
+        <div id="recently-closed-panel" className="mt-1 flex flex-col">
           {projects.map((p) => (
             <div key={p.id} className="group flex items-center gap-2 px-3 py-1.5">
               <ProjectMark size={13} className="shrink-0 opacity-50" />
@@ -35,7 +36,8 @@ export function RecentlyClosedDrawer({ projects, onReopen }: Props) {
               <button
                 type="button"
                 onClick={() => onReopen(p.id)}
-                className="opacity-0 transition-opacity group-hover:opacity-100 font-mono text-[10px] text-octo-brass"
+                aria-label={`Restore ${p.name}`}
+                className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 font-mono text-[10px] text-octo-brass"
               >
                 Restore
               </button>
