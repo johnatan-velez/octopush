@@ -78,6 +78,7 @@ function App() {
     rememberActiveForProject,
     remove: removeWorkspace,
     workspacesByProjectId,
+    pruneProject,
   } = useWorkspaceStore();
 
   const [appView, setAppView] = useState<AppView>("project");
@@ -115,6 +116,10 @@ function App() {
   // Project store — for switcher
   const recentProjects = useProjectStore((s) => s.recent);
   const loadRecentProjects = useProjectStore((s) => s.loadRecent);
+  const closedProjects = useProjectStore((s) => s.closed);
+  const loadClosedProjects = useProjectStore((s) => s.loadClosed);
+  const closeProjectAction = useProjectStore((s) => s.closeProject);
+  const reopenProjectAction = useProjectStore((s) => s.reopenProject);
   const openProject = useProjectStore((s) => s.open);
   const getLastOpenedPath = useProjectStore((s) => s.getLastOpenedPath);
   const saveLastOpenedPath = useProjectStore((s) => s.saveLastOpenedPath);
@@ -271,6 +276,7 @@ function App() {
 
     (async () => {
       await loadRecentProjects();
+      void loadClosedProjects();
       // Check if we have projects stored and no current project
       const state = useProjectStore.getState();
       if (!state.current && state.recent.length > 0) {
@@ -285,7 +291,7 @@ function App() {
         }
       }
     })();
-  }, [loadRecentProjects, openProject, getLastOpenedPath]);
+  }, [loadRecentProjects, loadClosedProjects, openProject, getLastOpenedPath]);
 
   // Performance monitor polling — runs for the whole app lifetime.
   useEffect(() => {
@@ -954,15 +960,16 @@ function App() {
     setProjectContextMenu(null);
   };
 
-  // ── Project close handler ──
+  // ── Project close handler (soft-close: reversible from Recently closed) ──
   const handleCloseProject = useCallback(
     async (projectId: string) => {
       try {
-        await ipc.closeProject(projectId);
-        await loadRecentProjects();
+        await closeProjectAction(projectId); // soft-close; clears current if active (C2)
+        pruneProject(projectId); // drop its workspaces from the rail map (C8)
         pushToast({
           level: "success",
           title: "Project closed",
+          body: "Restore it from Recently closed.",
         });
       } catch (err) {
         pushToast({
@@ -973,7 +980,24 @@ function App() {
       }
       setProjectContextMenu(null);
     },
-    [loadRecentProjects]
+    [closeProjectAction, pruneProject]
+  );
+
+  // ── Project reopen handler (from the Recently closed drawer) ──
+  const handleReopenProject = useCallback(
+    async (projectId: string) => {
+      try {
+        await reopenProjectAction(projectId);
+        pushToast({ level: "success", title: "Project restored" });
+      } catch (err) {
+        pushToast({
+          level: "error",
+          title: "Failed to restore project",
+          body: String(err),
+        });
+      }
+    },
+    [reopenProjectAction]
   );
 
   // ── Project delete handler ──
@@ -988,6 +1012,8 @@ function App() {
       try {
         await ipc.deleteProject(projectId);
         await loadRecentProjects();
+        await loadClosedProjects();
+        pruneProject(projectId);
 
         // If current project was deleted, go to welcome screen
         if (project?.id === projectId) {
@@ -1008,7 +1034,7 @@ function App() {
         setDeletingProjectId(null);
       }
     },
-    [project?.id, loadRecentProjects]
+    [project?.id, loadRecentProjects, loadClosedProjects, pruneProject]
   );
 
   // ── Project customized handler ──
@@ -1151,6 +1177,8 @@ function App() {
         }}
         onAddProject={() => setShowAddProject(true)}
         onProjectContextMenu={handleProjectContextMenu}
+        closedProjects={closedProjects}
+        onReopenProject={handleReopenProject}
         isCollapsed={isRailCollapsed}
       />
 
