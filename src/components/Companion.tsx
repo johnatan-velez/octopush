@@ -10,11 +10,8 @@ import { ElsewhereFooter } from "./ElsewhereFooter";
 import { ElsewhereModal } from "./ElsewhereModal";
 import { ModeSwitcher } from "./ModeSwitcher";
 import { useIssuesStore } from "../stores/issuesStore";
-import {
-  resolveLinkage,
-  resolveJiraProjectKey,
-  selectElsewhereCount,
-} from "../lib/issueTrackerSelectors";
+import { selectElsewhereCount } from "../lib/issueTrackerSelectors";
+import { detectIssueKeyForProject } from "../lib/detectIssueKey";
 
 interface ContextProps {
   tokensUsed: number;
@@ -68,10 +65,13 @@ export function Companion({
   const [elsewhereOpen, setElsewhereOpen] = useState(false);
 
   const branch = workspace?.branch ?? "";
-  const linkage = workspace ? resolveLinkage(workspace, branch) : { kind: "unlinked" as const };
+  const manualKey = workspace?.linkedIssueKey ?? null;
+  const detectedKey = detectIssueKeyForProject(branch, project?.jiraProjectKey ?? null);
+  const activeKey = manualKey ?? detectedKey;
+  // Backlog project key: the configured key, else a manually-linked ticket's
+  // prefix. A key guessed from an arbitrary branch name is NOT used (C5).
   const projectKey =
-    workspace && project ? resolveJiraProjectKey(project, workspace, branch) : null;
-  const activeKey = linkage.kind === "linked" ? linkage.key : null;
+    project?.jiraProjectKey ?? (manualKey ? manualKey.split("-")[0] : null);
   const elsewhereCount = selectElsewhereCount(issues ?? [], projectKey);
 
   // Gate: only show Jira panels when tracker is configured AND we have a

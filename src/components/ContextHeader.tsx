@@ -48,8 +48,9 @@ interface Props {
   /** Called with the PR's html_url when the chip is clicked. Typically
    *  routes through `ipc.openFileInSystem` to launch the browser. */
   onOpenPr?: (url: string) => void;
-  /** The active workspace. Used to derive the ticket via resolveLinkage
-   *  (manual link wins over branch detection). */
+  /** The active workspace. A manually linked ticket (linkedIssueKey) wins;
+   *  otherwise a branch-detected key gated on the project's Jira key
+   *  (detectIssueKeyForProject). */
   workspace?: Workspace | null;
   /** Whether the issue tracker is configured. When false, no ticket is
    *  shown even if a key is present — the degraded WORKSPACE block renders. */
