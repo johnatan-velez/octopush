@@ -39,14 +39,14 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-center justify-center bg-octo-bg/70 backdrop-blur-sm"
+      className="absolute inset-0 z-50 flex items-center justify-center bg-octo-bg/70 backdrop-blur-sm octo-overlay-enter"
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"
       onClick={onCancel}
     >
       <div
-        className="w-full max-w-[420px] rounded-xl border border-octo-hairline bg-octo-panel p-6 shadow-2xl"
+        className="w-full max-w-[420px] rounded-xl border border-octo-hairline bg-octo-panel p-6 shadow-2xl octo-modal-enter"
         onClick={(e) => e.stopPropagation()}
       >
         <h2

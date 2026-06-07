@@ -47,7 +47,7 @@ export function CommandPalette({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh] octo-overlay-enter"
       style={{ background: "rgba(12, 10, 8, 0.55)", backdropFilter: "blur(4px)" }}
       onClick={onClose}
       onKeyDown={(e) => {
@@ -60,7 +60,7 @@ export function CommandPalette({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-[560px] rounded-xl bg-octo-panel"
+        className="w-[560px] rounded-xl bg-octo-panel octo-modal-enter"
         style={{
           border: "1px solid var(--brass-dim)",
           boxShadow:

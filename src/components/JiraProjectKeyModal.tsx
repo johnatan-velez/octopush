@@ -50,10 +50,10 @@ export function JiraProjectKeyModal({ initialValue, projectName, onSave, onClose
       ref={overlayRef}
       role="dialog"
       aria-label="Set Jira project key"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-octo-onyx/80 p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-octo-onyx/80 p-6 octo-overlay-enter"
       onClick={handleOverlayClick}
     >
-      <div className="flex w-[400px] flex-col rounded-md border border-octo-hairline bg-octo-panel">
+      <div className="flex w-[400px] flex-col rounded-md border border-octo-hairline bg-octo-panel octo-modal-enter">
         <div className="flex items-center justify-between border-b border-octo-hairline px-4 py-3">
           <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">
             Set Jira project key
