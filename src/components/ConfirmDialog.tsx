@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ModalShell } from "./ModalShell";
 
 interface Props {
   title: string;
@@ -22,35 +23,27 @@ export function ConfirmDialog({
   const [inputValue, setInputValue] = useState("");
   const isConfirmDisabled = requireInput ? inputValue !== requireInput : false;
 
-  // Esc → cancel, Enter → confirm
+  // Enter → confirm (Escape → cancel is handled by ModalShell).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onCancel();
-      } else if (e.key === "Enter" && !isConfirmDisabled) {
+      if (e.key === "Enter" && !isConfirmDisabled) {
         e.preventDefault();
         void onConfirm();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onConfirm, onCancel, isConfirmDisabled]);
+  }, [onConfirm, isConfirmDisabled]);
 
   return (
-    <div
-      className="absolute inset-0 z-50 flex items-center justify-center bg-octo-bg/70 backdrop-blur-sm octo-overlay-enter"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="confirm-dialog-title"
-      onClick={onCancel}
+    <ModalShell
+      onClose={onCancel}
+      closeOnBackdrop={false}
+      ariaLabel={title}
+      panelClassName="w-full max-w-[420px]"
     >
-      <div
-        className="w-full max-w-[420px] rounded-xl border border-octo-hairline bg-octo-panel p-6 shadow-2xl octo-modal-enter"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="rounded-xl border border-octo-hairline bg-octo-panel p-6 shadow-2xl">
         <h2
-          id="confirm-dialog-title"
           className="font-serif text-[18px] leading-tight tracking-[-0.005em] text-octo-ivory"
         >
           {title}
@@ -99,6 +92,6 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 }

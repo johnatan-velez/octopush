@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { ipc } from "../lib/ipc";
 import type { Issue, StatusCategory } from "../lib/types";
+import { ModalShell } from "./ModalShell";
 
 const STATUS_DOT: Record<StatusCategory, string> = {
   todo: "text-octo-mute",
@@ -29,12 +30,8 @@ export function ElsewhereModal({ issues, activeProjectKey, onClose }: Props) {
   }, [issues, activeProjectKey]);
 
   return (
-    <div
-      role="dialog"
-      aria-label="Tickets elsewhere"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-octo-onyx/80 p-6 octo-overlay-enter"
-    >
-      <div className="flex max-h-[80vh] w-[640px] flex-col rounded-md border border-octo-hairline bg-octo-panel octo-modal-enter">
+    <ModalShell onClose={onClose} ariaLabel="Tickets elsewhere">
+      <div className="flex max-h-[80vh] w-[640px] flex-col rounded-md border border-octo-hairline bg-octo-panel">
         <div className="flex items-center justify-between border-b border-octo-hairline px-4 py-3">
           <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">
             Tickets elsewhere
@@ -81,6 +78,6 @@ export function ElsewhereModal({ issues, activeProjectKey, onClose }: Props) {
           ))}
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 }

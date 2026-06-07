@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ModalShell } from "./ModalShell";
 
 interface Props {
   initialValue: string;
@@ -9,29 +10,12 @@ interface Props {
 
 export function JiraProjectKeyModal({ initialValue, projectName, onSave, onClose }: Props) {
   const [value, setValue] = useState(initialValue);
-  const overlayRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Focus input on mount
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
-
-  // Close on Escape
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (e.target === overlayRef.current) onClose();
-  }
 
   function handleSave() {
     const trimmed = value.trim();
@@ -46,14 +30,8 @@ export function JiraProjectKeyModal({ initialValue, projectName, onSave, onClose
   }
 
   return (
-    <div
-      ref={overlayRef}
-      role="dialog"
-      aria-label="Set Jira project key"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-octo-onyx/80 p-6 octo-overlay-enter"
-      onClick={handleOverlayClick}
-    >
-      <div className="flex w-[400px] flex-col rounded-md border border-octo-hairline bg-octo-panel octo-modal-enter">
+    <ModalShell onClose={onClose} ariaLabel="Set Jira project key">
+      <div className="flex w-[400px] flex-col rounded-md border border-octo-hairline bg-octo-panel">
         <div className="flex items-center justify-between border-b border-octo-hairline px-4 py-3">
           <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">
             Set Jira project key
@@ -107,6 +85,6 @@ export function JiraProjectKeyModal({ initialValue, projectName, onSave, onClose
           </div>
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 }

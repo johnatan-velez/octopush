@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useSessionStore } from "../stores/sessionStore";
 import { ipc } from "../lib/ipc";
 import type { ModelWithProvider, SessionTemplate } from "../lib/types";
+import { ModalShell } from "./ModalShell";
 
 interface Props {
   open: boolean;
@@ -113,14 +114,10 @@ export function NewSessionDialog({ open, onClose }: Props) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm octo-overlay-enter"
-      onClick={onClose}
-    >
+    <ModalShell onClose={onClose} ariaLabel="New session">
       <form
-        onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
-        className="w-[480px] rounded-xl border border-octo-border bg-octo-panel p-6 shadow-2xl octo-modal-enter"
+        className="w-[480px] rounded-xl border border-octo-border bg-octo-panel p-6 shadow-2xl"
       >
         <h2 className="mb-4 text-lg font-semibold tracking-tight">
           New session
@@ -277,6 +274,6 @@ export function NewSessionDialog({ open, onClose }: Props) {
           </button>
         </div>
       </form>
-    </div>
+    </ModalShell>
   );
 }

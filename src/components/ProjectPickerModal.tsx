@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
 import type { ProjectInfo } from "../lib/types";
+import { ModalShell } from "./ModalShell";
 
 interface Props {
   candidates: ProjectInfo[];
@@ -9,34 +9,9 @@ interface Props {
 }
 
 export function ProjectPickerModal({ candidates, title, onPick, onClose }: Props) {
-  const overlayRef = useRef<HTMLDivElement>(null);
-
-  // Close on Escape
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (e.target === overlayRef.current) onClose();
-  }
-
   return (
-    <div
-      ref={overlayRef}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Select Octopush Project"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-octo-onyx/80 p-6 octo-overlay-enter"
-      onClick={handleOverlayClick}
-    >
-      <div className="flex w-[480px] flex-col rounded-md border border-octo-hairline bg-octo-panel octo-modal-enter">
+    <ModalShell onClose={onClose} ariaLabel="Select Octopush Project">
+      <div className="flex w-[480px] flex-col rounded-md border border-octo-hairline bg-octo-panel">
         <div className="flex items-center justify-between border-b border-octo-hairline px-4 py-3">
           <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">
             {title}
@@ -65,6 +40,6 @@ export function ProjectPickerModal({ candidates, title, onPick, onClose }: Props
           ))}
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 }
