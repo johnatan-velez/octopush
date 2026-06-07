@@ -288,6 +288,15 @@ mod workspace_tests {
     }
 
     #[test]
+    fn list_projects_returns_tint() {
+        let db = test_db();
+        db.insert_project("p", "P", "/tmp/octo-tint-p").unwrap();
+        db.update_project("p", None, Some("verdigris")).unwrap();
+        let row = db.list_projects().unwrap().into_iter().find(|t| t.0 == "p").unwrap();
+        assert_eq!(row.6, Some("verdigris".to_string()));
+    }
+
+    #[test]
     fn soft_close_hides_then_reopen_restores_project() {
         let db = test_db();
         db.insert_project("p1", "Proj One", "/tmp/octo-p1").unwrap();

@@ -573,21 +573,21 @@ impl Db {
 
     pub fn list_projects(
         &self,
-    ) -> AppResult<Vec<(String, String, String, String, Option<String>, bool)>> {
+    ) -> AppResult<Vec<(String, String, String, String, Option<String>, bool, Option<String>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, last_opened, jira_project_key, pinned FROM projects \
+            "SELECT id, name, path, last_opened, jira_project_key, pinned, tint FROM projects \
              WHERE closed_at IS NULL \
              ORDER BY pinned DESC, sort_order IS NULL, sort_order ASC, created_at ASC",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get::<_, i64>(5)? != 0))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get::<_, i64>(5)? != 0, r.get(6)?))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn get_project(&self, project_id: &str) -> AppResult<Option<crate::commands::ProjectInfo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, jira_project_key, pinned FROM projects WHERE id = ?1",
+            "SELECT id, name, path, jira_project_key, pinned, tint FROM projects WHERE id = ?1",
         )?;
         let row = stmt
             .query_row(params![project_id], |r| {
@@ -597,6 +597,7 @@ impl Db {
                     path: r.get(2)?,
                     jira_project_key: r.get(3)?,
                     pinned: r.get::<_, i64>(4)? != 0,
+                    tint: r.get(5)?,
                 })
             })
             .optional()?;
@@ -700,13 +701,13 @@ impl Db {
     /// newest first, capped at 10. Same tuple shape as `list_projects`.
     pub fn list_closed_projects(
         &self,
-    ) -> AppResult<Vec<(String, String, String, String, Option<String>, bool)>> {
+    ) -> AppResult<Vec<(String, String, String, String, Option<String>, bool, Option<String>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, last_opened, jira_project_key, pinned FROM projects \
+            "SELECT id, name, path, last_opened, jira_project_key, pinned, tint FROM projects \
              WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 10",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get::<_, i64>(5)? != 0))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get::<_, i64>(5)? != 0, r.get(6)?))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }

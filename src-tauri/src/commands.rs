@@ -379,6 +379,7 @@ pub struct ProjectInfo {
     pub path: String,
     pub jira_project_key: Option<String>,
     pub pinned: bool,
+    pub tint: Option<String>,
 }
 
 #[tauri::command]
@@ -419,8 +420,9 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
         // zero out a previously-configured mapping.
         let existing = db.get_project(&id)?;
         let jira_project_key = existing.as_ref().and_then(|p| p.jira_project_key.clone());
-        let pinned = existing.map(|p| p.pinned).unwrap_or(false);
-        Ok(ProjectInfo { id, name, path: p, jira_project_key, pinned })
+        let pinned = existing.as_ref().map(|p| p.pinned).unwrap_or(false);
+        let tint = existing.as_ref().and_then(|p| p.tint.clone());
+        Ok(ProjectInfo { id, name, path: p, jira_project_key, pinned, tint })
     } else {
         let id = uuid::Uuid::new_v4().to_string();
         let name = std::path::Path::new(&path).file_name()
@@ -428,14 +430,14 @@ pub async fn open_project(state: State<'_, AppState>, path: String) -> AppResult
             .unwrap_or_else(|| path.clone());
         db.insert_project(&id, &name, &path)?;
         ensure_main_workspace(&db, &id, &path)?;
-        Ok(ProjectInfo { id, name, path, jira_project_key: None, pinned: false })
+        Ok(ProjectInfo { id, name, path, jira_project_key: None, pinned: false, tint: None })
     }
 }
 
 #[tauri::command]
 pub async fn list_recent_projects(state: State<'_, AppState>) -> AppResult<Vec<ProjectInfo>> {
     let rows = state.db.lock().list_projects()?;
-    Ok(rows.into_iter().map(|(id, name, path, _, jira_project_key, pinned)| ProjectInfo { id, name, path, jira_project_key, pinned }).collect())
+    Ok(rows.into_iter().map(|(id, name, path, _, jira_project_key, pinned, tint)| ProjectInfo { id, name, path, jira_project_key, pinned, tint }).collect())
 }
 
 #[tauri::command]
@@ -443,12 +445,13 @@ pub async fn list_closed_projects(state: State<'_, AppState>) -> AppResult<Vec<P
     let rows = state.db.lock().list_closed_projects()?;
     Ok(rows
         .into_iter()
-        .map(|(id, name, path, _, jira_project_key, pinned)| ProjectInfo {
+        .map(|(id, name, path, _, jira_project_key, pinned, tint)| ProjectInfo {
             id,
             name,
             path,
             jira_project_key,
             pinned,
+            tint,
         })
         .collect())
 }
@@ -504,7 +507,7 @@ pub async fn create_project(state: State<'_, AppState>, path: String, name: Stri
     let db = state.db.lock();
     db.insert_project(&id, &name, &full_path_str)?;
     ensure_main_workspace(&db, &id, &full_path_str)?;
-    Ok(ProjectInfo { id, name, path: full_path_str, jira_project_key: None, pinned: false })
+    Ok(ProjectInfo { id, name, path: full_path_str, jira_project_key: None, pinned: false, tint: None })
 }
 
 // ─── Workspace commands ───────────────────────────────────────────
@@ -1358,6 +1361,7 @@ pub async fn clone_project(
         path: path_str,
         jira_project_key: None,
         pinned: false,
+        tint: None,
     })
 }
 
