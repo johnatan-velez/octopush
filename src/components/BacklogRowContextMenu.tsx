@@ -40,8 +40,8 @@ export function BacklogRowContextMenu({ x, y, onCreateWorkspace, onClose }: Prop
       ref={ref}
       role="menu"
       aria-label="Ticket actions"
-      className="absolute z-50 w-[200px] rounded-md border border-octo-hairline bg-octo-panel shadow-2xl"
-      style={{ left: x, top: y }}
+      className="octo-menu-enter absolute z-50 w-[200px] rounded-md border border-octo-hairline bg-octo-panel shadow-2xl"
+      style={{ left: x, top: y, transformOrigin: "top left" }}
     >
       <button
         type="button"

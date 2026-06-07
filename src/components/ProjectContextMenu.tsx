@@ -79,8 +79,8 @@ export function ProjectContextMenu({
       ref={ref}
       role="menu"
       aria-label="Project actions"
-      className="absolute z-50 w-[244px] rounded-md border border-octo-hairline bg-octo-panel py-1 shadow-2xl"
-      style={{ left: pos.left, top: pos.top }}
+      className="octo-menu-enter absolute z-50 w-[244px] rounded-md border border-octo-hairline bg-octo-panel py-1 shadow-2xl"
+      style={{ left: pos.left, top: pos.top, transformOrigin: "top left" }}
     >
       <div className="truncate px-3 pb-1 pt-1 font-mono text-[9px] uppercase tracking-[0.18em] text-octo-mute">
         {projectName}
