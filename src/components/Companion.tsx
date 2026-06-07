@@ -106,19 +106,25 @@ export function Companion({
         </>
       )}
 
-      {/* Mode-specific content (unchanged behavior) */}
-      {mode === "talk" && (
-        <div className="flex flex-col gap-4 p-4">
-          <CompanionHistory {...historyProps} />
-          <CompanionContext {...contextProps} workspaceId={workspaceId ?? undefined} />
-        </div>
-      )}
-      {mode === "run" && workspaceId && (
-        <div className="p-4">
-          <CompanionTerminals workspaceId={workspaceId} />
-        </div>
-      )}
-      {mode === "review" && fileTree && <CompanionFileTree {...fileTree} />}
+      {/* Mode-specific content — keyed so it crossfades when the mode changes,
+          following the gliding ModeSwitcher indicator. The shared header and
+          Jira block above stay outside this wrapper so they persist across
+          modes. flex/min-h-0/flex-1/flex-col preserve the review file-tree's
+          h-full height chain. */}
+      <div key={mode} className="octo-fade-in flex min-h-0 flex-1 flex-col">
+        {mode === "talk" && (
+          <div className="flex flex-col gap-4 p-4">
+            <CompanionHistory {...historyProps} />
+            <CompanionContext {...contextProps} workspaceId={workspaceId ?? undefined} />
+          </div>
+        )}
+        {mode === "run" && workspaceId && (
+          <div className="p-4">
+            <CompanionTerminals workspaceId={workspaceId} />
+          </div>
+        )}
+        {mode === "review" && fileTree && <CompanionFileTree {...fileTree} />}
+      </div>
 
       {elsewhereOpen && (
         <ElsewhereModal

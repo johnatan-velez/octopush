@@ -89,8 +89,10 @@ export function Settings({ open, initialTab = "general", onClose, onIssueTracker
           ))}
         </aside>
 
-        {/* Pane */}
-        <main className="flex-1 overflow-y-auto px-10 py-8">
+        {/* Pane — keyed so the active pane crossfades when the tab changes,
+            following the gliding tab indicator. Keying the scroll container
+            also resets scroll to top on tab switch, which is desired. */}
+        <main key={tab} className="octo-fade-in flex-1 overflow-y-auto px-10 py-8">
           {tab === "general" && <GeneralPane />}
           {tab === "models" && <ModelsPane />}
           {tab === "appearance" && <AppearancePane />}
