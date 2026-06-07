@@ -360,6 +360,7 @@ function SortableProjectGroup(props: SortableProjectGroupProps) {
                 same idiom as WorkContextPanel / ModeSwitcher (280ms ease-octo). */}
             <div
               aria-hidden={!isCollapsed && !projectExpanded}
+              inert={!isCollapsed && !projectExpanded}
               className="grid overflow-hidden transition-all duration-[280ms] ease-[cubic-bezier(0.2,0.8,0.3,1)]"
               style={{
                 gridTemplateColumns: "minmax(0, 1fr)",

@@ -35,8 +35,10 @@ export function RecentlyClosedDrawer({ projects, onReopen }: Props) {
       <div
         id="recently-closed-panel"
         aria-hidden={!open}
+        inert={!open}
         className="grid overflow-hidden transition-all duration-[280ms] ease-[cubic-bezier(0.2,0.8,0.3,1)]"
         style={{
+          gridTemplateColumns: "minmax(0, 1fr)",
           gridTemplateRows: open ? "1fr" : "0fr",
           opacity: open ? 1 : 0,
         }}
