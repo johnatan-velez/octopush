@@ -53,9 +53,8 @@ import { resolveMonogram } from "./lib/monogram";
 import { type WorkspaceMode } from "./lib/modes";
 import { ipc } from "./lib/ipc";
 import type { GitStatus, Pr, TintName, Issue, ProjectInfo } from "./lib/types";
-import { resolveLinkage } from "./lib/issueTrackerSelectors";
 import { useIssuesStore } from "./stores/issuesStore";
-import { detectIssueKey } from "./lib/detectIssueKey";
+import { detectIssueKey, detectIssueKeyForProject } from "./lib/detectIssueKey";
 
 interface ChatRef {
   id: string;
@@ -1790,11 +1789,13 @@ function App() {
         if (!ws) return null;
         const workspace = ws;
         const wsBranch = workspace.branch ?? "";
-        const wsLinkage = resolveLinkage(workspace, wsBranch);
-        const ticketKey = wsLinkage.kind === "linked" ? wsLinkage.key : null;
         const proj =
           recentProjects.find((p) => p.id === workspace.projectId) ??
           (project?.id === workspace.projectId ? project : null);
+        const manualKey = workspace.linkedIssueKey ?? null;
+        const detectedKey = detectIssueKeyForProject(wsBranch, proj?.jiraProjectKey ?? null);
+        const ticketKey = manualKey ?? detectedKey;
+        const wsLinkageKind: "linked" | "unlinked" = ticketKey ? "linked" : "unlinked";
         const wsPath = workspace.worktreePath ?? proj?.path ?? "";
         // Main worktree detection. The backend stores the main workspace's
         // worktree_path equal to the project root (never null), so the second
@@ -1858,7 +1859,7 @@ function App() {
               setDeletingWorkspaceId(contextMenu.workspaceId);
             }}
             onClose={() => setContextMenu(null)}
-            linkageKind={wsLinkage.kind}
+            linkageKind={wsLinkageKind}
             onLinkJira={() => {
               setJiraTicketPickerOpen({ workspaceId: contextMenu.workspaceId, mode: "link" });
               setContextMenu(null);
