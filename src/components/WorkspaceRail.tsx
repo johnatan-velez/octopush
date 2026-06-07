@@ -356,40 +356,48 @@ function SortableProjectGroup(props: SortableProjectGroupProps) {
               </div>
             )}
 
-            {/* Workspaces in this project */}
-            {(isCollapsed || projectExpanded) &&
-              visibleWs.map((ws) => (
-              <WorkspaceRow
-                key={ws?.id || `ws-${projectIndex}`}
-                workspace={ws}
-                active={ws?.id === activeWorkspaceId}
-                isCollapsed={isCollapsed}
-                ticketKey={
-                  ws?.linkedIssueKey ??
-                  detectIssueKeyForProject(ws?.branch ?? "", project.jiraProjectKey ?? null)
-                }
-                dirty={gitSummaryByWs?.[ws?.id ?? ""]?.dirty}
-                ahead={gitSummaryByWs?.[ws?.id ?? ""]?.ahead}
-                behind={gitSummaryByWs?.[ws?.id ?? ""]?.behind}
-                hasOpenPr={!!prByWs?.[ws?.id ?? ""]}
-                onSelect={() => ws?.id && onSelect(ws.id)}
-                onCustomize={() => ws?.id && onCustomize(ws.id)}
-                onContextMenu={
-                  onContextMenu && ws?.id
-                    ? (x, y) => onContextMenu(ws.id, x, y)
-                    : undefined
-                }
-              />
-            ))}
-
-            {/* Empty project (expanded rail, expanded project, no workspaces). */}
-            {!isCollapsed &&
-              projectExpanded &&
-              visibleWs.length === 0 && (
-                <div className="px-3 py-1.5 font-mono text-[10px] tracking-[0.15em] text-octo-mute">
-                  No workspaces yet
-                </div>
-              )}
+            {/* Workspaces — premium collapse: grid-rows 0fr↔1fr + opacity, the
+                same idiom as WorkContextPanel / ModeSwitcher (280ms ease-octo). */}
+            <div
+              aria-hidden={!isCollapsed && !projectExpanded}
+              className="grid overflow-hidden transition-all duration-[280ms] ease-[cubic-bezier(0.2,0.8,0.3,1)]"
+              style={{
+                gridTemplateColumns: "minmax(0, 1fr)",
+                gridTemplateRows: isCollapsed || projectExpanded ? "1fr" : "0fr",
+                opacity: isCollapsed || projectExpanded ? 1 : 0,
+              }}
+            >
+              <div className="flex min-h-0 flex-col gap-1 overflow-hidden">
+                {visibleWs.map((ws) => (
+                  <WorkspaceRow
+                    key={ws?.id || `ws-${projectIndex}`}
+                    workspace={ws}
+                    active={ws?.id === activeWorkspaceId}
+                    isCollapsed={isCollapsed}
+                    ticketKey={
+                      ws?.linkedIssueKey ??
+                      detectIssueKeyForProject(ws?.branch ?? "", project.jiraProjectKey ?? null)
+                    }
+                    dirty={gitSummaryByWs?.[ws?.id ?? ""]?.dirty}
+                    ahead={gitSummaryByWs?.[ws?.id ?? ""]?.ahead}
+                    behind={gitSummaryByWs?.[ws?.id ?? ""]?.behind}
+                    hasOpenPr={!!prByWs?.[ws?.id ?? ""]}
+                    onSelect={() => ws?.id && onSelect(ws.id)}
+                    onCustomize={() => ws?.id && onCustomize(ws.id)}
+                    onContextMenu={
+                      onContextMenu && ws?.id
+                        ? (x, y) => onContextMenu(ws.id, x, y)
+                        : undefined
+                    }
+                  />
+                ))}
+                {!isCollapsed && visibleWs.length === 0 && (
+                  <div className="px-3 py-1.5 font-mono text-[10px] tracking-[0.15em] text-octo-mute">
+                    No workspaces yet
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
   );
 }
