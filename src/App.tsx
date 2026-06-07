@@ -1440,7 +1440,7 @@ function App() {
               const targetProjectId = creatorProjectId || project.id;
               const targetProject = getProjectById(targetProjectId);
               return targetProject ? (
-                <div className="absolute inset-0 z-50 bg-octo-bg">
+                <div className="absolute inset-0 z-50 bg-octo-bg octo-fade-in">
                   <WorkspaceCreator
                     projectId={targetProject.id}
                     projectPath={targetProject.path}
@@ -1462,7 +1462,7 @@ function App() {
                 running terminals from other projects keep their PTYs and
                 scrollback intact. */}
             {!activeWorkspace && (
-              <div className="absolute inset-0 z-40 bg-octo-bg">
+              <div className="absolute inset-0 z-40 bg-octo-bg octo-fade-in">
                 {showInlineCreator ? (
                   <WorkspaceCreator
                     projectId={project.id}
@@ -1524,12 +1524,12 @@ function App() {
 
       {customizingWorkspace && (
         <div
-          className="absolute inset-0 z-30 flex items-start justify-start bg-black/30 p-2"
+          className="absolute inset-0 z-30 flex items-start justify-start bg-black/30 p-2 octo-overlay-enter"
           onClick={() => setCustomizingWorkspaceId(null)}
           role="dialog"
           aria-modal="true"
         >
-          <div onClick={(e) => e.stopPropagation()} className="ml-14 mt-12">
+          <div onClick={(e) => e.stopPropagation()} className="ml-14 mt-12 octo-modal-enter">
             <WorkspaceCustomizeMenu
               initialGlyph={customizingWorkspace.glyph}
               initialTint={customizingWorkspace.tint}
@@ -1543,10 +1543,10 @@ function App() {
 
       {renamingWorkspace && (
         <div
-          className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-2"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-2 octo-overlay-enter"
           onClick={() => setRenamingWorkspace(null)}
         >
-          <div onClick={(e) => e.stopPropagation()}>
+          <div className="octo-modal-enter" onClick={(e) => e.stopPropagation()}>
             <RenameDialog
               title="Rename workspace"
               label="Name"
@@ -1680,10 +1680,10 @@ function App() {
 
       {archivedForProject && (
         <div
-          className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-2"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-2 octo-overlay-enter"
           onClick={() => setArchivedForProject(null)}
         >
-          <div onClick={(e) => e.stopPropagation()}>
+          <div className="octo-modal-enter" onClick={(e) => e.stopPropagation()}>
             <ArchivedWorkspacesModal
               projectId={archivedForProject.id}
               projectName={archivedForProject.name}
@@ -1710,12 +1710,12 @@ function App() {
 
         return (
           <div
-            className="absolute inset-0 z-30 flex items-start justify-start bg-black/30 p-2"
+            className="absolute inset-0 z-30 flex items-start justify-start bg-black/30 p-2 octo-overlay-enter"
             onClick={() => setShowProjectCustomizer(false)}
             role="dialog"
             aria-modal="true"
           >
-            <div onClick={(e) => e.stopPropagation()} className="ml-14 mt-12">
+            <div onClick={(e) => e.stopPropagation()} className="ml-14 mt-12 octo-modal-enter">
               <ProjectCustomizeMenu
                 currentName={customized.name || proj.name}
                 currentTint={customized.tint || "brass"}
@@ -1862,7 +1862,7 @@ function App() {
 
       {/* Project switcher sheet — overlaid without unmounting the canvas */}
       {showAddProject && (
-        <div className="absolute inset-0 z-50 bg-octo-bg">
+        <div className="absolute inset-0 z-50 bg-octo-bg octo-fade-in">
           <NewProjectFlow
             onBack={() => setShowAddProject(false)}
           />
@@ -1965,7 +1965,7 @@ function App() {
       {creatorForTicket && (() => {
         const targetProject = getProjectById(creatorForTicket.projectId);
         return targetProject ? (
-          <div className="absolute inset-0 z-50 bg-octo-bg">
+          <div className="absolute inset-0 z-50 bg-octo-bg octo-fade-in">
             {/* The `key` forces a remount when the ticket-driven creator
              *  opens for a different ticket — `useState(initialTask)` only
              *  reads at mount, so without this prop a back-to-back flow on
