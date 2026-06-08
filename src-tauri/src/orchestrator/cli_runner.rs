@@ -7,9 +7,11 @@
 //! human control point.
 
 use crate::error::{AppError, AppResult};
-use crate::orchestrator::runner::artifact_kind_for;
-use crate::orchestrator::types::{ArtifactKind, StageArtifact, StageOutcome, StageStatus};
+use crate::orchestrator::runner::{artifact_kind_for, system_prompt_for, user_input_for, AgentRunner, StageContext};
+use crate::orchestrator::types::{ArtifactKind, StageArtifact, StageOutcome, StageSpec, StageStatus};
 use serde::Deserialize;
+use std::process::Stdio;
+use tokio::io::AsyncWriteExt;
 
 const MAX_CLI_TURNS: u32 = 30;
 
@@ -105,4 +107,79 @@ pub fn build_cli_args(model: &str, system_prompt: &str) -> Vec<String> {
         "--max-turns".to_string(),
         MAX_CLI_TURNS.to_string(),
     ]
+}
+
+/// The CLI substrate: runs a stage by shelling out to headless Claude Code.
+pub struct CliRunner;
+
+#[async_trait::async_trait]
+impl AgentRunner for CliRunner {
+    async fn run(
+        &self,
+        stage: &StageSpec,
+        input: &StageArtifact,
+        ctx: &StageContext,
+    ) -> AppResult<StageOutcome> {
+        let system = system_prompt_for(&stage.role);
+        let user = user_input_for(&stage.role, &ctx.task, input, stage.feedback.as_deref());
+        let args = build_cli_args(&stage.agent_model, &system);
+
+        let mut child = match tokio::process::Command::new("claude")
+            .args(&args)
+            .current_dir(&ctx.workspace_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(failed_stage(
+                    "Claude Code CLI (`claude`) was not found on PATH. Install it to use CLI stages.",
+                ));
+            }
+            Err(e) => return Ok(failed_stage(&format!("failed to launch claude: {e}"))),
+        };
+
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(user.as_bytes()).await;
+            // drop closes stdin
+        }
+
+        let output = match child.wait_with_output().await {
+            Ok(o) => o,
+            Err(e) => return Ok(failed_stage(&format!("claude process error: {e}"))),
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        match parse_cli_result(&stdout, output.status.success(), &stage.role) {
+            Ok(outcome) => Ok(outcome),
+            Err(_) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let detail = if !stderr.trim().is_empty() {
+                    stderr.chars().take(400).collect::<String>()
+                } else {
+                    stdout.chars().take(400).collect::<String>()
+                };
+                Ok(failed_stage(&format!("claude produced no parseable result: {detail}")))
+            }
+        }
+    }
+}
+
+fn failed_stage(msg: &str) -> StageOutcome {
+    StageOutcome {
+        artifact: StageArtifact {
+            kind: ArtifactKind::Note,
+            text: String::new(),
+            payload: None,
+            refs_worktree: false,
+        },
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: 0.0,
+        status: StageStatus::Failed,
+        tool_calls: vec![],
+        error: Some(msg.to_string()),
+    }
 }
