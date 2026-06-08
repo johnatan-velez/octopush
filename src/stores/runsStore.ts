@@ -12,6 +12,9 @@ export const EMPTY_RUNS: Run[] = [];
 
 const TERMINAL = new Set(["completed", "aborted", "failed"]);
 
+const inflightDetail = new Set<string>();
+const dirtyDetail = new Set<string>();
+
 interface RunsState {
   runsByWs: Record<string, Run[]>;
   activeRunIdByWs: Record<string, string | null>;
@@ -74,21 +77,29 @@ export const useRunsStore = create<RunsState>((set, get) => ({
   },
 
   refreshDetail: async (runId) => {
-    const detail = await ipc.getRun(runId);
-    set((s) => ({
-      detailByRun: { ...s.detailByRun, [runId]: detail },
-      ...(detail.run
-        ? {
-            runsByWs: {
-              ...s.runsByWs,
-              [detail.run.workspaceId]: replaceRunInList(
-                s.runsByWs[detail.run.workspaceId] ?? EMPTY_RUNS,
-                detail.run,
-              ),
-            },
-          }
-        : {}),
-    }));
+    if (inflightDetail.has(runId)) {
+      dirtyDetail.add(runId);
+      return;
+    }
+    inflightDetail.add(runId);
+    try {
+      const detail = await ipc.getRun(runId);
+      set((s) => {
+        const next: any = { detailByRun: { ...s.detailByRun, [runId]: detail } };
+        if (detail.run) {
+          const wsId = detail.run.workspaceId;
+          const wsList = s.runsByWs[wsId] ?? EMPTY_RUNS;
+          next.runsByWs = { ...s.runsByWs, [wsId]: replaceRunInList(wsList, detail.run) };
+        }
+        return next;
+      });
+    } finally {
+      inflightDetail.delete(runId);
+      if (dirtyDetail.has(runId)) {
+        dirtyDetail.delete(runId);
+        void get().refreshDetail(runId);
+      }
+    }
   },
 
   begin: async (workspaceId, pipelineId, task, linkedIssueKey) => {
@@ -96,11 +107,11 @@ export const useRunsStore = create<RunsState>((set, get) => ({
     await ipc.startRun(runId);
     set((s) => ({ activeRunIdByWs: { ...s.activeRunIdByWs, [workspaceId]: runId } }));
     await get().loadRuns(workspaceId);
-    await get().refreshDetail(runId);
   },
 
   resolve: async (runId, action, feedback, modelOverride) => {
     await ipc.resolveCheckpoint(runId, action, feedback, modelOverride);
+    await get().refreshDetail(runId);
   },
 
   abort: async (runId) => {
