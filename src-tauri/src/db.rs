@@ -1463,6 +1463,237 @@ impl Db {
         }
         Ok(())
     }
+
+    // ─── Runs ─────────────────────────────────────────────────────
+
+    /// Create a run and copy the pipeline's stages into `run_stages` (a private copy
+    /// so later edits to the template don't mutate run history).
+    pub fn create_run(
+        &self,
+        workspace_id: &str,
+        pipeline_id: &str,
+        task: &str,
+        reference_model: Option<&str>,
+        linked_issue_key: Option<&str>,
+    ) -> AppResult<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO runs (id, workspace_id, pipeline_id, task, status, reference_model, linked_issue_key, created_at)
+             VALUES (?1,?2,?3,?4,'draft',?5,?6,?7)",
+            params![id, workspace_id, pipeline_id, task, reference_model, linked_issue_key, now],
+        )?;
+        let stages = self.get_pipeline_stages(pipeline_id)?;
+        for s in &stages {
+            let sid = Uuid::new_v4().to_string();
+            self.conn.execute(
+                "INSERT INTO run_stages (id, run_id, position, role, agent_model, substrate, checkpoint, status)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,'pending')",
+                params![sid, id, s.position, s.role, s.agent_model, s.substrate, s.checkpoint as i64],
+            )?;
+        }
+        Ok(id)
+    }
+
+    pub fn get_run(&self, run_id: &str) -> AppResult<Option<RunRow>> {
+        self.conn
+            .query_row(
+                "SELECT id, workspace_id, pipeline_id, task, status, cost_usd, baseline_usd,
+                        reference_model, linked_issue_key, created_at, finished_at
+                 FROM runs WHERE id = ?1",
+                params![run_id],
+                |r| {
+                    Ok(RunRow {
+                        id: r.get(0)?,
+                        workspace_id: r.get(1)?,
+                        pipeline_id: r.get(2)?,
+                        task: r.get(3)?,
+                        status: r.get(4)?,
+                        cost_usd: r.get(5)?,
+                        baseline_usd: r.get(6)?,
+                        reference_model: r.get(7)?,
+                        linked_issue_key: r.get(8)?,
+                        created_at: r.get(9)?,
+                        finished_at: r.get(10)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_runs(&self, workspace_id: &str) -> AppResult<Vec<RunRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, pipeline_id, task, status, cost_usd, baseline_usd,
+                    reference_model, linked_issue_key, created_at, finished_at
+             FROM runs WHERE workspace_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![workspace_id], |r| {
+            Ok(RunRow {
+                id: r.get(0)?,
+                workspace_id: r.get(1)?,
+                pipeline_id: r.get(2)?,
+                task: r.get(3)?,
+                status: r.get(4)?,
+                cost_usd: r.get(5)?,
+                baseline_usd: r.get(6)?,
+                reference_model: r.get(7)?,
+                linked_issue_key: r.get(8)?,
+                created_at: r.get(9)?,
+                finished_at: r.get(10)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn list_run_stages(&self, run_id: &str) -> AppResult<Vec<RunStageRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, position, role, agent_model, substrate, checkpoint, status,
+                    input_tokens, output_tokens, cost_usd, artifact, feedback, error, started_at, finished_at
+             FROM run_stages WHERE run_id = ?1 ORDER BY position",
+        )?;
+        let rows = stmt.query_map(params![run_id], |r| {
+            Ok(RunStageRow {
+                id: r.get(0)?,
+                run_id: r.get(1)?,
+                position: r.get(2)?,
+                role: r.get(3)?,
+                agent_model: r.get(4)?,
+                substrate: r.get(5)?,
+                checkpoint: r.get::<_, i64>(6)? != 0,
+                status: r.get(7)?,
+                input_tokens: r.get(8)?,
+                output_tokens: r.get(9)?,
+                cost_usd: r.get(10)?,
+                artifact: r.get(11)?,
+                feedback: r.get(12)?,
+                error: r.get(13)?,
+                started_at: r.get(14)?,
+                finished_at: r.get(15)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn set_run_status(&self, run_id: &str, status: &str, finished: bool) -> AppResult<()> {
+        if finished {
+            let now = Utc::now().to_rfc3339();
+            self.conn.execute(
+                "UPDATE runs SET status = ?2, finished_at = ?3 WHERE id = ?1",
+                params![run_id, status, now],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE runs SET status = ?2 WHERE id = ?1",
+                params![run_id, status],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn set_run_cost(&self, run_id: &str, cost_usd: f64, baseline_usd: f64) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE runs SET cost_usd = ?2, baseline_usd = ?3 WHERE id = ?1",
+            params![run_id, cost_usd, baseline_usd],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_run_stage_status(&self, stage_id: &str, status: &str) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        // Stamp started_at the first time it goes running.
+        self.conn.execute(
+            "UPDATE run_stages SET status = ?2,
+                started_at = COALESCE(started_at, CASE WHEN ?2 = 'running' THEN ?3 ELSE started_at END)
+             WHERE id = ?1",
+            params![stage_id, status, now],
+        )?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_run_stage(
+        &self,
+        stage_id: &str,
+        status: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cost_usd: f64,
+        artifact_json: Option<&str>,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE run_stages
+             SET status = ?2, input_tokens = ?3, output_tokens = ?4, cost_usd = ?5,
+                 artifact = ?6, finished_at = ?7
+             WHERE id = ?1",
+            params![stage_id, status, input_tokens, output_tokens, cost_usd, artifact_json, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn fail_run_stage(&self, stage_id: &str, error: &str) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE run_stages SET status = 'failed', error = ?2, finished_at = ?3 WHERE id = ?1",
+            params![stage_id, error, now],
+        )?;
+        Ok(())
+    }
+
+    /// Reset a stage to pending (for re-run), optionally overriding its model and
+    /// recording reviewer feedback. Clears the prior artifact/error/finish time.
+    pub fn reset_run_stage(
+        &self,
+        stage_id: &str,
+        model_override: Option<&str>,
+        feedback: Option<&str>,
+    ) -> AppResult<()> {
+        if let Some(model) = model_override {
+            self.conn.execute(
+                "UPDATE run_stages SET agent_model = ?2 WHERE id = ?1",
+                params![stage_id, model],
+            )?;
+        }
+        self.conn.execute(
+            "UPDATE run_stages
+             SET status = 'pending', artifact = NULL, error = NULL, finished_at = NULL,
+                 input_tokens = 0, output_tokens = 0, cost_usd = 0, feedback = ?2
+             WHERE id = ?1",
+            params![stage_id, feedback],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_run_stage_artifact(&self, stage_id: &str, artifact_json: &str) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE run_stages SET artifact = ?2 WHERE id = ?1",
+            params![stage_id, artifact_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_run_event(&self, run_id: &str, kind: &str, payload_json: &str) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO run_events (run_id, timestamp, kind, payload) VALUES (?1,?2,?3,?4)",
+            params![run_id, now, kind, payload_json],
+        )?;
+        Ok(())
+    }
+
+    /// Sum of completed-stage costs and baselines for a run.
+    pub fn run_cost_totals(&self, run_id: &str) -> AppResult<(f64, f64)> {
+        let cost: f64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(cost_usd),0) FROM run_stages WHERE run_id = ?1",
+                params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0.0);
+        Ok((cost, 0.0)) // baseline filled by the orchestrator (needs token re-pricing)
+    }
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -1559,6 +1790,43 @@ pub struct PipelineStageRow {
     pub agent_model: String,
     pub substrate: String,
     pub checkpoint: bool,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RunRow {
+    pub id: String,
+    pub workspace_id: String,
+    pub pipeline_id: String,
+    pub task: String,
+    pub status: String,
+    pub cost_usd: f64,
+    pub baseline_usd: f64,
+    pub reference_model: Option<String>,
+    pub linked_issue_key: Option<String>,
+    pub created_at: String,
+    pub finished_at: Option<String>,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStageRow {
+    pub id: String,
+    pub run_id: String,
+    pub position: i64,
+    pub role: String,
+    pub agent_model: String,
+    pub substrate: String,
+    pub checkpoint: bool,
+    pub status: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost_usd: f64,
+    pub artifact: Option<String>,
+    pub feedback: Option<String>,
+    pub error: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
 }
 
 fn row_to_session(row: &rusqlite::Row) -> AppResult<Session> {

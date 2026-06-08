@@ -1908,3 +1908,78 @@ mod pipeline_crud_tests {
         assert!(!plan.checkpoint);
     }
 }
+
+#[cfg(test)]
+mod run_crud_tests {
+    use crate::db::Db;
+    use tempfile::NamedTempFile;
+
+    fn test_db() -> Db {
+        let tmp = NamedTempFile::new().unwrap();
+        Db::open(tmp.path()).unwrap()
+    }
+
+    // Minimal project+workspace so the runs FK is satisfied.
+    fn seed_workspace(db: &Db) -> String {
+        let now = chrono::Utc::now().to_rfc3339();
+        db.conn_ref()
+            .execute(
+                "INSERT INTO projects (id,name,path,created_at,last_opened) VALUES ('p1','P','/tmp/p',?1,?1)",
+                [&now],
+            )
+            .unwrap();
+        db.conn_ref()
+            .execute(
+                "INSERT INTO workspaces (id,project_id,name,branch,created_at,last_active)
+                 VALUES ('w1','p1','W','main',?1,?1)",
+                [&now],
+            )
+            .unwrap();
+        "w1".to_string()
+    }
+
+    #[test]
+    fn create_run_copies_stages_and_lists() {
+        let db = test_db();
+        let ws = seed_workspace(&db);
+        db.seed_builtin_pipelines().unwrap();
+        let pipelines = db.list_pipelines().unwrap();
+        let ff = pipelines.iter().find(|p| p.name == "Feature Factory").unwrap();
+
+        let run_id = db
+            .create_run(&ws, &ff.id, "build the thing", Some("claude-opus-4-6"), None)
+            .unwrap();
+
+        let run = db.get_run(&run_id).unwrap().unwrap();
+        assert_eq!(run.status, "draft");
+        assert_eq!(run.task, "build the thing");
+
+        let stages = db.list_run_stages(&run_id).unwrap();
+        assert_eq!(stages.len(), 5);
+        assert_eq!(stages[0].status, "pending");
+
+        let runs = db.list_runs(&ws).unwrap();
+        assert_eq!(runs.len(), 1);
+    }
+
+    #[test]
+    fn complete_stage_persists_outcome_and_status() {
+        let db = test_db();
+        let ws = seed_workspace(&db);
+        db.seed_builtin_pipelines().unwrap();
+        let ff = db.list_pipelines().unwrap().into_iter().find(|p| p.name == "Feature Factory").unwrap();
+        let run_id = db.create_run(&ws, &ff.id, "t", None, None).unwrap();
+        let stages = db.list_run_stages(&run_id).unwrap();
+        let first = &stages[0];
+
+        db.complete_run_stage(&first.id, "done", 100, 20, 0.5, Some("{\"kind\":\"plan\",\"text\":\"x\"}"))
+            .unwrap();
+        let reloaded = db.list_run_stages(&run_id).unwrap();
+        assert_eq!(reloaded[0].status, "done");
+        assert_eq!(reloaded[0].input_tokens, 100);
+        assert!((reloaded[0].cost_usd - 0.5).abs() < 1e-9);
+
+        db.set_run_status(&run_id, "completed", true).unwrap();
+        assert_eq!(db.get_run(&run_id).unwrap().unwrap().status, "completed");
+    }
+}
