@@ -26,6 +26,9 @@
   --color-state-blue:    #7a9cb8;
   --color-state-purple:  #a888b8;
 
+  --color-octo-state-blue:   #7a9cb8;
+  --color-octo-state-purple: #a888b8;
+
   /* ── Legacy aliases — used by components until Phase 7 retires them.
      Same hex as their canonical counterpart so nothing visibly breaks. ── */
   --color-octo-bg:         #0c0a08;
