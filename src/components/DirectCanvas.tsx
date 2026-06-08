@@ -10,9 +10,10 @@ interface Props {
   workspaceId: string;
   defaultTask: string;
   linkedIssueKey: string | null;
+  workspacePath: string;
 }
 
-export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey }: Props) {
+export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey, workspacePath }: Props) {
   const loadRuns = useRunsStore((s) => s.loadRuns);
   const activeRunId = useRunsStore((s) => s.getActiveRunId(workspaceId));
   const detail = useRunsStore((s) => (activeRunId ? s.getDetail(activeRunId) : undefined));
@@ -53,7 +54,7 @@ export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey 
         selectedStageId={shownStageId}
         onSelectStage={(id) => selectStage(run.id, id)}
       />
-      <StageFocus stage={shownStage} />
+      <StageFocus stage={shownStage} workspacePath={workspacePath} />
       {run.status === "paused" && blockedStage && (
         <CheckpointBar
           blockedStage={blockedStage}

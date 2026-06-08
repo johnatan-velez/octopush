@@ -1,6 +1,8 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { RunStage } from "../lib/ipc";
+import { ipc } from "../lib/ipc";
 import { labelForRole } from "./RunTrack";
+import { DiffViewer } from "./DiffViewer";
 
 interface ParsedArtifact {
   kind: string;
@@ -10,9 +12,12 @@ interface ParsedArtifact {
 
 interface Props {
   stage: RunStage | null;
+  workspacePath: string;
 }
 
-export function StageFocus({ stage }: Props) {
+export function StageFocus({ stage, workspacePath }: Props) {
+  const [diff, setDiff] = useState<string>("");
+
   const artifact = useMemo<ParsedArtifact | null>(() => {
     if (!stage?.artifact) return null;
     try {
@@ -21,6 +26,16 @@ export function StageFocus({ stage }: Props) {
       return null;
     }
   }, [stage?.artifact]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (stage && artifact?.refsWorktree && workspacePath) {
+      ipc.getGitDiff(workspacePath).then((d) => { if (!cancelled) setDiff(d); }).catch(() => {});
+    } else {
+      setDiff("");
+    }
+    return () => { cancelled = true; };
+  }, [stage?.id, artifact?.refsWorktree, workspacePath]);
 
   if (!stage) {
     return (
@@ -42,12 +57,8 @@ export function StageFocus({ stage }: Props) {
           <span className="text-octo-rouge">{stage.error}</span>
         ) : artifact ? (
           <>
-            {artifact.refsWorktree && (
-              <div className="mb-2 text-octo-mute">
-                ⟶ Code changes are in the workspace; open Review to see the diff.
-              </div>
-            )}
             {artifact.text || "(no output text)"}
+            {artifact.refsWorktree && <DiffViewer diff={diff} />}
           </>
         ) : stage.status === "running" ? (
           <span className="text-octo-brass">working…</span>
