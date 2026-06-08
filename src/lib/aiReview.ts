@@ -27,6 +27,57 @@ export function buildReviewPrompt(gitDiff: string): string {
 const SEVERITIES = new Set<string>(["high", "medium", "low"]);
 const CATEGORIES = new Set<string>(["bug", "missing-test", "security", "style", "perf", "other"]);
 
+/** String-aware balanced-brace scan: for each `{` in the text, walk forward
+ *  tracking brace depth while skipping braces inside JSON string literals
+ *  (respecting `\"` escapes). Returns the first balanced substring that parses
+ *  to a non-null object with a `summary` or `findings` own-property, or null. */
+function extractJsonObject(s: string): Record<string, unknown> | null {
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== "{") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < s.length; j++) {
+      const c = s[j];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (c === "\\") {
+          escaped = true;
+        } else if (c === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c === '"') {
+        inString = true;
+      } else if (c === "{") {
+        depth++;
+      } else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          const candidate = s.slice(i, j + 1);
+          try {
+            const parsed = JSON.parse(candidate) as unknown;
+            if (
+              parsed &&
+              typeof parsed === "object" &&
+              (Object.prototype.hasOwnProperty.call(parsed, "summary") ||
+                Object.prototype.hasOwnProperty.call(parsed, "findings"))
+            ) {
+              return parsed as Record<string, unknown>;
+            }
+          } catch {
+            // not valid JSON from this start; try the next `{`.
+          }
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /** Tolerant: strips ```json fences + surrounding prose, parses the outermost
  *  object, validates shape, drops invalid findings. Throws if no parseable
  *  object is present. */
@@ -34,12 +85,10 @@ export function parseAiReview(text: string): AiReviewResult {
   let s = text.trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) s = fence[1].trim();
-  const start = s.indexOf("{");
-  const end = s.lastIndexOf("}");
-  if (start === -1 || end === -1 || end < start) {
+  const obj = extractJsonObject(s);
+  if (!obj) {
     throw new Error("AI review returned no JSON object");
   }
-  const obj = JSON.parse(s.slice(start, end + 1)) as Record<string, unknown>;
   const summary = typeof obj.summary === "string" ? obj.summary : "";
   const rawFindings = Array.isArray(obj.findings) ? obj.findings : [];
   const findings: AiFinding[] = rawFindings

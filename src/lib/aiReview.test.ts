@@ -40,6 +40,16 @@ describe("parseAiReview", () => {
   it("throws when there is no JSON object", () => {
     expect(() => parseAiReview("no json here")).toThrow();
   });
+  it("ignores stray braces in prose before the object", () => {
+    const r = parseAiReview("Here {are} my notes: " + valid + " {trailing}");
+    expect(r.summary).toBe("Adds a word-diff");
+    expect(r.findings).toHaveLength(2);
+  });
+  it("handles braces inside JSON string values", () => {
+    const obj = JSON.stringify({ summary: "uses a map {k:v} literal", findings: [] });
+    const r = parseAiReview("noise } " + obj + " more {");
+    expect(r.summary).toBe("uses a map {k:v} literal");
+  });
 });
 
 describe("buildReviewPrompt", () => {

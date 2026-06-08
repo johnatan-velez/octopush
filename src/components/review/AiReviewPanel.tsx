@@ -82,7 +82,7 @@ export function AiReviewPanel({
               )}
               <p className="text-[11px] leading-[1.5] text-octo-sage">{review.result!.summary}</p>
               {review.result!.findings.map((f, i) => (
-                <AiFindingCard key={i} finding={f} onJump={onJump} />
+                <AiFindingCard key={`${f.file ?? ""}:${f.line ?? ""}:${f.title}:${i}`} finding={f} onJump={onJump} />
               ))}
               {review.result!.findings.length === 0 && (
                 <p className="text-[11px] text-octo-verdigris">No issues found.</p>
