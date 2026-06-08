@@ -23,6 +23,7 @@ pub mod token_engine;
 pub mod perf;
 pub mod issue_tracker;
 pub mod github;
+pub mod orchestrator;
 
 #[cfg(test)]
 mod tests;

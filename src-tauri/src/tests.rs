@@ -1665,3 +1665,51 @@ mod pr_state_tests {
         assert_eq!(out[1].branch, "feat/b");
     }
 }
+
+#[cfg(test)]
+mod orchestrator_types_tests {
+    use crate::orchestrator::types::*;
+
+    #[test]
+    fn status_strings_round_trip() {
+        for s in [
+            StageStatus::Pending,
+            StageStatus::Running,
+            StageStatus::AwaitingCheckpoint,
+            StageStatus::Done,
+            StageStatus::Failed,
+        ] {
+            assert_eq!(StageStatus::from_db(s.as_db()), Some(s.clone()));
+        }
+        for s in [
+            RunStatus::Draft,
+            RunStatus::Running,
+            RunStatus::Paused,
+            RunStatus::Completed,
+            RunStatus::Aborted,
+            RunStatus::Failed,
+        ] {
+            assert_eq!(RunStatus::from_db(s.as_db()), Some(s.clone()));
+        }
+        assert_eq!(StageStatus::from_db("nonsense"), None);
+    }
+
+    #[test]
+    fn artifact_serializes_camel_case() {
+        let a = StageArtifact {
+            kind: ArtifactKind::Plan,
+            text: "do the thing".into(),
+            payload: None,
+            refs_worktree: false,
+        };
+        let json = serde_json::to_string(&a).unwrap();
+        assert!(json.contains("\"kind\":\"plan\""));
+        assert!(json.contains("\"refsWorktree\":false"));
+    }
+
+    #[test]
+    fn substrate_strings() {
+        assert_eq!(AgentSubstrate::Api.as_db(), "api");
+        assert_eq!(AgentSubstrate::from_db("cli"), Some(AgentSubstrate::Cli));
+    }
+}
