@@ -6,12 +6,13 @@ import { StageFocus } from "./StageFocus";
 import { CheckpointBar } from "./CheckpointBar";
 
 interface Props {
+  active: boolean;
   workspaceId: string;
   defaultTask: string;
   linkedIssueKey: string | null;
 }
 
-export function DirectCanvas({ workspaceId, defaultTask, linkedIssueKey }: Props) {
+export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey }: Props) {
   const loadRuns = useRunsStore((s) => s.loadRuns);
   const activeRunId = useRunsStore((s) => s.getActiveRunId(workspaceId));
   const detail = useRunsStore((s) => (activeRunId ? s.getDetail(activeRunId) : undefined));
@@ -21,7 +22,7 @@ export function DirectCanvas({ workspaceId, defaultTask, linkedIssueKey }: Props
   const resolve = useRunsStore((s) => s.resolve);
   const abort = useRunsStore((s) => s.abort);
 
-  useEffect(() => { void loadRuns(workspaceId); }, [workspaceId, loadRuns]);
+  useEffect(() => { if (active) void loadRuns(workspaceId); }, [active, workspaceId, loadRuns]);
 
   if (!activeRunId || !detail?.run) {
     return (

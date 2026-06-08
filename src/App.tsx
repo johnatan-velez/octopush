@@ -29,6 +29,7 @@ import { EditorPane } from "./components/EditorPane";
 import { EditorTabs } from "./components/EditorTabs";
 import { ReviewCanvas, type ReviewViewMode } from "./components/ReviewCanvas";
 import { DirectCanvas } from "./components/DirectCanvas";
+import { ModeOverlay } from "./components/ModeOverlay";
 import { CanvasSplit } from "./components/CanvasSplit";
 import { useEditorStore } from "./stores/editorStore";
 import { useAttentionStore } from "./stores/attentionStore";
@@ -538,7 +539,10 @@ function App() {
     refresh(); // immediate on workspace/mode change
     // Live polling only where file changes matter (run/review); talk mode
     // refreshes on window focus instead of a tight interval.
-    const id = activeMode !== "talk" ? setInterval(refresh, 3_000) : undefined;
+    const id =
+      activeMode !== "talk" && activeMode !== "direct"
+        ? setInterval(refresh, 3_000)
+        : undefined;
     const onFocus = () => void refresh();
     window.addEventListener("focus", onFocus);
     return () => {
@@ -1332,16 +1336,7 @@ function App() {
           <CanvasSplit>
             <div className="relative w-full h-full min-w-0 flex-1 overflow-hidden">
               {/* Talk panel — chat for the active workspace. */}
-              <div
-                className="absolute inset-0 transition-opacity duration-200 ease-out"
-                style={{
-                  opacity: activeWorkspace && activeMode === "talk" ? 1 : 0,
-                  pointerEvents:
-                    activeWorkspace && activeMode === "talk" ? "auto" : "none",
-                  visibility:
-                    activeWorkspace && activeMode === "talk" ? "visible" : "hidden",
-                }}
-              >
+              <ModeOverlay active={!!activeWorkspace && activeMode === "talk"}>
                 {activeWorkspace && (
                   <ChatView
                     workspaceId={activeChatId!}
@@ -1350,21 +1345,14 @@ function App() {
                     onOpenInEditor={(p) => navigateToFile(p, "editor")}
                   />
                 )}
-              </div>
+              </ModeOverlay>
 
               {/* Run panel — TerminalPanes for ALL (workspace, terminal) pairs
                   in the store are mounted here unconditionally. Individual
                   panes hide via display:none when not the active one, but the
                   container itself is never gated by activeWorkspace, so PTYs
                   survive project switches and new-project creation. */}
-              <div
-                className="absolute inset-0 transition-opacity duration-200 ease-out"
-                style={{
-                  opacity: activeMode === "run" ? 1 : 0,
-                  pointerEvents: activeMode === "run" ? "auto" : "none",
-                  visibility: activeMode === "run" ? "visible" : "hidden",
-                }}
-              >
+              <ModeOverlay active={!!activeWorkspace && activeMode === "run"}>
                 <div className="relative h-full w-full">
                   {allTerminalRefs.map((t) => {
                     const ws = workspaces.find((w) => w.id === t.workspaceId);
@@ -1401,19 +1389,10 @@ function App() {
                     />
                   )}
                 </div>
-              </div>
+              </ModeOverlay>
 
               {/* Review panel — only meaningful with an active workspace. */}
-              <div
-                className="absolute inset-0 transition-opacity duration-200 ease-out"
-                style={{
-                  opacity: activeWorkspace && activeMode === "review" ? 1 : 0,
-                  pointerEvents:
-                    activeWorkspace && activeMode === "review" ? "auto" : "none",
-                  visibility:
-                    activeWorkspace && activeMode === "review" ? "visible" : "hidden",
-                }}
-              >
+              <ModeOverlay active={!!activeWorkspace && activeMode === "review"}>
                 {activeWorkspace && (
                   <div className="flex h-full min-h-0">
                     {/* Left: slim Changes outline (file index + commit) */}
@@ -1474,28 +1453,20 @@ function App() {
                     </div>
                   </div>
                 )}
-              </div>
+              </ModeOverlay>
 
               {/* Direct mode overlay */}
-              <div
-                className="absolute inset-0 transition-opacity duration-200 ease-out"
-                style={{
-                  opacity: activeWorkspace && activeMode === "direct" ? 1 : 0,
-                  pointerEvents:
-                    activeWorkspace && activeMode === "direct" ? "auto" : "none",
-                  visibility:
-                    activeWorkspace && activeMode === "direct" ? "visible" : "hidden",
-                }}
-              >
-                {activeWorkspace && activeMode === "direct" && (
+              <ModeOverlay active={!!activeWorkspace && activeMode === "direct"}>
+                {activeWorkspace && (
                   <DirectCanvas
                     key={activeWorkspace.id}
+                    active={activeMode === "direct"}
                     workspaceId={activeWorkspace.id}
                     defaultTask={activeWorkspace.task || ""}
                     linkedIssueKey={activeWorkspace.linkedIssueKey ?? null}
                   />
                 )}
-              </div>
+              </ModeOverlay>
             </div>
           </CanvasSplit>
 
