@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { ipc, type PipelineWithStages } from "../lib/ipc";
 import { usePipelineStore } from "../stores/pipelineStore";
 import { labelForRole } from "./RunTrack";
+import { ModelPicker } from "./ModelPicker";
 
 interface Props {
   defaultTask: string;
-  onBegin: (pipelineId: string, task: string) => void;
+  onBegin: (pipelineId: string, task: string, stageOverrides: [number, string][]) => void;
 }
 
 export function PipelineSetup({ defaultTask, onBegin }: Props) {
@@ -16,6 +17,7 @@ export function PipelineSetup({ defaultTask, onBegin }: Props) {
 
   const [task, setTask] = useState(defaultTask);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [overrides, setOverrides] = useState<Record<number, string>>({});
   const [estimate, setEstimate] = useState<{ estimateUsd: number; baselineUsd: number } | null>(null);
 
   useEffect(() => { if (!loaded) void load(); }, [loaded, load]);
@@ -31,6 +33,13 @@ export function PipelineSetup({ defaultTask, onBegin }: Props) {
 
   const selected: PipelineWithStages | undefined = pipelines.find((p) => p.pipeline.id === selectedId);
   const saved = estimate ? Math.max(0, estimate.baselineUsd - estimate.estimateUsd) : 0;
+
+  const overrideTuples = (): [number, string][] =>
+    selected
+      ? selected.stages
+          .filter((s) => overrides[s.position] && overrides[s.position] !== s.agentModel)
+          .map((s) => [s.position, overrides[s.position]] as [number, string])
+      : [];
 
   return (
     <div className="flex-1 overflow-auto px-5 py-5 octo-fade-in">
@@ -62,7 +71,7 @@ export function PipelineSetup({ defaultTask, onBegin }: Props) {
             <button
               key={p.pipeline.id}
               type="button"
-              onClick={() => setSelectedId(p.pipeline.id)}
+              onClick={() => { setSelectedId(p.pipeline.id); setOverrides({}); }}
               className={`flex-1 rounded-lg border p-3 text-left transition-colors ${
                 p.pipeline.id === selectedId
                   ? "border-octo-brass bg-[var(--brass-ghost)]"
@@ -82,9 +91,16 @@ export function PipelineSetup({ defaultTask, onBegin }: Props) {
           <div className="mb-6 overflow-hidden rounded-lg border border-octo-hairline">
             {selected.stages.map((s) => (
               <div key={s.id} className="flex items-center gap-3 border-b border-octo-hairline bg-octo-panel-2 px-3 py-2.5 last:border-b-0">
-                <span className="w-28 font-serif text-sm text-octo-ivory">{labelForRole(s.role)}</span>
-                <span className="flex-1 font-mono text-xs text-octo-sage">{s.agentModel}</span>
-                <span className="font-mono text-[9px] uppercase text-octo-mute">
+                <span className="w-28 shrink-0 font-serif text-sm text-octo-ivory">{labelForRole(s.role)}</span>
+                <div className="flex-1">
+                  <ModelPicker
+                    activeModel={overrides[s.position] ?? s.agentModel}
+                    onSelectModel={(m) =>
+                      setOverrides((prev) => ({ ...prev, [s.position]: m }))
+                    }
+                  />
+                </div>
+                <span className="shrink-0 font-mono text-[9px] uppercase text-octo-mute">
                   {s.checkpoint ? "checkpoint" : ""}
                 </span>
               </div>
@@ -106,7 +122,7 @@ export function PipelineSetup({ defaultTask, onBegin }: Props) {
             <button
               type="button"
               disabled={!task.trim()}
-              onClick={() => onBegin(selected.pipeline.id, task.trim())}
+              onClick={() => onBegin(selected.pipeline.id, task.trim(), overrideTuples())}
               className="ml-auto rounded-lg bg-octo-brass px-5 py-2.5 font-serif text-base text-octo-onyx disabled:opacity-40"
             >
               Begin the run ⟶
