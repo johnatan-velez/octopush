@@ -105,6 +105,7 @@ export function PipelineSetup({ defaultTask, onBegin }: Props) {
                     onSelectModel={(m) =>
                       setOverrides((prev) => ({ ...prev, [s.position]: m }))
                     }
+                    allowedProviders={s.substrate === "cli" ? ["anthropic"] : undefined}
                   />
                 </div>
                 <span className="shrink-0 font-mono text-[9px] uppercase text-octo-mute">
