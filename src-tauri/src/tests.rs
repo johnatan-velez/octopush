@@ -1947,7 +1947,7 @@ mod run_crud_tests {
         let ff = pipelines.iter().find(|p| p.name == "Feature Factory").unwrap();
 
         let run_id = db
-            .create_run(&ws, &ff.id, "build the thing", Some("claude-opus-4-6"), None)
+            .create_run(&ws, &ff.id, "build the thing", Some("claude-opus-4-6"), None, &[])
             .unwrap();
 
         let run = db.get_run(&run_id).unwrap().unwrap();
@@ -1968,7 +1968,7 @@ mod run_crud_tests {
         let ws = seed_workspace(&db);
         db.seed_builtin_pipelines().unwrap();
         let ff = db.list_pipelines().unwrap().into_iter().find(|p| p.name == "Feature Factory").unwrap();
-        let run_id = db.create_run(&ws, &ff.id, "t", None, None).unwrap();
+        let run_id = db.create_run(&ws, &ff.id, "t", None, None, &[]).unwrap();
         let stages = db.list_run_stages(&run_id).unwrap();
         let first = &stages[0];
 
@@ -1987,8 +1987,23 @@ mod run_crud_tests {
     fn create_run_rejects_unknown_pipeline() {
         let db = test_db();
         let ws = seed_workspace(&db);
-        let err = db.create_run(&ws, "no-such-pipeline", "t", None, None);
+        let err = db.create_run(&ws, "no-such-pipeline", "t", None, None, &[]);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn create_run_applies_stage_model_overrides() {
+        let db = test_db();
+        let ws = seed_workspace(&db);
+        db.seed_builtin_pipelines().unwrap();
+        let ff = db.list_pipelines().unwrap().into_iter().find(|p| p.name == "Feature Factory").unwrap();
+        let overrides = vec![(2_i64, "claude-opus-4-6".to_string())];
+        let run_id = db.create_run(&ws, &ff.id, "t", None, None, &overrides).unwrap();
+        let stages = db.list_run_stages(&run_id).unwrap();
+        let implement = stages.iter().find(|s| s.position == 2).unwrap();
+        assert_eq!(implement.agent_model, "claude-opus-4-6");
+        let plan = stages.iter().find(|s| s.position == 0).unwrap();
+        assert_ne!(plan.agent_model, "claude-opus-4-6");
     }
 }
 
@@ -2059,7 +2074,7 @@ mod orchestrator_tests {
         let (db, ws) = db_with_workspace();
         let ff = db.lock().list_pipelines().unwrap().into_iter()
             .find(|p| p.name == "Feature Factory").unwrap();
-        let run_id = db.lock().create_run(&ws, &ff.id, "build it", None, None).unwrap();
+        let run_id = db.lock().create_run(&ws, &ff.id, "build it", None, None, &[]).unwrap();
 
         let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
         let orch = Orchestrator::new_with_runner(
@@ -2105,7 +2120,7 @@ mod orchestrator_tests {
         let (db, ws) = db_with_workspace();
         let pr = db.lock().list_pipelines().unwrap().into_iter()
             .find(|p| p.name == "Plan & review").unwrap();
-        let run_id = db.lock().create_run(&ws, &pr.id, "think", None, None).unwrap();
+        let run_id = db.lock().create_run(&ws, &pr.id, "think", None, None, &[]).unwrap();
         let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
         let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(MockRunner));
 
@@ -2129,7 +2144,7 @@ mod orchestrator_tests {
         let (db, ws) = db_with_workspace();
         let ff = db.lock().list_pipelines().unwrap().into_iter()
             .find(|p| p.name == "Feature Factory").unwrap();
-        let run_id = db.lock().create_run(&ws, &ff.id, "x", None, None).unwrap();
+        let run_id = db.lock().create_run(&ws, &ff.id, "x", None, None, &[]).unwrap();
         let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
         let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(MockRunner));
         orch.run_to_pause(&run_id).await.unwrap();
@@ -2157,7 +2172,7 @@ mod orchestrator_tests {
         let (db, ws) = db_with_workspace();
         let ff = db.lock().list_pipelines().unwrap().into_iter()
             .find(|p| p.name == "Feature Factory").unwrap();
-        let run_id = db.lock().create_run(&ws, &ff.id, "x", None, None).unwrap();
+        let run_id = db.lock().create_run(&ws, &ff.id, "x", None, None, &[]).unwrap();
         let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
         let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(FailingRunner));
 
@@ -2176,7 +2191,7 @@ mod orchestrator_tests {
         let (db, ws) = db_with_workspace();
         let ff = db.lock().list_pipelines().unwrap().into_iter()
             .find(|p| p.name == "Feature Factory").unwrap();
-        let run_id = db.lock().create_run(&ws, &ff.id, "x", None, None).unwrap();
+        let run_id = db.lock().create_run(&ws, &ff.id, "x", None, None, &[]).unwrap();
         let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
         let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(MockRunner));
 
@@ -2195,7 +2210,7 @@ mod orchestrator_tests {
     async fn start_run_on_completed_run_is_noop() {
         let (db, ws) = db_with_workspace();
         let ff = db.lock().list_pipelines().unwrap().into_iter().find(|p| p.name == "Plan & review").unwrap();
-        let run_id = db.lock().create_run(&ws, &ff.id, "x", None, None).unwrap();
+        let run_id = db.lock().create_run(&ws, &ff.id, "x", None, None, &[]).unwrap();
         let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
         let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(MockRunner));
         // Drive to completion (Plan & review: plan,critique no-cp; refine cp -> approve).

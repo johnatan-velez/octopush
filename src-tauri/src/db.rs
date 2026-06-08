@@ -1491,6 +1491,10 @@ impl Db {
 
     /// Create a run and copy the pipeline's stages into `run_stages` (a private copy
     /// so later edits to the template don't mutate run history).
+    ///
+    /// `stage_model_overrides` is a list of `(position, model)` pairs. Stages
+    /// whose position matches an entry use the override model; all others keep
+    /// the pipeline template's model. The template is never mutated.
     pub fn create_run(
         &self,
         workspace_id: &str,
@@ -1498,6 +1502,7 @@ impl Db {
         task: &str,
         reference_model: Option<&str>,
         linked_issue_key: Option<&str>,
+        stage_model_overrides: &[(i64, String)],
     ) -> AppResult<String> {
         let stages = self.get_pipeline_stages(pipeline_id)?;
         if stages.is_empty() {
@@ -1513,11 +1518,16 @@ impl Db {
             params![id, workspace_id, pipeline_id, task, reference_model, linked_issue_key, now],
         )?;
         for s in &stages {
+            let model = stage_model_overrides
+                .iter()
+                .find(|(pos, _)| *pos == s.position)
+                .map(|(_, m)| m.as_str())
+                .unwrap_or(s.agent_model.as_str());
             let sid = Uuid::new_v4().to_string();
             self.conn.execute(
                 "INSERT INTO run_stages (id, run_id, position, role, agent_model, substrate, checkpoint, status)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,'pending')",
-                params![sid, id, s.position, s.role, s.agent_model, s.substrate, s.checkpoint as i64],
+                params![sid, id, s.position, s.role, model, s.substrate, s.checkpoint as i64],
             )?;
         }
         Ok(id)

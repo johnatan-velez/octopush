@@ -833,13 +833,16 @@ pub async fn create_run(
     task: String,
     reference_model: Option<String>,
     linked_issue_key: Option<String>,
+    stage_overrides: Option<Vec<(i64, String)>>,
 ) -> AppResult<String> {
+    let overrides = stage_overrides.unwrap_or_default();
     state.db.lock().create_run(
         &workspace_id,
         &pipeline_id,
         &task,
         reference_model.as_deref(),
         linked_issue_key.as_deref(),
+        &overrides,
     )
 }
 

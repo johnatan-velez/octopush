@@ -429,6 +429,7 @@ export const ipc = {
     task: string,
     referenceModel?: string,
     linkedIssueKey?: string,
+    stageOverrides?: [number, string][],
   ) =>
     invoke<string>("create_run", {
       workspaceId,
@@ -436,6 +437,7 @@ export const ipc = {
       task,
       referenceModel: referenceModel ?? null,
       linkedIssueKey: linkedIssueKey ?? null,
+      stageOverrides: stageOverrides ?? null,
     }),
 
   startRun: (runId: string) =>
