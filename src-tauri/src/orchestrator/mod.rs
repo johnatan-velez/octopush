@@ -2,6 +2,7 @@
 //! checkpoint-driven run state machine.
 
 pub mod agentic;
+pub mod cli_runner;
 pub mod cost;
 pub mod events;
 pub mod runner;

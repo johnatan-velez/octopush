@@ -2207,3 +2207,54 @@ mod orchestrator_tests {
         assert_eq!(status, RunStatus::Completed);
     }
 }
+
+#[cfg(test)]
+mod cli_runner_tests {
+    use crate::orchestrator::cli_runner::parse_cli_result;
+    use crate::orchestrator::types::{ArtifactKind, StageStatus};
+
+    const SUCCESS: &str = r#"{
+        "type":"result","subtype":"success","is_error":false,
+        "result":"Implemented the feature.","total_cost_usd":0.0123,
+        "usage":{"input_tokens":1200,"output_tokens":340,
+                 "cache_read_input_tokens":800,"cache_creation_input_tokens":100}
+    }"#;
+
+    const ERRORED: &str = r#"{
+        "type":"result","subtype":"error_max_budget_usd","is_error":true,
+        "result":"Budget exceeded.","total_cost_usd":5.0,
+        "usage":{"input_tokens":10,"output_tokens":0,
+                 "cache_read_input_tokens":0,"cache_creation_input_tokens":0}
+    }"#;
+
+    #[test]
+    fn parses_success_into_done_outcome() {
+        let outcome = parse_cli_result(SUCCESS, true, "implement").unwrap();
+        assert_eq!(outcome.status, StageStatus::Done);
+        assert_eq!(outcome.artifact.text, "Implemented the feature.");
+        assert_eq!(outcome.artifact.kind, ArtifactKind::Diff);
+        assert!(outcome.artifact.refs_worktree);
+        assert_eq!(outcome.input_tokens, 1200);
+        assert_eq!(outcome.output_tokens, 340);
+        assert!((outcome.cost_usd - 0.0123).abs() < 1e-9);
+        assert!(outcome.error.is_none());
+    }
+
+    #[test]
+    fn is_error_flag_yields_failed_outcome() {
+        let outcome = parse_cli_result(ERRORED, true, "implement").unwrap();
+        assert_eq!(outcome.status, StageStatus::Failed);
+        assert_eq!(outcome.error.as_deref(), Some("Budget exceeded."));
+    }
+
+    #[test]
+    fn nonzero_exit_yields_failed_even_if_json_ok() {
+        let outcome = parse_cli_result(SUCCESS, false, "plan").unwrap();
+        assert_eq!(outcome.status, StageStatus::Failed);
+    }
+
+    #[test]
+    fn unparseable_output_is_an_error() {
+        assert!(parse_cli_result("not json", true, "plan").is_err());
+    }
+}
