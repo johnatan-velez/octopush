@@ -1520,21 +1520,7 @@ impl Db {
                         reference_model, linked_issue_key, created_at, finished_at
                  FROM runs WHERE id = ?1",
                 params![run_id],
-                |r| {
-                    Ok(RunRow {
-                        id: r.get(0)?,
-                        workspace_id: r.get(1)?,
-                        pipeline_id: r.get(2)?,
-                        task: r.get(3)?,
-                        status: r.get(4)?,
-                        cost_usd: r.get(5)?,
-                        baseline_usd: r.get(6)?,
-                        reference_model: r.get(7)?,
-                        linked_issue_key: r.get(8)?,
-                        created_at: r.get(9)?,
-                        finished_at: r.get(10)?,
-                    })
-                },
+                row_to_run,
             )
             .optional()
             .map_err(Into::into)
@@ -1546,21 +1532,7 @@ impl Db {
                     reference_model, linked_issue_key, created_at, finished_at
              FROM runs WHERE workspace_id = ?1 ORDER BY created_at DESC",
         )?;
-        let rows = stmt.query_map(params![workspace_id], |r| {
-            Ok(RunRow {
-                id: r.get(0)?,
-                workspace_id: r.get(1)?,
-                pipeline_id: r.get(2)?,
-                task: r.get(3)?,
-                status: r.get(4)?,
-                cost_usd: r.get(5)?,
-                baseline_usd: r.get(6)?,
-                reference_model: r.get(7)?,
-                linked_issue_key: r.get(8)?,
-                created_at: r.get(9)?,
-                finished_at: r.get(10)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![workspace_id], row_to_run)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -1613,6 +1585,14 @@ impl Db {
         self.conn.execute(
             "UPDATE runs SET cost_usd = ?2, baseline_usd = ?3 WHERE id = ?1",
             params![run_id, cost_usd, baseline_usd],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_run_reference_model(&self, run_id: &str, model: &str) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE runs SET reference_model = ?2 WHERE id = ?1",
+            params![run_id, model],
         )?;
         Ok(())
     }
@@ -1701,18 +1681,6 @@ impl Db {
         Ok(())
     }
 
-    /// Sum of completed-stage costs and baselines for a run.
-    pub fn run_cost_totals(&self, run_id: &str) -> AppResult<(f64, f64)> {
-        let cost: f64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(SUM(cost_usd),0) FROM run_stages WHERE run_id = ?1",
-                params![run_id],
-                |r| r.get(0),
-            )
-            .unwrap_or(0.0);
-        Ok((cost, 0.0)) // baseline filled by the orchestrator (needs token re-pricing)
-    }
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -1825,6 +1793,22 @@ pub struct RunRow {
     pub linked_issue_key: Option<String>,
     pub created_at: String,
     pub finished_at: Option<String>,
+}
+
+fn row_to_run(r: &rusqlite::Row) -> rusqlite::Result<RunRow> {
+    Ok(RunRow {
+        id: r.get(0)?,
+        workspace_id: r.get(1)?,
+        pipeline_id: r.get(2)?,
+        task: r.get(3)?,
+        status: r.get(4)?,
+        cost_usd: r.get(5)?,
+        baseline_usd: r.get(6)?,
+        reference_model: r.get(7)?,
+        linked_issue_key: r.get(8)?,
+        created_at: r.get(9)?,
+        finished_at: r.get(10)?,
+    })
 }
 
 #[derive(serde::Serialize, Clone, Debug)]

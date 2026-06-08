@@ -14,7 +14,6 @@ use crate::error::{AppError, AppResult};
 use crate::orchestrator::events::EventSink;
 use crate::orchestrator::runner::{AgentRunner, ApiRunner, CliRunnerUnavailable, StageContext};
 use parking_lot::Mutex;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -25,8 +24,8 @@ pub struct Orchestrator {
     /// Test override: when set, every stage uses this runner regardless of substrate.
     test_runner: Option<Box<dyn AgentRunner>>,
     client: reqwest::Client,
-    /// run_id -> already-running guard (enforces one active drive per run).
-    active: Mutex<HashMap<String, ()>>,
+    /// Set of run_ids with an in-flight drive (enforces one active drive per run).
+    active: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Orchestrator {
@@ -36,7 +35,7 @@ impl Orchestrator {
             events,
             test_runner: None,
             client: reqwest::Client::new(),
-            active: Mutex::new(HashMap::new()),
+            active: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -51,7 +50,7 @@ impl Orchestrator {
             events,
             test_runner: Some(runner),
             client: reqwest::Client::new(),
-            active: Mutex::new(HashMap::new()),
+            active: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -241,10 +240,10 @@ impl Orchestrator {
         // Enforce single active drive.
         {
             let mut active = self.active.lock();
-            if active.contains_key(run_id) {
+            if active.contains(run_id) {
                 return Err(AppError::Other("run is already executing".into()));
             }
-            active.insert(run_id.to_string(), ());
+            active.insert(run_id.to_string());
         }
         let result = self.drive_inner(run_id).await;
         self.active.lock().remove(run_id);
@@ -264,6 +263,14 @@ impl Orchestrator {
         }
         self.db.lock().set_run_status(run_id, "running", false)?;
         self.emit_run_update(run_id);
+
+        // Resolve + persist the reference model once per run (avoids a per-stage disk
+        // read in recompute_run_cost). Only when the run doesn't already have one.
+        if run0.reference_model.is_none() {
+            if let Some(m) = crate::orchestrator::cost::pick_reference_model() {
+                self.db.lock().set_run_reference_model(run_id, &m)?;
+            }
+        }
 
         loop {
             let run = self
