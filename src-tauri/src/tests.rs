@@ -1850,3 +1850,30 @@ mod runner_helpers_tests {
         assert!(with_fb.contains("be more careful"));
     }
 }
+
+#[cfg(test)]
+mod direct_schema_tests {
+    use crate::db::Db;
+    use tempfile::NamedTempFile;
+
+    fn test_db() -> Db {
+        let tmp = NamedTempFile::new().unwrap();
+        Db::open(tmp.path()).unwrap()
+    }
+
+    #[test]
+    fn new_tables_exist() {
+        let db = test_db();
+        let conn = db.conn_ref();
+        for table in ["pipelines", "pipeline_stages", "runs", "run_stages", "run_events"] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "table {table} should exist");
+        }
+    }
+}

@@ -156,6 +156,77 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_file_edits_workspace_path
                 ON file_edits(workspace_id, file_path);
+
+            CREATE TABLE IF NOT EXISTS pipelines (
+                id           TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                description  TEXT NOT NULL DEFAULT '',
+                is_builtin   INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pipeline_stages (
+                id            TEXT PRIMARY KEY,
+                pipeline_id   TEXT NOT NULL,
+                position      INTEGER NOT NULL,
+                role          TEXT NOT NULL,
+                agent_model   TEXT NOT NULL,
+                substrate     TEXT NOT NULL,
+                checkpoint    INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY(pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_pipeline_stages_pipeline
+                ON pipeline_stages(pipeline_id, position);
+
+            CREATE TABLE IF NOT EXISTS runs (
+                id               TEXT PRIMARY KEY,
+                workspace_id     TEXT NOT NULL,
+                pipeline_id      TEXT NOT NULL,
+                task             TEXT NOT NULL DEFAULT '',
+                status           TEXT NOT NULL,
+                cost_usd         REAL NOT NULL DEFAULT 0,
+                baseline_usd     REAL NOT NULL DEFAULT 0,
+                reference_model  TEXT,
+                linked_issue_key TEXT,
+                created_at       TEXT NOT NULL,
+                finished_at      TEXT,
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_runs_workspace
+                ON runs(workspace_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS run_stages (
+                id            TEXT PRIMARY KEY,
+                run_id        TEXT NOT NULL,
+                position      INTEGER NOT NULL,
+                role          TEXT NOT NULL,
+                agent_model   TEXT NOT NULL,
+                substrate     TEXT NOT NULL,
+                checkpoint    INTEGER NOT NULL DEFAULT 0,
+                status        TEXT NOT NULL DEFAULT 'pending',
+                input_tokens  INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd      REAL NOT NULL DEFAULT 0,
+                artifact      TEXT,
+                feedback      TEXT,
+                error         TEXT,
+                started_at    TEXT,
+                finished_at   TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_stages_run
+                ON run_stages(run_id, position);
+
+            CREATE TABLE IF NOT EXISTS run_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id      TEXT NOT NULL,
+                timestamp   TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                payload     TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_events_run
+                ON run_events(run_id, id);
             "#,
         )?;
         // Phase 2 — workspace customization columns (glyph + tint).
