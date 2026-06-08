@@ -833,13 +833,16 @@ pub async fn create_run(
     task: String,
     reference_model: Option<String>,
     linked_issue_key: Option<String>,
+    stage_overrides: Option<Vec<(i64, String)>>,
 ) -> AppResult<String> {
+    let overrides = stage_overrides.unwrap_or_default();
     state.db.lock().create_run(
         &workspace_id,
         &pipeline_id,
         &task,
         reference_model.as_deref(),
         linked_issue_key.as_deref(),
+        &overrides,
     )
 }
 
@@ -903,6 +906,7 @@ pub async fn abort_run(
 pub async fn estimate_run_cost(
     state: State<'_, AppState>,
     pipeline_id: String,
+    stage_overrides: Option<Vec<(i64, String)>>,
 ) -> AppResult<serde_json::Value> {
     // Heuristic per-role token estimate (refined later from history).
     fn est_tokens(role: &str) -> (u64, u64) {
@@ -914,6 +918,7 @@ pub async fn estimate_run_cost(
             _ => (4_000, 1_000),
         }
     }
+    let overrides = stage_overrides.unwrap_or_default();
     let db = state.db.lock();
     let stages = db.get_pipeline_stages(&pipeline_id)?;
     let reference = crate::orchestrator::cost::pick_reference_model();
@@ -921,7 +926,12 @@ pub async fn estimate_run_cost(
     let mut baseline = 0.0;
     for s in &stages {
         let (i, o) = est_tokens(&s.role);
-        cost += crate::orchestrator::cost::stage_cost(&s.agent_model, i, o, 0, 0);
+        let model = overrides
+            .iter()
+            .find(|(pos, _)| *pos == s.position)
+            .map(|(_, m)| m.as_str())
+            .unwrap_or(s.agent_model.as_str());
+        cost += crate::orchestrator::cost::stage_cost(model, i, o, 0, 0);
         if let Some(ref_model) = &reference {
             baseline += crate::orchestrator::cost::baseline_cost(ref_model, i, o);
         }

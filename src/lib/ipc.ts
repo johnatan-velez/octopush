@@ -429,6 +429,7 @@ export const ipc = {
     task: string,
     referenceModel?: string,
     linkedIssueKey?: string,
+    stageOverrides?: [number, string][],
   ) =>
     invoke<string>("create_run", {
       workspaceId,
@@ -436,6 +437,7 @@ export const ipc = {
       task,
       referenceModel: referenceModel ?? null,
       linkedIssueKey: linkedIssueKey ?? null,
+      stageOverrides: stageOverrides ?? null,
     }),
 
   startRun: (runId: string) =>
@@ -463,9 +465,10 @@ export const ipc = {
   abortRun: (runId: string) =>
     invoke<void>("abort_run", { runId }),
 
-  estimateRunCost: (pipelineId: string) =>
+  estimateRunCost: (pipelineId: string, stageOverrides?: [number, string][]) =>
     invoke<{ estimateUsd: number; baselineUsd: number }>("estimate_run_cost", {
       pipelineId,
+      stageOverrides: stageOverrides ?? null,
     }),
 };
 

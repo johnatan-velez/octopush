@@ -1464,6 +1464,7 @@ function App() {
                     workspaceId={activeWorkspace.id}
                     defaultTask={activeWorkspace.task || ""}
                     linkedIssueKey={activeWorkspace.linkedIssueKey ?? null}
+                    workspacePath={activeWorkspace.worktreePath || project.path}
                   />
                 )}
               </ModeOverlay>

@@ -32,6 +32,7 @@ interface RunsState {
     workspaceId: string,
     pipelineId: string,
     task: string,
+    stageOverrides: [number, string][],
     linkedIssueKey?: string,
   ) => Promise<void>;
   resolve: (
@@ -102,8 +103,8 @@ export const useRunsStore = create<RunsState>((set, get) => ({
     }
   },
 
-  begin: async (workspaceId, pipelineId, task, linkedIssueKey) => {
-    const runId = await ipc.createRun(workspaceId, pipelineId, task, undefined, linkedIssueKey);
+  begin: async (workspaceId, pipelineId, task, stageOverrides, linkedIssueKey) => {
+    const runId = await ipc.createRun(workspaceId, pipelineId, task, undefined, linkedIssueKey, stageOverrides);
     await ipc.startRun(runId);
     set((s) => ({ activeRunIdByWs: { ...s.activeRunIdByWs, [workspaceId]: runId } }));
     await get().loadRuns(workspaceId);

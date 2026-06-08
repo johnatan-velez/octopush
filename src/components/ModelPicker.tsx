@@ -58,11 +58,15 @@ function formatCtx(maxContext: number): string {
 interface Props {
   activeModel: string;
   onSelectModel: (model: string) => void;
+  /** When provided, only show models from these provider names. Used by
+   *  PipelineSetup to restrict CLI-substrate stages to Anthropic models. */
+  allowedProviders?: string[];
 }
 
 export function ModelPicker({
   activeModel,
   onSelectModel,
+  allowedProviders,
 }: Props) {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [open, setOpen] = useState(false);
@@ -91,8 +95,9 @@ export function ModelPicker({
     () =>
       recents
         .map((id) => modelIndex.get(id))
-        .filter((x): x is { model: ModelInfo; providerName: string } => !!x),
-    [recents, modelIndex],
+        .filter((x): x is { model: ModelInfo; providerName: string } => !!x)
+        .filter((x) => !allowedProviders || allowedProviders.includes(x.providerName)),
+    [recents, modelIndex, allowedProviders],
   );
 
   // Intent-based recommendations. Each intent picks the first model whose
@@ -101,6 +106,7 @@ export function ModelPicker({
   const recommendations = useMemo(() => {
     function pick(predicate: (m: ModelInfo) => boolean) {
       for (const p of providers) {
+        if (allowedProviders && !allowedProviders.includes(p.name)) continue;
         for (const m of p.models) {
           if (predicate(m)) return { model: m, providerName: p.name };
         }
@@ -130,16 +136,17 @@ export function ModelPicker({
     ].filter((r): r is { intent: string; entry: NonNullable<typeof r.entry> } =>
       r.entry !== null,
     );
-  }, [providers]);
+  }, [providers, allowedProviders]);
 
   // Local-only filter — toggled by a small chip in the dropdown header. The
   // filter applies to the per-provider list, not the Recents or Recommended
   // rows (those are pinned regardless so users don't lose context).
   const [localOnly, setLocalOnly] = useState(false);
-  const visibleProviders = useMemo(
-    () => (localOnly ? providers.filter((p) => p.local) : providers),
-    [providers, localOnly],
-  );
+  const visibleProviders = useMemo(() => {
+    let result = localOnly ? providers.filter((p) => p.local) : providers;
+    if (allowedProviders) result = result.filter((p) => allowedProviders.includes(p.name));
+    return result;
+  }, [providers, localOnly, allowedProviders]);
 
   function handleSelect(modelId: string) {
     onSelectModel(modelId);

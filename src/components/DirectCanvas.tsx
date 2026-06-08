@@ -4,15 +4,17 @@ import { PipelineSetup } from "./PipelineSetup";
 import { RunTrack } from "./RunTrack";
 import { StageFocus } from "./StageFocus";
 import { CheckpointBar } from "./CheckpointBar";
+import { RunCostMeter } from "./RunCostMeter";
 
 interface Props {
   active: boolean;
   workspaceId: string;
   defaultTask: string;
   linkedIssueKey: string | null;
+  workspacePath: string;
 }
 
-export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey }: Props) {
+export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey, workspacePath }: Props) {
   const loadRuns = useRunsStore((s) => s.loadRuns);
   const activeRunId = useRunsStore((s) => s.getActiveRunId(workspaceId));
   const detail = useRunsStore((s) => (activeRunId ? s.getDetail(activeRunId) : undefined));
@@ -28,8 +30,8 @@ export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey 
     return (
       <PipelineSetup
         defaultTask={defaultTask}
-        onBegin={(pipelineId, task) =>
-          void begin(workspaceId, pipelineId, task, linkedIssueKey ?? undefined)
+        onBegin={(pipelineId, task, stageOverrides) =>
+          void begin(workspaceId, pipelineId, task, stageOverrides, linkedIssueKey ?? undefined)
         }
       />
     );
@@ -53,7 +55,8 @@ export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey 
         selectedStageId={shownStageId}
         onSelectStage={(id) => selectStage(run.id, id)}
       />
-      <StageFocus stage={shownStage} />
+      <StageFocus stage={shownStage} workspacePath={workspacePath} />
+      <RunCostMeter run={run} stages={stages} />
       {run.status === "paused" && blockedStage && (
         <CheckpointBar
           blockedStage={blockedStage}

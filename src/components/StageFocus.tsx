@@ -1,6 +1,8 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { RunStage } from "../lib/ipc";
+import { ipc } from "../lib/ipc";
 import { labelForRole } from "./RunTrack";
+import { DiffViewer } from "./DiffViewer";
 
 interface ParsedArtifact {
   kind: string;
@@ -10,9 +12,13 @@ interface ParsedArtifact {
 
 interface Props {
   stage: RunStage | null;
+  workspacePath: string;
 }
 
-export function StageFocus({ stage }: Props) {
+export function StageFocus({ stage, workspacePath }: Props) {
+  const [diff, setDiff] = useState<string>("");
+  const [diffLoading, setDiffLoading] = useState(false);
+
   const artifact = useMemo<ParsedArtifact | null>(() => {
     if (!stage?.artifact) return null;
     try {
@@ -21,6 +27,21 @@ export function StageFocus({ stage }: Props) {
       return null;
     }
   }, [stage?.artifact]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (stage && artifact?.refsWorktree && workspacePath) {
+      setDiff("");
+      setDiffLoading(true);
+      ipc.getGitDiff(workspacePath)
+        .then((d) => { if (!cancelled) { setDiff(d); setDiffLoading(false); } })
+        .catch(() => { if (!cancelled) { setDiff(""); setDiffLoading(false); } });
+    } else {
+      setDiff("");
+      setDiffLoading(false);
+    }
+    return () => { cancelled = true; };
+  }, [stage?.id, stage?.status, artifact?.refsWorktree, workspacePath]);
 
   if (!stage) {
     return (
@@ -42,12 +63,13 @@ export function StageFocus({ stage }: Props) {
           <span className="text-octo-rouge">{stage.error}</span>
         ) : artifact ? (
           <>
-            {artifact.refsWorktree && (
-              <div className="mb-2 text-octo-mute">
-                ⟶ Code changes are in the workspace; open Review to see the diff.
-              </div>
-            )}
             {artifact.text || "(no output text)"}
+            {artifact.refsWorktree &&
+              (diffLoading ? (
+                <div className="p-4 font-mono text-xs text-octo-mute">Loading diff…</div>
+              ) : (
+                <DiffViewer diff={diff} />
+              ))}
           </>
         ) : stage.status === "running" ? (
           <span className="text-octo-brass">working…</span>
