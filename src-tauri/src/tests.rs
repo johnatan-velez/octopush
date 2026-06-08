@@ -2258,3 +2258,23 @@ mod cli_runner_tests {
         assert!(parse_cli_result("not json", true, "plan").is_err());
     }
 }
+
+#[cfg(test)]
+mod cli_args_tests {
+    use crate::orchestrator::cli_runner::build_cli_args;
+
+    #[test]
+    fn args_include_model_format_and_permission() {
+        let args = build_cli_args("claude-sonnet-4-6", "You are a planner.");
+        assert!(args.contains(&"-p".to_string()));
+        let i = args.iter().position(|a| a == "--output-format").unwrap();
+        assert_eq!(args[i + 1], "json");
+        let m = args.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(args[m + 1], "claude-sonnet-4-6");
+        let s = args.iter().position(|a| a == "--append-system-prompt").unwrap();
+        assert_eq!(args[s + 1], "You are a planner.");
+        assert!(args.contains(&"--permission-mode".to_string()));
+        assert!(args.contains(&"bypassPermissions".to_string()));
+        assert!(args.contains(&"--max-turns".to_string()));
+    }
+}

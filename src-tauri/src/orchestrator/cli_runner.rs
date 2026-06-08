@@ -88,3 +88,21 @@ pub fn parse_cli_result(
         error: None,
     })
 }
+
+/// Build the argv (after the program name) for a headless `claude -p` run.
+/// The user prompt is supplied via stdin, not as an arg.
+pub fn build_cli_args(model: &str, system_prompt: &str) -> Vec<String> {
+    vec![
+        "-p".to_string(),
+        "--output-format".to_string(),
+        "json".to_string(),
+        "--model".to_string(),
+        model.to_string(),
+        "--append-system-prompt".to_string(),
+        system_prompt.to_string(),
+        "--permission-mode".to_string(),
+        "bypassPermissions".to_string(),
+        "--max-turns".to_string(),
+        MAX_CLI_TURNS.to_string(),
+    ]
+}
