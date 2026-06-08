@@ -1,4 +1,5 @@
 import type { Run, RunStage } from "../lib/ipc";
+import { savingsVsBaseline } from "../lib/runStatus";
 
 interface Props {
   run: Run;
@@ -6,8 +7,7 @@ interface Props {
 }
 
 export function RunCostMeter({ run, stages }: Props) {
-  const saved = Math.max(0, run.baselineUsd - run.costUsd);
-  const pct = run.baselineUsd > 0 ? Math.round((saved / run.baselineUsd) * 100) : 0;
+  const { saved, pct } = savingsVsBaseline(run.costUsd, run.baselineUsd);
   const fillPct = run.baselineUsd > 0 ? Math.min(100, (run.costUsd / run.baselineUsd) * 100) : 0;
   return (
     <div className="m-4 rounded-lg border border-octo-hairline bg-octo-panel-2 p-4 octo-rise-in">

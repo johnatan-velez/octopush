@@ -3,6 +3,7 @@ import { ipc, type PipelineWithStages } from "../lib/ipc";
 import { usePipelineStore } from "../stores/pipelineStore";
 import { labelForRole } from "./RunTrack";
 import { ModelPicker } from "./ModelPicker";
+import { savingsVsBaseline } from "../lib/runStatus";
 
 interface Props {
   defaultTask: string;
@@ -36,7 +37,9 @@ export function PipelineSetup({ defaultTask, onBegin }: Props) {
   }, [selectedId, overrides]);
 
   const selected: PipelineWithStages | undefined = pipelines.find((p) => p.pipeline.id === selectedId);
-  const saved = estimate ? Math.max(0, estimate.baselineUsd - estimate.estimateUsd) : 0;
+  const { saved, pct: savedPct } = estimate
+    ? savingsVsBaseline(estimate.estimateUsd, estimate.baselineUsd)
+    : { saved: 0, pct: 0 };
 
   const overrideTuples = (): [number, string][] =>
     selected
@@ -119,7 +122,7 @@ export function PipelineSetup({ defaultTask, onBegin }: Props) {
               </div>
               {estimate && (
                 <div className="font-mono text-xs text-octo-verdigris">
-                  ↓ saves ~${saved.toFixed(2)} vs all-premium
+                  ↓ saves ~${saved.toFixed(2)} ({savedPct}%) vs all-premium
                 </div>
               )}
             </div>

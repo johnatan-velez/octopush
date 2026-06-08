@@ -10,15 +10,12 @@ interface Props {
   onSelectStage: (stageId: string) => void;
 }
 
-export function RunTrack({ run, stages, selectedStageId, onSelectStage }: Props) {
-  const saved = Math.max(0, run.baselineUsd - run.costUsd);
+export function RunTrack({ run: _run, stages, selectedStageId, onSelectStage }: Props) {
   const doneCount = stages.filter((s) => s.status === "done").length;
 
   return (
     <div className="border-b border-octo-hairline bg-octo-panel px-4 py-3">
       <div className="mb-3 flex items-baseline gap-6 font-mono text-xs octo-fade-in">
-        <Meta label="spent" value={`$${run.costUsd.toFixed(2)}`} valueClass="text-octo-brass" />
-        <Meta label="saved vs all-premium" value={`+$${saved.toFixed(2)}`} valueClass="text-octo-verdigris" />
         <Meta label="stage" value={`${Math.min(doneCount + 1, stages.length)} / ${stages.length}`} valueClass="text-octo-ivory" />
       </div>
       <div className="flex items-stretch">

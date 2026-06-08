@@ -25,3 +25,12 @@ export function runStatusMeta(status: RunStatus | string): StatusMeta {
     default: return { label: status, className: "text-octo-mute" };
   }
 }
+
+export function savingsVsBaseline(
+  costUsd: number,
+  baselineUsd: number,
+): { saved: number; pct: number } {
+  const saved = Math.max(0, baselineUsd - costUsd);
+  const pct = baselineUsd > 0 ? Math.round((saved / baselineUsd) * 100) : 0;
+  return { saved, pct };
+}
