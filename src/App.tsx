@@ -28,6 +28,7 @@ import { ChangesPanel } from "./components/ChangesPanel";
 import { EditorPane } from "./components/EditorPane";
 import { EditorTabs } from "./components/EditorTabs";
 import { ReviewCanvas, type ReviewViewMode } from "./components/ReviewCanvas";
+import { DirectCanvas } from "./components/DirectCanvas";
 import { CanvasSplit } from "./components/CanvasSplit";
 import { useEditorStore } from "./stores/editorStore";
 import { useAttentionStore } from "./stores/attentionStore";
@@ -1472,6 +1473,27 @@ function App() {
                       </ReviewCanvas>
                     </div>
                   </div>
+                )}
+              </div>
+
+              {/* Direct mode overlay */}
+              <div
+                className="absolute inset-0 transition-opacity duration-200 ease-out"
+                style={{
+                  opacity: activeWorkspace && activeMode === "direct" ? 1 : 0,
+                  pointerEvents:
+                    activeWorkspace && activeMode === "direct" ? "auto" : "none",
+                  visibility:
+                    activeWorkspace && activeMode === "direct" ? "visible" : "hidden",
+                }}
+              >
+                {activeWorkspace && activeMode === "direct" && (
+                  <DirectCanvas
+                    key={activeWorkspace.id}
+                    workspaceId={activeWorkspace.id}
+                    defaultTask={activeWorkspace.task || ""}
+                    linkedIssueKey={activeWorkspace.linkedIssueKey ?? null}
+                  />
                 )}
               </div>
             </div>
