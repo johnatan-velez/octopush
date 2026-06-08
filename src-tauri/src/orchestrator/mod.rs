@@ -13,7 +13,6 @@ use crate::db::{Db, RunStageRow};
 use crate::error::{AppError, AppResult};
 use crate::orchestrator::events::EventSink;
 use crate::orchestrator::runner::{AgentRunner, ApiRunner, CliRunnerUnavailable, StageContext};
-use crate::orchestrator::types::*;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -117,18 +116,28 @@ impl Orchestrator {
         self.db.lock().set_run_stage_status(&stage.id, "running")?;
         self.emit_run_update(&run.id);
 
-        let ctx = StageContext {
-            workspace_path: self.workspace_path(run)?,
-            task: run.task.clone(),
-            client: self.client.clone(),
-        };
+        // Build the context and run the agent. ANY hard error here (missing worktree,
+        // unresolved provider, unavailable CLI substrate) is converted into a failed
+        // stage so the run converges to a clean paused/recoverable state instead of
+        // stranding the stage in "running".
+        let run_result: AppResult<StageOutcome> = async {
+            let ctx = StageContext {
+                workspace_path: self.workspace_path(run)?,
+                task: run.task.clone(),
+                client: self.client.clone(),
+            };
+            match &self.test_runner {
+                Some(r) => r.run(&spec, &input, &ctx).await,
+                None => self.runner_for(&spec.substrate).run(&spec, &input, &ctx).await,
+            }
+        }
+        .await;
 
-        let outcome = match &self.test_runner {
-            Some(r) => r.run(&spec, &input, &ctx).await?,
-            None => {
-                self.runner_for(&spec.substrate)
-                    .run(&spec, &input, &ctx)
-                    .await?
+        let outcome = match run_result {
+            Ok(o) => o,
+            Err(e) => {
+                self.db.lock().fail_run_stage(&stage.id, &e.to_string())?;
+                return Ok(StageStatus::Failed);
             }
         };
 

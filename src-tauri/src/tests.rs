@@ -2129,4 +2129,37 @@ mod orchestrator_tests {
         assert_eq!(status, RunStatus::Aborted);
         assert_eq!(db.lock().get_run(&run_id).unwrap().unwrap().status, "aborted");
     }
+
+    /// A runner that always returns a hard Err (simulates CliRunnerUnavailable / unresolved model).
+    struct FailingRunner;
+    #[async_trait::async_trait]
+    impl AgentRunner for FailingRunner {
+        async fn run(
+            &self,
+            _stage: &StageSpec,
+            _input: &StageArtifact,
+            _ctx: &StageContext,
+        ) -> crate::error::AppResult<StageOutcome> {
+            Err(crate::error::AppError::Other("boom".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn hard_runner_error_converges_to_failed_and_paused() {
+        let (db, ws) = db_with_workspace();
+        let ff = db.lock().list_pipelines().unwrap().into_iter()
+            .find(|p| p.name == "Feature Factory").unwrap();
+        let run_id = db.lock().create_run(&ws, &ff.id, "x", None, None).unwrap();
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+        let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(FailingRunner));
+
+        // The first stage's runner errors hard. The run must NOT bubble an Err; it must
+        // pause with the stage marked failed (recoverable), never stuck in "running".
+        let status = orch.run_to_pause(&run_id).await.unwrap();
+        assert_eq!(status, RunStatus::Paused);
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[0].status, "failed");
+        assert!(stages[0].error.is_some());
+        assert_eq!(db.lock().get_run(&run_id).unwrap().unwrap().status, "paused");
+    }
 }
