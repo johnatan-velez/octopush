@@ -886,14 +886,8 @@ pub async fn resolve_checkpoint(
         "reject" => CheckpointAction::Reject { feedback, model_override },
         other => return Err(crate::error::AppError::Other(format!("unknown action: {other}"))),
     };
-    let orch = Arc::clone(&*orch);
-    let run_id2 = run_id.clone();
     // Drive in the background; the frontend reacts to run:// events.
-    tokio::spawn(async move {
-        if let Err(e) = orch.resolve_checkpoint(&run_id2, action).await {
-            tracing::error!(run_id = %run_id2, error = %e, "resolve_checkpoint failed");
-        }
-    });
+    Arc::clone(&*orch).spawn_resolve_checkpoint(run_id, action);
     Ok(())
 }
 

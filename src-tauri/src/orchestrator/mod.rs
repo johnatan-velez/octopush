@@ -67,11 +67,13 @@ impl Orchestrator {
     }
 
     fn emit_run_update(&self, run_id: &str) {
-        if let Ok(Some(run)) = self.db.lock().get_run(run_id) {
-            self.events.emit(
+        match self.db.lock().get_run(run_id) {
+            Ok(Some(run)) => self.events.emit(
                 "run://stage-update",
                 serde_json::json!({ "runId": run_id, "run": run }),
-            );
+            ),
+            Ok(None) => tracing::warn!(run_id = %run_id, "emit_run_update: run not found"),
+            Err(e) => tracing::error!(run_id = %run_id, error = %e, "emit_run_update: get_run failed"),
         }
     }
 
@@ -368,6 +370,23 @@ impl Orchestrator {
         tokio::spawn(async move {
             if let Err(e) = self.run_to_pause(&run_id).await {
                 tracing::error!(run_id = %run_id, error = %e, "run drive failed");
+                self.events.emit(
+                    "run://error",
+                    serde_json::json!({ "runId": run_id, "error": e.to_string() }),
+                );
+            }
+        });
+    }
+
+    /// Spawn a checkpoint resolution in the background, emitting run://error on failure.
+    pub fn spawn_resolve_checkpoint(self: Arc<Self>, run_id: String, action: CheckpointAction) {
+        tokio::spawn(async move {
+            if let Err(e) = self.resolve_checkpoint(&run_id, action).await {
+                tracing::error!(run_id = %run_id, error = %e, "resolve_checkpoint failed");
+                self.events.emit(
+                    "run://error",
+                    serde_json::json!({ "runId": run_id, "error": e.to_string() }),
+                );
             }
         });
     }
