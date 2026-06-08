@@ -2333,3 +2333,31 @@ mod cli_template_tests {
         assert!(implement.checkpoint);
     }
 }
+
+#[cfg(test)]
+mod cli_path_tests {
+    use crate::orchestrator::cli_runner::{merge_path_dirs, resolve_executable};
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn merge_path_dirs_dedups_and_keeps_first_order_dropping_empties() {
+        let merged = merge_path_dirs(&["/a:/b", "", "/b:/c", ":/a:"]);
+        assert_eq!(merged, "/a:/b:/c");
+    }
+
+    #[test]
+    fn resolve_executable_finds_a_binary_on_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("claude");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        let mut perms = std::fs::metadata(&bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).unwrap();
+
+        let path_env = format!("/nonexistent/xyz:{}", dir.path().display());
+        let found = resolve_executable("claude", &path_env).expect("should find claude");
+        assert_eq!(found, bin);
+
+        assert!(resolve_executable("does-not-exist-xyz", &path_env).is_none());
+    }
+}

@@ -10,7 +10,9 @@ use crate::error::{AppError, AppResult};
 use crate::orchestrator::runner::{artifact_kind_for, system_prompt_for, user_input_for, AgentRunner, StageContext};
 use crate::orchestrator::types::{ArtifactKind, StageArtifact, StageOutcome, StageSpec, StageStatus};
 use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use tokio::io::AsyncWriteExt;
 
 const MAX_CLI_TURNS: u32 = 30;
@@ -38,6 +40,81 @@ struct CliUsage {
     cache_read_input_tokens: u64,
     #[serde(default)]
     cache_creation_input_tokens: u64,
+}
+
+/// Merge PATH-like dir lists into one, de-duplicating while preserving
+/// first-seen order and dropping empty segments.
+pub fn merge_path_dirs(parts: &[&str]) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for part in parts {
+        for dir in part.split(':') {
+            if dir.is_empty() {
+                continue;
+            }
+            if seen.insert(dir.to_string()) {
+                out.push(dir.to_string());
+            }
+        }
+    }
+    out.join(":")
+}
+
+/// Find an executable named `name` in the first dir of `path_env` (colon-list)
+/// that contains a regular file with an exec bit. Returns its absolute path.
+pub fn resolve_executable(name: &str, path_env: &str) -> Option<PathBuf> {
+    for dir in path_env.split(':') {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = Path::new(dir).join(name);
+        if let Ok(meta) = std::fs::metadata(&candidate) {
+            let is_exec = meta.is_file()
+                && std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 != 0;
+            if is_exec {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Common dirs where user CLIs land, beyond a GUI app's minimal launchd PATH.
+fn default_bin_dirs() -> Vec<String> {
+    let mut v = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        for sub in [".local/bin", "bin", ".claude/local", ".bun/bin", ".npm-global/bin", ".deno/bin"] {
+            v.push(format!("{home}/{sub}"));
+        }
+    }
+    for d in ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/bin", "/bin"] {
+        v.push(d.to_string());
+    }
+    v
+}
+
+/// The PATH to use when spawning user CLIs from the (often GUI-launched) app:
+/// the login shell's PATH (it sources the user's rc files), merged with the
+/// inherited PATH and common fallbacks. Captured once. Mirrors how the git/gh
+/// commands run under `$SHELL -lc` to pick up the user's real PATH.
+fn resolved_cli_path() -> &'static str {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        // `-lic`: login + interactive + command, so rc files that add to PATH
+        // (e.g. ~/.zshrc) are sourced. `-c` makes it run and exit immediately.
+        let login = std::process::Command::new(&shell)
+            .args(["-lic", "printf %s \"$PATH\""])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        let defaults = default_bin_dirs().join(":");
+        merge_path_dirs(&[login.as_str(), inherited.as_str(), defaults.as_str()])
+    })
+    .as_str()
 }
 
 /// Parse `claude -p --output-format json` stdout into a `StageOutcome`.
@@ -125,9 +202,14 @@ impl AgentRunner for CliRunner {
         let user = user_input_for(&stage.role, &ctx.task, input, stage.feedback.as_deref());
         let args = build_cli_args(&stage.agent_model, &system);
 
-        let mut child = match tokio::process::Command::new("claude")
+        let path_env = resolved_cli_path();
+        let program: std::ffi::OsString = resolve_executable("claude", path_env)
+            .map(Into::into)
+            .unwrap_or_else(|| "claude".into());
+        let mut child = match tokio::process::Command::new(&program)
             .args(&args)
             .current_dir(&ctx.workspace_path)
+            .env("PATH", path_env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -137,7 +219,9 @@ impl AgentRunner for CliRunner {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(failed_stage(
-                    "Claude Code CLI (`claude`) was not found on PATH. Install it to use CLI stages.",
+                    "Claude Code CLI (`claude`) was not found. Octopush searched your PATH, \
+                     login-shell PATH, and common install dirs (e.g. ~/.local/bin, /opt/homebrew/bin). \
+                     Ensure `claude` is installed and on your shell's PATH.",
                 ));
             }
             Err(e) => return Ok(failed_stage(&format!("failed to launch claude: {e}"))),
