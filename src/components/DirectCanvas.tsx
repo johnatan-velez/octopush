@@ -4,6 +4,7 @@ import { PipelineSetup } from "./PipelineSetup";
 import { RunTrack } from "./RunTrack";
 import { StageFocus } from "./StageFocus";
 import { CheckpointBar } from "./CheckpointBar";
+import { RunCostMeter } from "./RunCostMeter";
 
 interface Props {
   active: boolean;
@@ -55,6 +56,7 @@ export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey,
         onSelectStage={(id) => selectStage(run.id, id)}
       />
       <StageFocus stage={shownStage} workspacePath={workspacePath} />
+      <RunCostMeter run={run} stages={stages} />
       {run.status === "paused" && blockedStage && (
         <CheckpointBar
           blockedStage={blockedStage}
