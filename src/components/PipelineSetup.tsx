@@ -26,10 +26,14 @@ export function PipelineSetup({ defaultTask, onBegin }: Props) {
   }, [pipelines, selectedId]);
   useEffect(() => {
     if (!selectedId) return;
+    const tuples: [number, string][] = Object.entries(overrides)
+      .map(([pos, model]) => [Number(pos), model] as [number, string]);
     let cancelled = false;
-    ipc.estimateRunCost(selectedId).then((e) => { if (!cancelled) setEstimate(e); }).catch(() => {});
+    ipc.estimateRunCost(selectedId, tuples.length > 0 ? tuples : undefined)
+      .then((e) => { if (!cancelled) setEstimate(e); })
+      .catch(() => {});
     return () => { cancelled = true; };
-  }, [selectedId]);
+  }, [selectedId, overrides]);
 
   const selected: PipelineWithStages | undefined = pipelines.find((p) => p.pipeline.id === selectedId);
   const saved = estimate ? Math.max(0, estimate.baselineUsd - estimate.estimateUsd) : 0;

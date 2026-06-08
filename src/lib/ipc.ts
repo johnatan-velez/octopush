@@ -465,9 +465,10 @@ export const ipc = {
   abortRun: (runId: string) =>
     invoke<void>("abort_run", { runId }),
 
-  estimateRunCost: (pipelineId: string) =>
+  estimateRunCost: (pipelineId: string, stageOverrides?: [number, string][]) =>
     invoke<{ estimateUsd: number; baselineUsd: number }>("estimate_run_cost", {
       pipelineId,
+      stageOverrides: stageOverrides ?? null,
     }),
 };
 
