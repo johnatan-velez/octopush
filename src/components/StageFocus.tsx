@@ -5,6 +5,8 @@ import { useRunsStore } from "../stores/runsStore";
 import { labelForRole } from "./RunTrack";
 import { DiffViewer } from "./DiffViewer";
 
+const EMPTY_LINES: string[] = [];
+
 interface ParsedArtifact {
   kind: string;
   text: string;
@@ -19,7 +21,8 @@ interface Props {
 export function StageFocus({ stage, workspacePath }: Props) {
   const [diff, setDiff] = useState<string>("");
   const [diffLoading, setDiffLoading] = useState(false);
-  const liveLog = useRunsStore((s) => s.liveLogByStage[stage?.id ?? ""] ?? "");
+  const liveLines = useRunsStore((s) => s.liveLogByStage[stage?.id ?? ""] ?? EMPTY_LINES);
+  const liveLog = useMemo(() => liveLines.join("\n"), [liveLines]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const artifact = useMemo<ParsedArtifact | null>(() => {
@@ -73,7 +76,15 @@ export function StageFocus({ stage, workspacePath }: Props) {
         className="chat-selectable flex-1 overflow-auto px-4 py-3 font-mono text-[12px] leading-relaxed text-octo-sage whitespace-pre-wrap"
       >
         {stage.status === "failed" && stage.error ? (
-          <span className="text-octo-rouge">{stage.error}</span>
+          <>
+            <span className="text-octo-rouge">{stage.error}</span>
+            {liveLog && (
+              <>
+                {"\n\n"}
+                <span className="text-octo-mute">{liveLog}</span>
+              </>
+            )}
+          </>
         ) : artifact ? (
           <>
             {artifact.text || "(no output text)"}
@@ -85,15 +96,10 @@ export function StageFocus({ stage, workspacePath }: Props) {
               ))}
           </>
         ) : stage.status === "running" ? (
-          liveLog ? (
-            <>
-              {liveLog}
-              {"\n"}
-              <span className="text-octo-brass">working…</span>
-            </>
-          ) : (
+          <>
+            {liveLog && <>{liveLog}{"\n"}</>}
             <span className="text-octo-brass">working…</span>
-          )
+          </>
         ) : (
           <span className="text-octo-mute">No artifact yet.</span>
         )}

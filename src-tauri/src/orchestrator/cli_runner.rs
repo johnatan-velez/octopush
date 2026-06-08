@@ -20,7 +20,12 @@ const MAX_CLI_TURNS: u32 = 30;
 const CLI_TIMEOUT_SECS: u64 = 900; // 15-minute wall-clock backstop for a hung CLI
 
 /// Frontend event for live per-stage progress lines (mirrors `RUN_EVENTS.log`).
-const RUN_LOG_EVENT: &str = "run://log";
+pub(crate) const RUN_LOG_EVENT: &str = "run://log";
+
+/// Preferred tool-input keys to surface as the one-line progress hint, in
+/// priority order — JSON object iteration order is not meaningful, so we pick
+/// the most descriptive argument explicitly before falling back to any string.
+const TOOL_HINT_KEYS: &[&str] = &["command", "file_path", "path", "pattern", "query", "url", "prompt"];
 
 #[derive(Deserialize, Debug, Default)]
 struct CliResult {
@@ -251,11 +256,16 @@ pub fn render_stream_event(v: &Value) -> Option<String> {
             }
             Some("tool_use") => {
                 let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
-                // First string argument (path/command/pattern) as a one-line hint.
+                // A descriptive argument (path/command/pattern) as a one-line hint.
                 let hint = block
                     .get("input")
                     .and_then(Value::as_object)
-                    .and_then(|o| o.values().find_map(Value::as_str))
+                    .and_then(|o| {
+                        TOOL_HINT_KEYS
+                            .iter()
+                            .find_map(|k| o.get(*k).and_then(Value::as_str))
+                            .or_else(|| o.values().find_map(Value::as_str))
+                    })
                     .map(|s| {
                         let first = s.lines().next().unwrap_or(s);
                         let clipped: String = first.chars().take(80).collect();
@@ -340,15 +350,32 @@ impl AgentRunner for CliRunner {
 
         // Stream stdout line-by-line: emit live progress per NDJSON event and
         // keep the final `result` event. Non-JSON lines (debug logs) are skipped,
-        // so a noisy stdout can't break result parsing.
+        // so a noisy stdout can't break result parsing. We read RAW BYTES and
+        // decode lossily — a chatty proxy can emit non-UTF-8 on stdout, and a
+        // UTF-8-only line reader would abort the whole stream on the first bad
+        // byte (losing the result event). A bounded tail of recent lines is kept
+        // for diagnostics when no result event ever arrives.
         let read_loop = async {
-            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            let mut reader = tokio::io::BufReader::new(stdout);
             let mut result_line: Option<String> = None;
-            while let Ok(Some(line)) = lines.next_line().await {
+            let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+            let mut raw: Vec<u8> = Vec::new();
+            loop {
+                raw.clear();
+                match reader.read_until(b'\n', &mut raw).await {
+                    Ok(0) => break,  // EOF
+                    Ok(_) => {}
+                    Err(_) => break, // read error → stop streaming, use what we have
+                }
+                let line = String::from_utf8_lossy(&raw);
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
+                if tail.len() >= 20 {
+                    tail.pop_front();
+                }
+                tail.push_back(trimmed.to_string());
                 let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
                     continue;
                 };
@@ -366,16 +393,16 @@ impl AgentRunner for CliRunner {
                     );
                 }
             }
-            result_line
+            (result_line, tail)
         };
 
-        let result_line = match tokio::time::timeout(
+        let (result_line, tail) = match tokio::time::timeout(
             std::time::Duration::from_secs(CLI_TIMEOUT_SECS),
             read_loop,
         )
         .await
         {
-            Ok(line) => line,
+            Ok(out) => out,
             // child is dropped on return → kill_on_drop terminates the process.
             Err(_) => {
                 return Ok(failed_stage(
@@ -384,33 +411,41 @@ impl AgentRunner for CliRunner {
             }
         };
 
-        let exit_success = child.wait().await.map(|s| s.success()).unwrap_or(false);
+        // We got a result event from claude (it ran to completion); trust its
+        // own `is_error` over a rare `wait()` hiccup, so default a wait error to
+        // success rather than failing a stage that actually succeeded.
+        let exit_success = child.wait().await.map(|s| s.success()).unwrap_or(true);
         let stderr_out = stderr_task.await.unwrap_or_default();
 
         match result_line {
             Some(line) => match parse_cli_result(&line, exit_success, &stage.role) {
                 Ok(outcome) => Ok(outcome),
-                Err(_) => {
-                    let detail = if !stderr_out.trim().is_empty() {
-                        stderr_out.chars().take(400).collect::<String>()
-                    } else {
-                        line.chars().take(400).collect::<String>()
-                    };
-                    Ok(failed_stage(&format!(
-                        "claude produced no parseable result: {detail}"
-                    )))
-                }
+                Err(_) => Ok(failed_stage(&format!(
+                    "claude produced no parseable result: {}",
+                    failure_detail(&stderr_out, &line)
+                ))),
             },
             None => {
-                let detail = if !stderr_out.trim().is_empty() {
-                    stderr_out.chars().take(400).collect::<String>()
+                let recent = tail.into_iter().collect::<Vec<_>>().join("\n");
+                let fallback = if recent.trim().is_empty() {
+                    "claude emitted no result event"
                 } else {
-                    "claude emitted no result event".to_string()
+                    &recent
                 };
-                Ok(failed_stage(&format!("claude produced no result: {detail}")))
+                Ok(failed_stage(&format!(
+                    "claude produced no result: {}",
+                    failure_detail(&stderr_out, fallback)
+                )))
             }
         }
     }
+}
+
+/// Preview (≤400 chars) of stderr if it has content, else of `fallback`
+/// (the unparseable result line or recent stdout tail) — for failure messages.
+fn failure_detail(stderr: &str, fallback: &str) -> String {
+    let src = if stderr.trim().is_empty() { fallback } else { stderr };
+    src.chars().take(400).collect()
 }
 
 fn failed_stage(msg: &str) -> StageOutcome {

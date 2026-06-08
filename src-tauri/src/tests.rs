@@ -2347,6 +2347,19 @@ mod cli_stream_tests {
     }
 
     #[test]
+    fn tool_use_hint_prefers_a_descriptive_key_over_map_order() {
+        // `content` sorts before `file_path` alphabetically; the hint must still
+        // surface the path, not the (possibly huge) file body.
+        let v = json!({
+            "type":"assistant",
+            "message":{"content":[
+                {"type":"tool_use","name":"Write","input":{"content":"AAAA","file_path":"src/x.rs"}}
+            ]}
+        });
+        assert_eq!(render_stream_event(&v).as_deref(), Some("§ Write src/x.rs"));
+    }
+
+    #[test]
     fn system_and_user_events_produce_no_progress_line() {
         assert_eq!(render_stream_event(&json!({"type":"system","subtype":"init"})), None);
         assert_eq!(

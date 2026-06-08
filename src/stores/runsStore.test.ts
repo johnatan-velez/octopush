@@ -55,6 +55,15 @@ describe("runsStore", () => {
     expect(lines[lines.length - 1]).toBe("L249");
   });
 
+  it("clearLog drops a stage's buffer so a re-run starts fresh", () => {
+    const s = useRunsStore.getState();
+    s.appendLog("st1", "old attempt");
+    s.clearLog("st1");
+    expect(useRunsStore.getState().getLiveLog("st1")).toBe("");
+    s.appendLog("st1", "new attempt");
+    expect(useRunsStore.getState().getLiveLog("st1")).toBe("new attempt");
+  });
+
   it("getRuns returns the stable empty default for an unknown workspace", () => {
     expect(useRunsStore.getState().getRuns("nope")).toBe(EMPTY_RUNS);
   });
