@@ -86,6 +86,9 @@ function buildState(opts: {
       keymap.of([
         { key: "Mod-s", run: () => { onSave(); return true; } },
         { key: "Mod-Shift-l", run: selectAllOccurrences },
+        { key: "Alt-z", run: () => { useEditorPrefs.getState().toggleWrap(); return true; } },
+        { key: "Mod-=", run: () => { useEditorPrefs.getState().bumpFontSize(1); return true; } },
+        { key: "Mod--", run: () => { useEditorPrefs.getState().bumpFontSize(-1); return true; } },
         indentWithTab,
         ...searchKeymap,
         ...defaultKeymap,
