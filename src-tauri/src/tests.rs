@@ -1812,3 +1812,41 @@ mod cost_tests {
         assert!(base > actual);
     }
 }
+
+#[cfg(test)]
+mod runner_helpers_tests {
+    use crate::orchestrator::runner::{artifact_kind_for, system_prompt_for, user_input_for};
+    use crate::orchestrator::types::{ArtifactKind, StageArtifact};
+
+    #[test]
+    fn role_maps_to_artifact_kind() {
+        assert_eq!(artifact_kind_for("plan"), ArtifactKind::Plan);
+        assert_eq!(artifact_kind_for("plan_review"), ArtifactKind::Review);
+        assert_eq!(artifact_kind_for("code_review"), ArtifactKind::Review);
+        assert_eq!(artifact_kind_for("implement"), ArtifactKind::Diff);
+        assert_eq!(artifact_kind_for("test"), ArtifactKind::Tests);
+        assert_eq!(artifact_kind_for("anything-else"), ArtifactKind::Note);
+    }
+
+    #[test]
+    fn system_prompt_is_role_specific() {
+        assert!(system_prompt_for("plan").to_lowercase().contains("plan"));
+        assert!(system_prompt_for("implement").to_lowercase().contains("implement"));
+    }
+
+    #[test]
+    fn user_input_includes_task_and_prior_artifact() {
+        let prior = StageArtifact {
+            kind: ArtifactKind::Plan,
+            text: "Step 1: do X".into(),
+            payload: None,
+            refs_worktree: false,
+        };
+        let input = user_input_for("implement", "Build feature Y", &prior, None);
+        assert!(input.contains("Build feature Y"));
+        assert!(input.contains("Step 1: do X"));
+
+        let with_fb = user_input_for("implement", "Build Y", &prior, Some("be more careful"));
+        assert!(with_fb.contains("be more careful"));
+    }
+}
