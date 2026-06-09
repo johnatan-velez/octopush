@@ -3,13 +3,14 @@ import { listen } from "@tauri-apps/api/event";
 import {
   ipc,
   RUN_EVENTS,
+  type LiveEntry,
   type Run,
   type RunDetail,
   type CheckpointActionName,
 } from "../lib/ipc";
 
 export const EMPTY_RUNS: Run[] = [];
-const EMPTY_LOG: string[] = [];
+const EMPTY_ENTRIES: LiveEntry[] = [];
 const MAX_LOG_LINES = 200;
 
 const TERMINAL = new Set(["completed", "aborted", "failed"]);
@@ -22,15 +23,15 @@ interface RunsState {
   activeRunIdByWs: Record<string, string | null>;
   detailByRun: Record<string, RunDetail>;
   selectedStageByRun: Record<string, string | null>;
-  /** Live progress lines per stage id, streamed from the CLI substrate. */
-  liveLogByStage: Record<string, string[]>;
+  /** Structured live activity entries per stage id, streamed from both substrates. */
+  liveByStage: Record<string, LiveEntry[]>;
 
   getRuns: (workspaceId: string) => Run[];
   getActiveRunId: (workspaceId: string) => string | null;
   getDetail: (runId: string) => RunDetail | undefined;
   getSelectedStageId: (runId: string) => string | null;
-  getLiveLog: (stageId: string) => string;
-  appendLog: (stageId: string, line: string) => void;
+  getLiveEntries: (stageId: string) => LiveEntry[];
+  appendEntry: (stageId: string, entry: LiveEntry) => void;
   clearLog: (stageId: string) => void;
 
   loadRuns: (workspaceId: string) => Promise<void>;
@@ -68,31 +69,30 @@ export const useRunsStore = create<RunsState>((set, get) => ({
   activeRunIdByWs: {},
   detailByRun: {},
   selectedStageByRun: {},
-  liveLogByStage: {},
+  liveByStage: {},
 
   getRuns: (workspaceId) => get().runsByWs[workspaceId] ?? EMPTY_RUNS,
   getActiveRunId: (workspaceId) => get().activeRunIdByWs[workspaceId] ?? null,
   getDetail: (runId) => get().detailByRun[runId],
   getSelectedStageId: (runId) => get().selectedStageByRun[runId] ?? null,
-  getLiveLog: (stageId) => (get().liveLogByStage[stageId] ?? EMPTY_LOG).join("\n"),
+  getLiveEntries: (stageId) => get().liveByStage[stageId] ?? EMPTY_ENTRIES,
 
-  appendLog: (stageId, line) =>
+  appendEntry: (stageId, entry) =>
     set((s) => {
-      const prev = s.liveLogByStage[stageId] ?? EMPTY_LOG;
-      // O(1) append; bound to the most recent lines without re-splitting.
+      const prev = s.liveByStage[stageId] ?? EMPTY_ENTRIES;
       const next =
         prev.length >= MAX_LOG_LINES
-          ? [...prev.slice(prev.length - MAX_LOG_LINES + 1), line]
-          : [...prev, line];
-      return { liveLogByStage: { ...s.liveLogByStage, [stageId]: next } };
+          ? [...prev.slice(prev.length - MAX_LOG_LINES + 1), entry]
+          : [...prev, entry];
+      return { liveByStage: { ...s.liveByStage, [stageId]: next } };
     }),
 
   clearLog: (stageId) =>
     set((s) => {
-      if (!s.liveLogByStage[stageId]) return {};
-      const next = { ...s.liveLogByStage };
+      if (!s.liveByStage[stageId]) return {};
+      const next = { ...s.liveByStage };
       delete next[stageId];
-      return { liveLogByStage: next };
+      return { liveByStage: next };
     }),
 
   loadRuns: async (workspaceId) => {
@@ -196,11 +196,11 @@ void listen<{ runId: string }>(RUN_EVENTS.checkpoint, (ev) => {
 void listen<{ runId: string; error: string }>(RUN_EVENTS.error, (ev) => {
   void useRunsStore.getState().refreshDetail(ev.payload.runId);
 });
-void listen<{ runId: string; stageId: string; line?: string; reset?: boolean }>(
+void listen<{ runId: string; stageId: string; entry?: LiveEntry; reset?: boolean }>(
   RUN_EVENTS.log,
   (ev) => {
     const store = useRunsStore.getState();
     if (ev.payload.reset) store.clearLog(ev.payload.stageId);
-    else if (ev.payload.line != null) store.appendLog(ev.payload.stageId, ev.payload.line);
+    else if (ev.payload.entry) store.appendEntry(ev.payload.stageId, ev.payload.entry);
   },
 );

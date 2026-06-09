@@ -36,33 +36,35 @@ describe("runsStore", () => {
   beforeEach(() => {
     useRunsStore.setState({
       runsByWs: {}, activeRunIdByWs: {}, detailByRun: {}, selectedStageByRun: {},
-      liveLogByStage: {},
+      liveByStage: {},
     });
     vi.clearAllMocks();
   });
 
-  it("appendLog accumulates live lines per stage and caps the buffer", () => {
+  it("appendEntry accumulates structured entries per stage and caps the buffer", () => {
     const s = useRunsStore.getState();
-    s.appendLog("st1", "first");
-    s.appendLog("st1", "§ Edit src/x.rs");
-    expect(useRunsStore.getState().getLiveLog("st1")).toBe("first\n§ Edit src/x.rs");
-    // A different stage keeps its own buffer.
-    s.appendLog("st2", "other");
-    expect(useRunsStore.getState().getLiveLog("st2")).toBe("other");
-    // Bounded to the most recent 200 lines.
-    for (let i = 0; i < 250; i++) useRunsStore.getState().appendLog("st1", `L${i}`);
-    const lines = useRunsStore.getState().getLiveLog("st1").split("\n");
-    expect(lines.length).toBe(200);
-    expect(lines[lines.length - 1]).toBe("L249");
+    s.appendEntry("st1", { kind: "text", text: "first" });
+    s.appendEntry("st1", { kind: "tool", tool: "Edit", hint: "src/x.rs" });
+    const e = useRunsStore.getState().getLiveEntries("st1");
+    expect(e).toEqual([
+      { kind: "text", text: "first" },
+      { kind: "tool", tool: "Edit", hint: "src/x.rs" },
+    ]);
+    // a different stage keeps its own buffer
+    s.appendEntry("st2", { kind: "notice", text: "other" });
+    expect(useRunsStore.getState().getLiveEntries("st2")).toHaveLength(1);
+    // bounded to the most recent 200
+    for (let i = 0; i < 250; i++) useRunsStore.getState().appendEntry("st1", { kind: "text", text: `L${i}` });
+    const capped = useRunsStore.getState().getLiveEntries("st1");
+    expect(capped.length).toBe(200);
+    expect(capped[capped.length - 1]).toEqual({ kind: "text", text: "L249" });
   });
 
   it("clearLog drops a stage's buffer so a re-run starts fresh", () => {
     const s = useRunsStore.getState();
-    s.appendLog("st1", "old attempt");
+    s.appendEntry("st1", { kind: "text", text: "old" });
     s.clearLog("st1");
-    expect(useRunsStore.getState().getLiveLog("st1")).toBe("");
-    s.appendLog("st1", "new attempt");
-    expect(useRunsStore.getState().getLiveLog("st1")).toBe("new attempt");
+    expect(useRunsStore.getState().getLiveEntries("st1")).toEqual([]);
   });
 
   it("getRuns returns the stable empty default for an unknown workspace", () => {

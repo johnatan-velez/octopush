@@ -72,6 +72,13 @@ export interface RunDetail {
 }
 export type CheckpointActionName = "approve" | "reject" | "edit" | "abort" | "send_back";
 
+/** One live-activity entry streamed on `run://log` (see RUN_EVENTS.log). */
+export type LiveEntry =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; tool: string; hint: string }
+  | { kind: "tool_result"; ok: boolean; detail: string }
+  | { kind: "notice"; text: string };
+
 export type FileReadResult =
   | { kind: "text"; content: string; size: number; mtime: number }
   | { kind: "binary"; size: number; mtime: number }
@@ -515,7 +522,7 @@ export const RUN_EVENTS = {
   cost: "run://cost",
   checkpoint: "run://checkpoint",
   error: "run://error",
-  /** Live per-stage progress lines, streamed by the CLI substrate. Payload:
-   *  `{ runId, stageId, line }`. */
+  /** Live per-stage activity, streamed by both substrates. Payload:
+   *  `{ runId, stageId, entry: LiveEntry }` or `{ runId, stageId, reset: true }`. */
   log: "run://log",
 } as const;

@@ -1733,10 +1733,18 @@ mod orchestrator_types_tests {
 #[cfg(test)]
 mod agentic_loop_tests {
     use crate::orchestrator::agentic::run_agentic_loop;
+    use crate::orchestrator::events::EventSink;
+    use crate::orchestrator::live::LiveEmitter;
     use crate::providers::{
         LlmProvider, LlmRequest, LlmResponse, LlmStopReason, LlmToolUse,
     };
     use parking_lot::Mutex;
+    use serde_json::Value;
+
+    struct NoopSink;
+    impl EventSink for NoopSink {
+        fn emit(&self, _event: &str, _payload: Value) {}
+    }
 
     /// A provider that returns a scripted sequence of responses.
     struct ScriptedProvider {
@@ -1787,6 +1795,8 @@ mod agentic_loop_tests {
             ]),
         };
         let client = reqwest::Client::new();
+        let sink = NoopSink;
+        let emitter = LiveEmitter::new(&sink, "test-run", "test-stage");
         let result = run_agentic_loop(
             &provider,
             "http://unused",
@@ -1797,6 +1807,7 @@ mod agentic_loop_tests {
             "do something",
             tmp.path(),
             25,
+            &emitter,
         )
         .await
         .unwrap();
@@ -2554,64 +2565,28 @@ mod cli_args_tests {
 
 #[cfg(test)]
 mod cli_stream_tests {
-    use crate::orchestrator::cli_runner::{is_result_event, render_stream_event};
+    use crate::orchestrator::cli_runner::is_result_event;
     use serde_json::json;
 
     #[test]
-    fn result_event_is_detected_and_not_rendered_as_progress() {
+    fn result_event_is_detected() {
         let v = json!({"type":"result","subtype":"success","result":"done","is_error":false});
         assert!(is_result_event(&v));
-        // The result text is the artifact, not a progress line.
-        assert_eq!(render_stream_event(&v), None);
     }
 
     #[test]
-    fn assistant_text_block_renders_as_a_progress_line() {
+    fn non_result_event_is_not_detected() {
         let v = json!({
             "type":"assistant",
             "message":{"content":[{"type":"text","text":"  Reading the codebase.  "}]}
         });
         assert!(!is_result_event(&v));
-        assert_eq!(render_stream_event(&v).as_deref(), Some("Reading the codebase."));
     }
 
     #[test]
-    fn assistant_tool_use_renders_with_glyph_name_and_hint() {
-        let v = json!({
-            "type":"assistant",
-            "message":{"content":[
-                {"type":"tool_use","name":"Edit","input":{"file_path":"src/lib.rs","old":"a"}}
-            ]}
-        });
-        assert_eq!(render_stream_event(&v).as_deref(), Some("§ Edit src/lib.rs"));
-    }
-
-    #[test]
-    fn tool_use_hint_prefers_a_descriptive_key_over_map_order() {
-        // `content` sorts before `file_path` alphabetically; the hint must still
-        // surface the path, not the (possibly huge) file body.
-        let v = json!({
-            "type":"assistant",
-            "message":{"content":[
-                {"type":"tool_use","name":"Write","input":{"content":"AAAA","file_path":"src/x.rs"}}
-            ]}
-        });
-        assert_eq!(render_stream_event(&v).as_deref(), Some("§ Write src/x.rs"));
-    }
-
-    #[test]
-    fn system_and_user_events_produce_no_progress_line() {
-        assert_eq!(render_stream_event(&json!({"type":"system","subtype":"init"})), None);
-        assert_eq!(
-            render_stream_event(&json!({"type":"user","message":{"content":[]}})),
-            None
-        );
-    }
-
-    #[test]
-    fn empty_assistant_content_yields_nothing() {
-        let v = json!({"type":"assistant","message":{"content":[]}});
-        assert_eq!(render_stream_event(&v), None);
+    fn system_and_user_events_are_not_result() {
+        assert!(!is_result_event(&json!({"type":"system","subtype":"init"})));
+        assert!(!is_result_event(&json!({"type":"user","message":{"content":[]}})));
     }
 }
 
@@ -2849,5 +2824,156 @@ mod g4_staging_tests {
         std::fs::write(dir.path().join("feature/b.txt"), "y").unwrap();
         discard_file_inner(dir.path().to_str().unwrap(), "feature").unwrap();
         assert!(!dir.path().join("feature").exists(), "untracked dir should be removed");
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use crate::orchestrator::events::EventSink;
+    use crate::orchestrator::live::{entries_from_stream_event, summarize, tool_hint, LiveEmitter};
+    use parking_lot::Mutex;
+    use serde_json::{json, Value};
+    use crate::orchestrator::agentic::run_agentic_loop;
+    use crate::providers::{LlmProvider, LlmRequest, LlmResponse, LlmStopReason, LlmToolUse};
+    use std::collections::VecDeque;
+
+    struct ScriptedProvider { turns: Mutex<VecDeque<LlmResponse>> }
+    #[async_trait::async_trait]
+    impl LlmProvider for ScriptedProvider {
+        async fn complete(&self, _b: &str, _k: Option<&str>, _r: &LlmRequest, _c: &reqwest::Client)
+            -> crate::error::AppResult<LlmResponse> {
+            Ok(self.turns.lock().pop_front().expect("ScriptedProvider ran out of turns"))
+        }
+    }
+    fn resp(text: &str, tools: Vec<LlmToolUse>, stop: LlmStopReason) -> LlmResponse {
+        LlmResponse { text: text.into(), tool_uses: tools, stop_reason: stop,
+            input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0 }
+    }
+
+    #[tokio::test]
+    async fn agentic_loop_streams_text_tool_and_result() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn main() {}\n").unwrap();
+
+        let provider = ScriptedProvider { turns: Mutex::new(VecDeque::from(vec![
+            resp("inspecting the change",
+                 vec![LlmToolUse { id: "t1".into(), name: "read_file".into(),
+                       input: serde_json::json!({"path": "a.rs"}) }],
+                 LlmStopReason::ToolUse),
+            resp("looks good", vec![], LlmStopReason::EndTurn),
+        ])) };
+
+        let rec = Recorder { events: Mutex::new(vec![]) };
+        let em = LiveEmitter::new(&rec, "r", "s");
+        let client = reqwest::Client::new();
+        let out = run_agentic_loop(&provider, "http://x", None, &client, "m",
+                                   "sys", "do it", dir.path(), 10, &em).await.unwrap();
+
+        assert_eq!(out.text, "looks good"); // final answer is the artifact, not a live entry
+        let kinds: Vec<String> = rec.events.lock().iter()
+            .map(|(_, p)| p["entry"]["kind"].as_str().unwrap().to_string()).collect();
+        assert_eq!(kinds, vec!["text", "tool", "tool_result"]);
+        // the tool entry carries the name + hint
+        let tool = &rec.events.lock()[1].1["entry"];
+        assert_eq!(tool["tool"], "read_file");
+        assert_eq!(tool["hint"], "a.rs");
+    }
+
+    struct Recorder { events: Mutex<Vec<(String, Value)>> }
+    impl EventSink for Recorder {
+        fn emit(&self, event: &str, payload: Value) { self.events.lock().push((event.to_string(), payload)); }
+    }
+
+    #[test]
+    fn live_emitter_emits_structured_run_log_entries() {
+        let rec = Recorder { events: Mutex::new(vec![]) };
+        let em = LiveEmitter::new(&rec, "run1", "stageA");
+        em.text("  reading the code  ");
+        em.tool("Edit", "src/auth.rs");
+        em.tool_result(true, "12 lines");
+        em.notice("Verdict: changes requested");
+        em.text("   "); // blank → skipped
+
+        let ev = rec.events.lock();
+        assert_eq!(ev.len(), 4); // blank text skipped
+        for (name, _) in ev.iter() { assert_eq!(name, "run://log"); }
+        assert_eq!(ev[0].1, json!({"runId":"run1","stageId":"stageA","entry":{"kind":"text","text":"reading the code"}}));
+        assert_eq!(ev[1].1, json!({"runId":"run1","stageId":"stageA","entry":{"kind":"tool","tool":"Edit","hint":"src/auth.rs"}}));
+        assert_eq!(ev[2].1, json!({"runId":"run1","stageId":"stageA","entry":{"kind":"tool_result","ok":true,"detail":"12 lines"}}));
+        assert_eq!(ev[3].1, json!({"runId":"run1","stageId":"stageA","entry":{"kind":"notice","text":"Verdict: changes requested"}}));
+    }
+
+    #[test]
+    fn tool_hint_prefers_descriptive_keys_and_summarize_caps() {
+        assert_eq!(tool_hint(&json!({"content":"AAAA","file_path":"src/x.rs"})), "src/x.rs");
+        assert_eq!(tool_hint(&json!({"command":"cargo test"})), "cargo test");
+        assert_eq!(tool_hint(&json!({})), "");
+        // summarize: first line, capped at 120 chars
+        assert_eq!(summarize("ok\nmore"), "ok");
+        let long = "x".repeat(200);
+        assert_eq!(summarize(&long).chars().count(), 120);
+    }
+
+    #[test]
+    fn entries_from_stream_event_maps_assistant_and_skips_result() {
+        // assistant text + tool_use → [text, tool]
+        let asst = json!({"type":"assistant","message":{"content":[
+            {"type":"text","text":"reviewing"},
+            {"type":"tool_use","name":"Read","input":{"file_path":"src/a.rs"}}
+        ]}});
+        let es = entries_from_stream_event(&asst);
+        assert_eq!(es.len(), 2);
+        assert_eq!(es[0], json!({"kind":"text","text":"reviewing"}));
+        assert_eq!(es[1], json!({"kind":"tool","tool":"Read","hint":"src/a.rs"}));
+        // user tool_result → [tool_result]
+        let user = json!({"type":"user","message":{"content":[
+            {"type":"tool_result","is_error":false,"content":"42 lines"}
+        ]}});
+        let ue = entries_from_stream_event(&user);
+        assert_eq!(ue.len(), 1);
+        assert_eq!(ue[0], json!({"kind":"tool_result","ok":true,"detail":"42 lines"}));
+        // result/system → none
+        assert!(entries_from_stream_event(&json!({"type":"result","subtype":"success"})).is_empty());
+        assert!(entries_from_stream_event(&json!({"type":"system","subtype":"init"})).is_empty());
+    }
+
+    #[test]
+    fn cli_stream_tool_result_reflects_is_error() {
+        let err = serde_json::json!({"type":"user","message":{"content":[
+            {"type":"tool_result","is_error":true,"content":"boom: file not found"}
+        ]}});
+        let es = crate::orchestrator::live::entries_from_stream_event(&err);
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0]["kind"], "tool_result");
+        assert_eq!(es[0]["ok"], false);
+        assert_eq!(es[0]["detail"], "boom: file not found");
+    }
+
+    // Fix 1: tool_result content as array of blocks yields joined text.
+    #[test]
+    fn tool_result_array_content_is_joined() {
+        let user = json!({"type":"user","message":{"content":[
+            {"type":"tool_result","is_error":false,"content":[
+                {"type":"text","text":"42 lines"}
+            ]}
+        ]}});
+        let es = crate::orchestrator::live::entries_from_stream_event(&user);
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0]["kind"], "tool_result");
+        assert_eq!(es[0]["ok"], true);
+        assert_eq!(es[0]["detail"], "42 lines");
+    }
+
+    // Fix 2: looks_like_error correctly classifies error/success strings.
+    #[test]
+    fn looks_like_error_detects_failures() {
+        use crate::orchestrator::live::looks_like_error;
+        assert!(looks_like_error("Error: no such file"));
+        assert!(looks_like_error("failed to open file"));
+        assert!(looks_like_error("Could not parse input"));
+        assert!(looks_like_error("Cannot write to path"));
+        assert!(!looks_like_error("42 lines"));
+        assert!(!looks_like_error("ok"));
+        assert!(!looks_like_error("  \n42 lines changed"));
     }
 }
