@@ -102,6 +102,15 @@ impl Orchestrator {
                 == Some(crate::orchestrator::types::LoopMode::Gated)
     }
 
+    /// A just-completed stage that should be driven automatically by its verdict
+    /// (auto mode): carries auto loop config with a target and a positive cap.
+    fn stage_has_auto_loop(stage: &crate::db::RunStageRow) -> bool {
+        stage.loop_target_position.is_some()
+            && stage.loop_max_iterations > 0
+            && stage.loop_mode.as_deref().and_then(crate::orchestrator::types::LoopMode::from_db)
+                == Some(crate::orchestrator::types::LoopMode::Auto)
+    }
+
     /// Reset the contiguous [target..=review] range to pending (re-running the
     /// target + intervening stages with `feedback` on the target), retiring the
     /// erased cost and bumping the loop counter. Shared by gated SendBack and the
@@ -351,7 +360,7 @@ impl Orchestrator {
             }
 
             let stage = stage.clone();
-            let (status, _verdict) = self.run_stage_once(&run, &stage).await?;
+            let (status, verdict) = self.run_stage_once(&run, &stage).await?;
             self.emit_run_update(run_id);
 
             match status {
@@ -360,15 +369,47 @@ impl Orchestrator {
                     self.emit_checkpoint(run_id, &stage.id);
                     return Ok(RunStatus::Paused);
                 }
-                StageStatus::Done if stage.checkpoint || Self::stage_has_gated_loop(&stage) => {
-                    self.db
-                        .lock()
-                        .set_run_stage_status(&stage.id, "awaiting_checkpoint")?;
-                    self.db.lock().set_run_status(run_id, "paused", false)?;
-                    self.emit_checkpoint(run_id, &stage.id);
-                    return Ok(RunStatus::Paused);
+                StageStatus::Done => {
+                    // Auto-loop verdict decision runs BEFORE gated/checkpoint pause.
+                    if Self::stage_has_auto_loop(&stage) {
+                        let remaining = stage.loop_iterations < stage.loop_max_iterations;
+                        match verdict {
+                            Some(ReviewVerdict::Pass) => {
+                                // Fall through to checkpoint/continue below.
+                            }
+                            Some(ReviewVerdict::ChangesRequested) if remaining => {
+                                // Re-read the freshly-persisted stage to get the artifact.
+                                let fresh_stages = self.db.lock().list_run_stages(run_id)?;
+                                let fresh = fresh_stages.iter().find(|s| s.id == stage.id);
+                                let findings = fresh
+                                    .and_then(|s| s.artifact.as_deref())
+                                    .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+                                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(str::to_string));
+                                self.loop_back(run_id, &stage, findings.as_deref())?;
+                                self.emit_run_update(run_id);
+                                continue;
+                            }
+                            _ => {
+                                // ChangesRequested at cap, or unparseable verdict → gate.
+                                self.db.lock().set_run_stage_status(&stage.id, "awaiting_checkpoint")?;
+                                self.db.lock().set_run_status(run_id, "paused", false)?;
+                                self.emit_checkpoint(run_id, &stage.id);
+                                return Ok(RunStatus::Paused);
+                            }
+                        }
+                    }
+                    // Existing gated/checkpoint handling (also handles auto Pass fall-through).
+                    if stage.checkpoint || Self::stage_has_gated_loop(&stage) {
+                        self.db
+                            .lock()
+                            .set_run_stage_status(&stage.id, "awaiting_checkpoint")?;
+                        self.db.lock().set_run_status(run_id, "paused", false)?;
+                        self.emit_checkpoint(run_id, &stage.id);
+                        return Ok(RunStatus::Paused);
+                    }
+                    // else continue to next stage
                 }
-                _ => { /* continue to next stage */ }
+                _ => { /* other statuses — continue to next stage */ }
             }
         }
     }
