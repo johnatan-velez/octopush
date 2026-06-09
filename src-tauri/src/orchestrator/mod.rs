@@ -102,6 +102,26 @@ impl Orchestrator {
                 == Some(crate::orchestrator::types::LoopMode::Gated)
     }
 
+    /// Reset the contiguous [target..=review] range to pending (re-running the
+    /// target + intervening stages with `feedback` on the target), retiring the
+    /// erased cost and bumping the loop counter. Shared by gated SendBack and the
+    /// auto loop. Caller guarantees `review` has a valid `loop_target_position`
+    /// strictly before `review.position` and iterations remaining.
+    fn loop_back(&self, run_id: &str, review: &crate::db::RunStageRow, feedback: Option<&str>) -> AppResult<()> {
+        let target_pos = review.loop_target_position.expect("loop_back requires a target");
+        let stages = self.db.lock().list_run_stages(run_id)?;
+        for s in &stages {
+            if s.position >= target_pos && s.position <= review.position {
+                self.db.lock().retire_stage_cost(run_id, s.cost_usd, s.input_tokens, s.output_tokens)?;
+                let fb = if s.position == target_pos { feedback } else { None };
+                self.db.lock().reset_run_stage(&s.id, None, fb)?;
+            }
+        }
+        self.db.lock().increment_loop_iteration(&review.id)?;
+        self.recompute_run_cost(run_id)?;
+        Ok(())
+    }
+
     fn workspace_path(&self, run: &crate::db::RunRow) -> AppResult<PathBuf> {
         let path: Option<String> = self.db.lock().conn_ref_path(&run.workspace_id)?;
         path.map(PathBuf::from)
@@ -113,7 +133,7 @@ impl Orchestrator {
         &self,
         run: &crate::db::RunRow,
         stage: &RunStageRow,
-    ) -> AppResult<StageStatus> {
+    ) -> AppResult<(StageStatus, Option<ReviewVerdict>)> {
         let substrate = match AgentSubstrate::from_db(&stage.substrate) {
             Some(s) => s,
             None => {
@@ -121,7 +141,7 @@ impl Orchestrator {
                     &stage.id,
                     &format!("unknown substrate '{}'", stage.substrate),
                 )?;
-                return Ok(StageStatus::Failed);
+                return Ok((StageStatus::Failed, None));
             }
         };
         let spec = StageSpec {
@@ -172,12 +192,13 @@ impl Orchestrator {
             Ok(o) => o,
             Err(e) => {
                 self.db.lock().fail_run_stage(&stage.id, &e.to_string())?;
-                return Ok(StageStatus::Failed);
+                return Ok((StageStatus::Failed, None));
             }
         };
 
         match outcome.status {
             StageStatus::Done => {
+                let verdict = outcome.verdict.clone();
                 let artifact_json = serde_json::to_string(&outcome.artifact)?;
                 self.db.lock().complete_run_stage(
                     &stage.id,
@@ -188,12 +209,12 @@ impl Orchestrator {
                     Some(&artifact_json),
                 )?;
                 self.recompute_run_cost(&run.id)?;
-                Ok(StageStatus::Done)
+                Ok((StageStatus::Done, verdict))
             }
             _ => {
                 let err = outcome.error.unwrap_or_else(|| "stage failed".into());
                 self.db.lock().fail_run_stage(&stage.id, &err)?;
-                Ok(StageStatus::Failed)
+                Ok((StageStatus::Failed, None))
             }
         }
     }
@@ -330,7 +351,7 @@ impl Orchestrator {
             }
 
             let stage = stage.clone();
-            let status = self.run_stage_once(&run, &stage).await?;
+            let (status, _verdict) = self.run_stage_once(&run, &stage).await?;
             self.emit_run_update(run_id);
 
             match status {
@@ -406,19 +427,7 @@ impl Orchestrator {
                             None => false,
                         };
                         if can_loop {
-                            let target_pos = review.loop_target_position.unwrap();
-                            // Retire each stage's cost BEFORE resetting it (reset zeroes cost).
-                            for s in &stages {
-                                if s.position >= target_pos && s.position <= review.position {
-                                    self.db.lock().retire_stage_cost(
-                                        run_id, s.cost_usd, s.input_tokens, s.output_tokens,
-                                    )?;
-                                    let fb = if s.position == target_pos { feedback.as_deref() } else { None };
-                                    self.db.lock().reset_run_stage(&s.id, None, fb)?;
-                                }
-                            }
-                            self.db.lock().increment_loop_iteration(&review.id)?;
-                            self.recompute_run_cost(run_id)?;
+                            self.loop_back(run_id, review, feedback.as_deref())?;
                         } else {
                             // No usable loop (no/invalid target or cap reached) → accept the review.
                             self.db.lock().set_run_stage_status(&review.id, "done")?;
