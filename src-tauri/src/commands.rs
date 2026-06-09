@@ -2057,6 +2057,19 @@ pub async fn get_message(
 
 // ─── Hunk operations ──────────────────────────────────────────────
 
+/// Map common `git apply` stderr to a plain-English message; fall back to the
+/// trimmed stderr for anything unrecognized.
+pub fn friendly_git_error(stderr: &str) -> String {
+    let s = stderr.to_lowercase();
+    if s.contains("patch does not apply") || s.contains("while searching for") {
+        "This change no longer matches the file — it may have changed since. Refresh the diff and try again.".to_string()
+    } else if s.contains("already exists in working directory") {
+        "That file already exists — can't apply the change.".to_string()
+    } else {
+        stderr.trim().to_string()
+    }
+}
+
 /// Apply a unified-diff hunk in reverse (undo a change).
 #[tauri::command]
 pub async fn revert_hunk(workspace_path: String, hunk_text: String) -> AppResult<()> {
@@ -2079,7 +2092,7 @@ pub async fn revert_hunk(workspace_path: String, hunk_text: String) -> AppResult
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::Other(format!("git apply --reverse failed: {stderr}")));
+        return Err(AppError::Other(friendly_git_error(&stderr)));
     }
     Ok(())
 }
@@ -2105,7 +2118,8 @@ pub async fn apply_hunk(workspace_path: String, hunk_text: String) -> AppResult<
         .map_err(|e| AppError::Other(format!("failed to run git apply: {e}")))?;
 
     if !output.status.success() {
-        return Err(AppError::Other(format!("git apply failed: {}", String::from_utf8_lossy(&output.stderr))));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Other(friendly_git_error(&stderr)));
     }
     Ok(())
 }
@@ -2132,7 +2146,7 @@ pub async fn stage_hunk(workspace_path: String, hunk_text: String) -> AppResult<
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::Other(format!("git apply --cached failed: {stderr}")));
+        return Err(AppError::Other(friendly_git_error(&stderr)));
     }
     Ok(())
 }
@@ -2878,6 +2892,106 @@ pub async fn ai_complete(
         output_tokens: resp.output_tokens,
         cost_usd: cost,
     })
+}
+
+// ─── G4 staging commands ──────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_staged_diff(path: String) -> AppResult<String> {
+    let path = expand_tilde(&path);
+    crate::git_ops::get_staged_diff_text(std::path::Path::new(&path))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastCommit { pub short_sha: String, pub subject: String, pub body: String }
+
+#[tauri::command]
+pub async fn get_last_commit(workspace_path: String) -> AppResult<Option<LastCommit>> {
+    let workspace_path = expand_tilde(&workspace_path);
+    Ok(crate::git_ops::last_commit(std::path::Path::new(&workspace_path))?
+        .map(|(short_sha, subject, body)| LastCommit { short_sha, subject, body }))
+}
+
+#[tauri::command]
+pub async fn amend_commit(workspace_path: String, message: String) -> AppResult<String> {
+    if message.trim().is_empty() {
+        return Err(AppError::Other("commit message cannot be empty".into()));
+    }
+    let workspace_path = expand_tilde(&workspace_path);
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+    let msg_escaped = message.replace('\'', "'\\''");
+    let cmd = format!("git commit --amend -m '{}'", msg_escaped);
+    let output = std::process::Command::new(&shell)
+        .arg("-l").arg("-c").arg(&cmd)
+        .current_dir(&workspace_path)
+        .output()
+        .map_err(|e| AppError::Other(format!("failed to spawn git commit --amend: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if !stderr.trim().is_empty() { stderr } else { stdout };
+        return Err(AppError::Other(format!("git commit --amend failed: {}", detail.trim())));
+    }
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(&workspace_path)
+        .output()
+        .map_err(|e| AppError::Other(format!("failed to read HEAD: {e}")))?;
+    Ok(String::from_utf8_lossy(&head.stdout).trim().to_string())
+}
+
+/// Sync core of `discard_file` (testable). Tracked → restore to HEAD; untracked → delete.
+pub(crate) fn discard_file_inner(workspace_path: &str, file_path: &str) -> AppResult<()> {
+    let ws = std::path::Path::new(workspace_path);
+    let full = ws.join(file_path);
+
+    // Containment guard: refuse to act on a path that resolves outside the workspace.
+    let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+    let full_canon = full.canonicalize().unwrap_or_else(|_| full.clone());
+    if !full_canon.starts_with(&ws_canon) {
+        return Err(AppError::Other("refusing to discard a path outside the workspace".into()));
+    }
+
+    // Is the file tracked (exists in HEAD)?
+    let tracked = std::process::Command::new("git")
+        .args(["cat-file", "-e", &format!("HEAD:{file_path}")])
+        .current_dir(workspace_path)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if tracked {
+        let output = std::process::Command::new("git")
+            .args(["restore", "--staged", "--worktree", "--", file_path])
+            .current_dir(workspace_path)
+            .output()
+            .map_err(|e| AppError::Other(format!("failed to run git restore: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AppError::Other(format!("discard failed: {}", stderr.trim())));
+        }
+    } else {
+        // Not in HEAD. It may still be staged as a new file — drain that index
+        // entry first (best-effort), then delete the worktree copy (file or dir).
+        let _ = std::process::Command::new("git")
+            .args(["restore", "--staged", "--", file_path])
+            .current_dir(workspace_path)
+            .output();
+        if full.is_dir() {
+            std::fs::remove_dir_all(&full)
+                .map_err(|e| AppError::Other(format!("discard (delete dir) failed: {e}")))?;
+        } else if full.exists() {
+            std::fs::remove_file(&full)
+                .map_err(|e| AppError::Other(format!("discard (delete) failed: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn discard_file(workspace_path: String, file_path: String) -> AppResult<()> {
+    let workspace_path = expand_tilde(&workspace_path);
+    discard_file_inner(&workspace_path, &file_path)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────

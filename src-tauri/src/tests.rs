@@ -2778,3 +2778,76 @@ mod file_io_checked_tests {
         assert_eq!(std::fs::read_to_string(f.path()).unwrap(), "saved");
     }
 }
+
+#[cfg(test)]
+mod g4_staging_tests {
+    use crate::commands::{discard_file_inner, friendly_git_error};
+    use std::process::Command;
+    use tempfile::tempdir;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let ok = Command::new("git").args(args).current_dir(dir).status().unwrap().success();
+        assert!(ok, "git {args:?} failed");
+    }
+    fn init_with_commit(dir: &std::path::Path) {
+        git(dir, &["init", "-q"]);
+        git(dir, &["config", "user.email", "t@t.dev"]);
+        git(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+    }
+
+    #[test]
+    fn friendly_git_error_maps_known_failures() {
+        assert!(friendly_git_error("error: patch does not apply").contains("no longer matches"));
+        assert!(friendly_git_error("error: while searching for:\n...").contains("no longer matches"));
+        assert!(friendly_git_error("already exists in working directory").contains("already exists"));
+        assert_eq!(friendly_git_error("  boom  "), "boom");
+    }
+
+    #[test]
+    fn discard_restores_tracked_file() {
+        let dir = tempdir().unwrap();
+        init_with_commit(dir.path());
+        std::fs::write(dir.path().join("a.txt"), "modified\n").unwrap();
+        discard_file_inner(dir.path().to_str().unwrap(), "a.txt").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "one\n");
+    }
+
+    #[test]
+    fn discard_deletes_untracked_file() {
+        let dir = tempdir().unwrap();
+        init_with_commit(dir.path());
+        std::fs::write(dir.path().join("new.txt"), "x").unwrap();
+        discard_file_inner(dir.path().to_str().unwrap(), "new.txt").unwrap();
+        assert!(!dir.path().join("new.txt").exists(), "untracked file should be deleted");
+    }
+
+    #[test]
+    fn discard_drains_staged_new_file() {
+        let dir = tempdir().unwrap();
+        init_with_commit(dir.path());
+        std::fs::write(dir.path().join("new.txt"), "x").unwrap();
+        git(dir.path(), &["add", "new.txt"]); // staged as new (status A)
+        discard_file_inner(dir.path().to_str().unwrap(), "new.txt").unwrap();
+        assert!(!dir.path().join("new.txt").exists(), "worktree copy deleted");
+        // Index no longer lists it as staged.
+        let out = std::process::Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(dir.path()).output().unwrap();
+        let staged = String::from_utf8_lossy(&out.stdout);
+        assert!(!staged.contains("new.txt"), "staged index entry drained, got: {staged}");
+    }
+
+    #[test]
+    fn discard_deletes_untracked_directory() {
+        let dir = tempdir().unwrap();
+        init_with_commit(dir.path());
+        std::fs::create_dir(dir.path().join("feature")).unwrap();
+        std::fs::write(dir.path().join("feature/a.txt"), "x").unwrap();
+        std::fs::write(dir.path().join("feature/b.txt"), "y").unwrap();
+        discard_file_inner(dir.path().to_str().unwrap(), "feature").unwrap();
+        assert!(!dir.path().join("feature").exists(), "untracked dir should be removed");
+    }
+}
