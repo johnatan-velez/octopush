@@ -328,6 +328,19 @@ impl Db {
                 "#,
             )?;
         }
+
+        // ── v5 Direct review feedback loop (Plan L1) ───────────────
+        add_column_if_missing(&self.conn, "ALTER TABLE pipeline_stages ADD COLUMN loop_target_position INTEGER")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE pipeline_stages ADD COLUMN loop_max_iterations INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE pipeline_stages ADD COLUMN loop_mode TEXT")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE run_stages ADD COLUMN loop_target_position INTEGER")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE run_stages ADD COLUMN loop_max_iterations INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE run_stages ADD COLUMN loop_mode TEXT")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE run_stages ADD COLUMN loop_iterations INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE runs ADD COLUMN retired_cost_usd REAL NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE runs ADD COLUMN retired_input_tokens INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "ALTER TABLE runs ADD COLUMN retired_output_tokens INTEGER NOT NULL DEFAULT 0")?;
+
         Ok(())
     }
 
@@ -1373,7 +1386,8 @@ impl Db {
 
     pub fn get_pipeline_stages(&self, pipeline_id: &str) -> AppResult<Vec<PipelineStageRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, pipeline_id, position, role, agent_model, substrate, checkpoint
+            "SELECT id, pipeline_id, position, role, agent_model, substrate, checkpoint,
+                    loop_target_position, loop_max_iterations, loop_mode
              FROM pipeline_stages WHERE pipeline_id = ?1 ORDER BY position",
         )?;
         let rows = stmt.query_map(params![pipeline_id], |r| {
@@ -1385,6 +1399,9 @@ impl Db {
                 agent_model: r.get(4)?,
                 substrate: r.get(5)?,
                 checkpoint: r.get::<_, i64>(6)? != 0,
+                loop_target_position: r.get(7)?,
+                loop_max_iterations: r.get(8)?,
+                loop_mode: r.get(9)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -1406,6 +1423,7 @@ impl Db {
         Ok(id)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_pipeline_stage(
         &self,
         pipeline_id: &str,
@@ -1414,12 +1432,18 @@ impl Db {
         agent_model: &str,
         substrate: &str,
         checkpoint: bool,
+        loop_target_position: Option<i64>,
+        loop_max_iterations: i64,
+        loop_mode: Option<&str>,
     ) -> AppResult<String> {
         let id = Uuid::new_v4().to_string();
         self.conn.execute(
-            "INSERT INTO pipeline_stages (id, pipeline_id, position, role, agent_model, substrate, checkpoint)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![id, pipeline_id, position, role, agent_model, substrate, checkpoint as i64],
+            "INSERT INTO pipeline_stages
+                (id, pipeline_id, position, role, agent_model, substrate, checkpoint,
+                 loop_target_position, loop_max_iterations, loop_mode)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![id, pipeline_id, position, role, agent_model, substrate, checkpoint as i64,
+                    loop_target_position, loop_max_iterations, loop_mode],
         )?;
         Ok(id)
     }
@@ -1481,7 +1505,7 @@ impl Db {
             }
             let pid = self.insert_pipeline(name, desc, true)?;
             for (i, (role, model, substrate, checkpoint)) in stages.iter().enumerate() {
-                self.insert_pipeline_stage(&pid, i as i64, role, model, substrate, *checkpoint)?;
+                self.insert_pipeline_stage(&pid, i as i64, role, model, substrate, *checkpoint, None, 0, None)?;
             }
         }
         Ok(())
@@ -1797,6 +1821,9 @@ pub struct PipelineStageRow {
     pub agent_model: String,
     pub substrate: String,
     pub checkpoint: bool,
+    pub loop_target_position: Option<i64>,
+    pub loop_max_iterations: i64,
+    pub loop_mode: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]

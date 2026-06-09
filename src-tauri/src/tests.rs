@@ -2032,6 +2032,21 @@ mod run_crud_tests {
         let plan = stages.iter().find(|s| s.position == 0).unwrap();
         assert_ne!(plan.agent_model, "claude-opus-4-6");
     }
+
+    #[test]
+    fn pipeline_stage_loop_config_roundtrips() {
+        let db = test_db();
+        let pid = db.insert_pipeline("P", "d", false).unwrap();
+        db.insert_pipeline_stage(&pid, 0, "implement", "m", "api", false, None, 0, None).unwrap();
+        db.insert_pipeline_stage(&pid, 1, "code_review", "m", "api", true, Some(0), 2, Some("gated")).unwrap();
+        let stages = db.get_pipeline_stages(&pid).unwrap();
+        assert_eq!(stages[0].loop_target_position, None);
+        assert_eq!(stages[0].loop_max_iterations, 0);
+        assert_eq!(stages[0].loop_mode, None);
+        assert_eq!(stages[1].loop_target_position, Some(0));
+        assert_eq!(stages[1].loop_max_iterations, 2);
+        assert_eq!(stages[1].loop_mode.as_deref(), Some("gated"));
+    }
 }
 
 #[cfg(test)]

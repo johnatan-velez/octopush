@@ -54,6 +54,31 @@ impl AgentSubstrate {
     }
 }
 
+/// How a review stage's loop-back behaves. Persisted as text in
+/// `*_stages.loop_mode`; absent/unknown ⇒ no loop (linear).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum LoopMode {
+    Gated,
+    Auto,
+}
+
+impl LoopMode {
+    pub fn as_db(&self) -> &'static str {
+        match self {
+            LoopMode::Gated => "gated",
+            LoopMode::Auto => "auto",
+        }
+    }
+    pub fn from_db(s: &str) -> Option<Self> {
+        match s {
+            "gated" => Some(LoopMode::Gated),
+            "auto" => Some(LoopMode::Auto),
+            _ => None,
+        }
+    }
+}
+
 /// Per-stage lifecycle status (persisted as text in `run_stages.status`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum StageStatus {
