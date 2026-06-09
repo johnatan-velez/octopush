@@ -1451,45 +1451,45 @@ impl Db {
     /// Insert the three curated pipelines if they are not already present.
     /// Idempotent: keyed on the builtin name.
     pub fn seed_builtin_pipelines(&self) -> AppResult<()> {
-        // (name, description, [(role, model, substrate, checkpoint)])
-        let defs: &[(&str, &str, &[(&str, &str, &str, bool)])] = &[
+        // (name, description, [(role, model, substrate, checkpoint, loop_target, loop_max, loop_mode)])
+        let defs: &[(&str, &str, &[(&str, &str, &str, bool, Option<i64>, i64, Option<&str>)])] = &[
             (
                 "Feature Factory",
                 "Full build: plan, review, implement, review, test.",
                 &[
-                    ("plan", "claude-haiku-4-5", "api", false),
-                    ("plan_review", "claude-haiku-4-5", "api", false),
-                    ("implement", "claude-sonnet-4-6", "api", true),
-                    ("code_review", "claude-haiku-4-5", "api", true),
-                    ("test", "claude-haiku-4-5", "api", true),
+                    ("plan",        "claude-haiku-4-5",   "api", false, None,    0, None),
+                    ("plan_review", "claude-haiku-4-5",   "api", false, None,    0, None),
+                    ("implement",   "claude-sonnet-4-6",  "api", true,  None,    0, None),
+                    ("code_review", "claude-haiku-4-5",   "api", true,  Some(2), 2, Some("gated")),
+                    ("test",        "claude-haiku-4-5",   "api", true,  None,    0, None),
                 ],
             ),
             (
                 "Bugfix relay",
                 "Reproduce, fix, verify. Lean and fast.",
                 &[
-                    ("repro", "claude-haiku-4-5", "api", false),
-                    ("fix", "claude-sonnet-4-6", "api", true),
-                    ("verify", "claude-haiku-4-5", "api", true),
+                    ("repro",  "claude-haiku-4-5",  "api", false, None,    0, None),
+                    ("fix",    "claude-sonnet-4-6",  "api", true,  None,    0, None),
+                    ("verify", "claude-haiku-4-5",   "api", true,  Some(1), 2, Some("gated")),
                 ],
             ),
             (
                 "Plan & review",
                 "Thinking only — no code is written.",
                 &[
-                    ("plan", "claude-sonnet-4-6", "api", false),
-                    ("critique", "claude-haiku-4-5", "api", false),
-                    ("refine", "claude-sonnet-4-6", "api", true),
+                    ("plan",     "claude-sonnet-4-6", "api", false, None, 0, None),
+                    ("critique", "claude-haiku-4-5",  "api", false, None, 0, None),
+                    ("refine",   "claude-sonnet-4-6", "api", true,  None, 0, None),
                 ],
             ),
             (
                 "Claude Code build",
                 "Plan via API, then implement, review, and test with Claude Code (CLI).",
                 &[
-                    ("plan", "claude-haiku-4-5", "api", false),
-                    ("implement", "claude-sonnet-4-6", "cli", true),
-                    ("code_review", "claude-haiku-4-5", "cli", true),
-                    ("test", "claude-haiku-4-5", "cli", true),
+                    ("plan",        "claude-haiku-4-5",  "api", false, None,    0, None),
+                    ("implement",   "claude-sonnet-4-6", "cli", true,  None,    0, None),
+                    ("code_review", "claude-haiku-4-5",  "cli", true,  Some(1), 2, Some("gated")),
+                    ("test",        "claude-haiku-4-5",  "cli", true,  None,    0, None),
                 ],
             ),
         ];
@@ -1504,10 +1504,33 @@ impl Db {
                 continue;
             }
             let pid = self.insert_pipeline(name, desc, true)?;
-            for (i, (role, model, substrate, checkpoint)) in stages.iter().enumerate() {
-                self.insert_pipeline_stage(&pid, i as i64, role, model, substrate, *checkpoint, None, 0, None)?;
+            for (i, (role, model, substrate, checkpoint, lt, lm, lmode)) in stages.iter().enumerate() {
+                self.insert_pipeline_stage(&pid, i as i64, role, model, substrate, *checkpoint, *lt, *lm, *lmode)?;
             }
         }
+
+        // Backfill: existing installs seeded the builtins before loop config existed.
+        // Set the gated default on builtin review stages that are still linear. The
+        // `loop_mode IS NULL` guard makes this idempotent and never overrides a config.
+        self.conn.execute(
+            "UPDATE pipeline_stages
+             SET loop_target_position =
+                   (SELECT MAX(prev.position) FROM pipeline_stages prev
+                    WHERE prev.pipeline_id = pipeline_stages.pipeline_id
+                      AND prev.role IN ('implement','fix')
+                      AND prev.position < pipeline_stages.position),
+                 loop_max_iterations = 2,
+                 loop_mode = 'gated'
+             WHERE loop_mode IS NULL
+               AND role IN ('code_review','verify')
+               AND pipeline_id IN (SELECT id FROM pipelines WHERE is_builtin = 1)
+               AND EXISTS (SELECT 1 FROM pipeline_stages prev
+                           WHERE prev.pipeline_id = pipeline_stages.pipeline_id
+                             AND prev.role IN ('implement','fix')
+                             AND prev.position < pipeline_stages.position)",
+            [],
+        )?;
+
         Ok(())
     }
 

@@ -1862,6 +1862,18 @@ mod runner_helpers_tests {
     }
 
     #[test]
+    fn auto_review_prompt_requests_a_verdict() {
+        use crate::orchestrator::runner::system_prompt_with_loop;
+        use crate::orchestrator::types::LoopMode;
+        let auto = system_prompt_with_loop("code_review", Some(LoopMode::Auto));
+        assert!(auto.contains("VERDICT:"));
+        let gated = system_prompt_with_loop("code_review", Some(LoopMode::Gated));
+        assert!(!gated.contains("VERDICT:"));
+        let plain = system_prompt_with_loop("implement", None);
+        assert!(!plain.contains("VERDICT:"));
+    }
+
+    #[test]
     fn user_input_includes_task_and_prior_artifact() {
         let prior = StageArtifact {
             kind: ArtifactKind::Plan,
@@ -2084,6 +2096,37 @@ mod run_crud_tests {
         assert_eq!(inp, 150);
         assert_eq!(out, 50);
     }
+
+    #[test]
+    fn builtins_seed_gated_loop_on_review_stages() {
+        let db = test_db();
+        db.seed_builtin_pipelines().unwrap();
+        let ff = db.list_pipelines().unwrap().into_iter().find(|p| p.name == "Feature Factory").unwrap();
+        let stages = db.get_pipeline_stages(&ff.id).unwrap();
+        let cr = stages.iter().find(|s| s.role == "code_review").unwrap();
+        assert_eq!(cr.loop_target_position, Some(2));        // back to implement
+        assert_eq!(cr.loop_max_iterations, 2);
+        assert_eq!(cr.loop_mode.as_deref(), Some("gated"));
+        // A non-review stage stays linear.
+        let imp = stages.iter().find(|s| s.role == "implement").unwrap();
+        assert_eq!(imp.loop_target_position, None);
+    }
+
+    #[test]
+    fn backfill_sets_loop_on_pre_existing_builtin_review_stages() {
+        let db = test_db();
+        // Simulate an old install: seed a builtin-shaped pipeline with NO loop config.
+        let pid = db.insert_pipeline("Feature Factory", "d", true).unwrap();
+        db.insert_pipeline_stage(&pid, 0, "plan", "m", "api", false, None, 0, None).unwrap();
+        db.insert_pipeline_stage(&pid, 1, "implement", "m", "api", true, None, 0, None).unwrap();
+        db.insert_pipeline_stage(&pid, 2, "code_review", "m", "api", true, None, 0, None).unwrap();
+        // Running the seeder backfills the review stage (seeding itself is skipped — name exists).
+        db.seed_builtin_pipelines().unwrap();
+        let stages = db.get_pipeline_stages(&pid).unwrap();
+        let cr = stages.iter().find(|s| s.role == "code_review").unwrap();
+        assert_eq!(cr.loop_target_position, Some(1));
+        assert_eq!(cr.loop_mode.as_deref(), Some("gated"));
+    }
 }
 
 #[cfg(test)]
@@ -2130,6 +2173,7 @@ mod orchestrator_tests {
                 status: StageStatus::Done,
                 tool_calls: vec![],
                 error: None,
+                verdict: None,
             })
         }
     }
@@ -2375,6 +2419,64 @@ mod orchestrator_tests {
         assert_eq!(review.loop_iterations, 0); // no iteration burned
         assert_eq!(after[0].feedback, None);   // target stage not reset/feedback'd
     }
+
+    /// A runner whose review-role output carries a verdict; everything else Done.
+    struct VerdictRunner { verdict: &'static str } // "PASS" | "CHANGES_REQUESTED" | "" (none)
+    #[async_trait::async_trait]
+    impl AgentRunner for VerdictRunner {
+        async fn run(&self, stage: &StageSpec, _i: &StageArtifact, _c: &StageContext)
+            -> crate::error::AppResult<StageOutcome> {
+            let is_review = matches!(stage.role.as_str(), "code_review" | "verify");
+            let text = if is_review && !self.verdict.is_empty() { format!("findings\nVERDICT: {}", self.verdict) } else { "did it".into() };
+            Ok(StageOutcome {
+                artifact: StageArtifact { kind: ArtifactKind::Note, text: text.clone(), payload: None, refs_worktree: false },
+                input_tokens: 10, output_tokens: 2, cost_usd: 0.01,
+                status: StageStatus::Done, tool_calls: vec![],
+                error: None,
+                verdict: crate::orchestrator::runner::parse_verdict(&text),
+            })
+        }
+    }
+
+    fn auto_run(verdict: &'static str, max_iter: i64) -> (Orchestrator, String, Arc<Mutex<Db>>) {
+        let (db, ws) = db_with_workspace();
+        let pid = db.lock().insert_pipeline("Auto", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "implement", "m", "api", false, None, 0, None).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 1, "code_review", "m", "api", false, Some(0), max_iter, Some("auto")).unwrap();
+        let run_id = db.lock().create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+        let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(VerdictRunner { verdict }));
+        (orch, run_id, db)
+    }
+
+    #[tokio::test]
+    async fn auto_pass_completes_without_pausing() {
+        let (orch, run_id, db) = auto_run("PASS", 2);
+        let status = orch.run_to_pause(&run_id).await.unwrap();
+        assert_eq!(status, RunStatus::Completed);
+        assert_eq!(db.lock().list_run_stages(&run_id).unwrap()[1].status, "done");
+    }
+
+    #[tokio::test]
+    async fn auto_changes_requested_loops_until_cap_then_gates() {
+        // Review always asks for changes; after `max_iter` auto loop-backs it stops
+        // looping and gates for a human (awaiting_checkpoint), never infinite.
+        let (orch, run_id, db) = auto_run("CHANGES_REQUESTED", 2);
+        let status = orch.run_to_pause(&run_id).await.unwrap();
+        assert_eq!(status, RunStatus::Paused);
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[1].status, "awaiting_checkpoint");
+        assert_eq!(stages[1].loop_iterations, 2); // looped exactly `max_iter` times
+    }
+
+    #[tokio::test]
+    async fn auto_unparseable_verdict_gates_instead_of_looping() {
+        let (orch, run_id, db) = auto_run("", 2); // no VERDICT line
+        let status = orch.run_to_pause(&run_id).await.unwrap();
+        assert_eq!(status, RunStatus::Paused);
+        assert_eq!(db.lock().list_run_stages(&run_id).unwrap()[1].status, "awaiting_checkpoint");
+        assert_eq!(db.lock().list_run_stages(&run_id).unwrap()[1].loop_iterations, 0);
+    }
 }
 
 #[cfg(test)]
@@ -2534,6 +2636,35 @@ mod cli_template_tests {
         assert_eq!(implement.substrate, "cli");
         assert!(implement.agent_model.contains("claude") || implement.agent_model == "sonnet");
         assert!(implement.checkpoint);
+    }
+}
+
+#[cfg(test)]
+mod verdict_tests {
+    use crate::orchestrator::runner::parse_verdict;
+    use crate::orchestrator::types::ReviewVerdict;
+
+    #[test]
+    fn parses_pass_and_changes_and_handles_noise() {
+        assert_eq!(parse_verdict("looks good\nVERDICT: PASS"), Some(ReviewVerdict::Pass));
+        assert_eq!(parse_verdict("issues found\nVERDICT: CHANGES_REQUESTED\n"), Some(ReviewVerdict::ChangesRequested));
+        // last verdict line wins
+        assert_eq!(parse_verdict("VERDICT: PASS\n...\nVERDICT: CHANGES_REQUESTED"), Some(ReviewVerdict::ChangesRequested));
+        // case/space tolerant
+        assert_eq!(parse_verdict("  verdict:  pass  "), Some(ReviewVerdict::Pass));
+        // missing / malformed → None (caller gates)
+        assert_eq!(parse_verdict("no verdict here"), None);
+        assert_eq!(parse_verdict("VERDICT: maybe"), None);
+    }
+
+    #[test]
+    fn parses_verdict_tolerates_case_trailing_text_and_spacing() {
+        use crate::orchestrator::runner::parse_verdict;
+        use crate::orchestrator::types::ReviewVerdict;
+        assert_eq!(parse_verdict("Verdict: PASS (looks good)"), Some(ReviewVerdict::Pass));
+        assert_eq!(parse_verdict("VERDICT: CHANGES_REQUESTED — see notes"), Some(ReviewVerdict::ChangesRequested));
+        assert_eq!(parse_verdict("VERDICT : pass"), Some(ReviewVerdict::Pass));
+        assert_eq!(parse_verdict("VERDICTS: not a verdict line"), None);
     }
 }
 

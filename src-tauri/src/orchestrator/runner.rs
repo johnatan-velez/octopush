@@ -105,6 +105,44 @@ pub fn user_input_for(
     s
 }
 
+const VERDICT_INSTRUCTION: &str = "\n\nThis is an automated review. After your findings, end your \
+    response with EXACTLY ONE line, on its own line: `VERDICT: PASS` if the changes are acceptable, \
+    or `VERDICT: CHANGES_REQUESTED` if they must be revised. Emit nothing after that line.";
+
+/// `system_prompt_for(role)` plus the auto-mode verdict instruction when this is
+/// an auto-loop stage.
+pub fn system_prompt_with_loop(role: &str, loop_mode: Option<crate::orchestrator::types::LoopMode>) -> String {
+    let base = system_prompt_for(role);
+    if matches!(loop_mode, Some(crate::orchestrator::types::LoopMode::Auto)) {
+        format!("{base}{VERDICT_INSTRUCTION}")
+    } else {
+        base
+    }
+}
+
+/// Parse the LAST `VERDICT: PASS|CHANGES_REQUESTED` line from a review stage's
+/// output (case/space tolerant). `None` when absent or malformed — the caller
+/// then falls back to a gated checkpoint rather than looping blindly.
+pub fn parse_verdict(text: &str) -> Option<crate::orchestrator::types::ReviewVerdict> {
+    use crate::orchestrator::types::ReviewVerdict;
+    let mut found = None;
+    for line in text.lines() {
+        let upper = line.trim().to_ascii_uppercase();
+        // Tolerate "VERDICT:" and "VERDICT :" (optional space before the colon).
+        let Some(after_kw) = upper.strip_prefix("VERDICT") else { continue };
+        let Some(rest) = after_kw.trim_start().strip_prefix(':') else { continue };
+        let rest = rest.trim();
+        // Match the leading token; trailing prose (e.g. "PASS (lgtm)") is tolerated.
+        // Check CHANGES_REQUESTED first (distinct token).
+        if rest.starts_with("CHANGES_REQUESTED") {
+            found = Some(ReviewVerdict::ChangesRequested);
+        } else if rest.starts_with("PASS") {
+            found = Some(ReviewVerdict::Pass);
+        }
+    }
+    found
+}
+
 /// The API substrate: runs a stage through the in-app LLM tool-loop.
 pub struct ApiRunner;
 
@@ -117,7 +155,7 @@ impl AgentRunner for ApiRunner {
         ctx: &StageContext,
     ) -> AppResult<StageOutcome> {
         let (provider, api_base, api_key) = resolve_provider(&stage.agent_model)?;
-        let system = system_prompt_for(&stage.role);
+        let system = system_prompt_with_loop(&stage.role, stage.loop_mode.clone());
         let user = user_input_for(&stage.role, &ctx.task, input, stage.feedback.as_deref());
 
         let result = run_agentic_loop(
@@ -147,7 +185,7 @@ impl AgentRunner for ApiRunner {
                 Ok(StageOutcome {
                     artifact: StageArtifact {
                         kind,
-                        text: r.text,
+                        text: r.text.clone(),
                         payload: None,
                         refs_worktree,
                     },
@@ -157,6 +195,7 @@ impl AgentRunner for ApiRunner {
                     status: StageStatus::Done,
                     tool_calls: r.tool_calls,
                     error: None,
+                    verdict: parse_verdict(&r.text),
                 })
             }
             Err(e) => Ok(StageOutcome {
@@ -172,6 +211,7 @@ impl AgentRunner for ApiRunner {
                 status: StageStatus::Failed,
                 tool_calls: vec![],
                 error: Some(e.to_string()),
+                verdict: None,
             }),
         }
     }
