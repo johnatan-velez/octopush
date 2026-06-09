@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { RunStage } from "../lib/ipc";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import type { LiveEntry, RunStage } from "../lib/ipc";
 import { ipc } from "../lib/ipc";
 import { useRunsStore } from "../stores/runsStore";
 import { labelForRole } from "./RunTrack";
 import { DiffViewer } from "./DiffViewer";
 
-const EMPTY_LINES: string[] = [];
+const EMPTY_ENTRIES: LiveEntry[] = [];
 
 interface ParsedArtifact {
   kind: string;
@@ -21,8 +21,7 @@ interface Props {
 export function StageFocus({ stage, workspacePath }: Props) {
   const [diff, setDiff] = useState<string>("");
   const [diffLoading, setDiffLoading] = useState(false);
-  const liveLines = useRunsStore((s) => s.liveLogByStage[stage?.id ?? ""] ?? EMPTY_LINES);
-  const liveLog = useMemo(() => liveLines.join("\n"), [liveLines]);
+  const liveEntries = useRunsStore((s) => s.liveByStage[stage?.id ?? ""] ?? EMPTY_ENTRIES);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const artifact = useMemo<ParsedArtifact | null>(() => {
@@ -49,12 +48,52 @@ export function StageFocus({ stage, workspacePath }: Props) {
     return () => { cancelled = true; };
   }, [stage?.id, stage?.status, artifact?.refsWorktree, workspacePath]);
 
-  // Keep the live log pinned to the newest activity while a stage runs.
+  // Keep the live journal pinned to the newest activity while a stage runs.
   useEffect(() => {
     if (stage?.status === "running" && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [liveLog, stage?.status]);
+  }, [liveEntries, stage?.status]);
+
+  const journal = useMemo(() => {
+    const items: ReactElement[] = [];
+    for (let i = 0; i < liveEntries.length; i++) {
+      const e = liveEntries[i];
+      if (e.kind === "text") {
+        items.push(<div key={i} className="text-octo-sage">{e.text}</div>);
+      } else if (e.kind === "notice") {
+        items.push(<div key={i} className="font-mono text-[10px] uppercase tracking-[0.12em] text-octo-brass">{e.text}</div>);
+      } else if (e.kind === "tool") {
+        const next = liveEntries[i + 1];
+        const res = next && next.kind === "tool_result" ? next : null;
+        if (res) i++; // consume the paired result
+        items.push(
+          <div key={i} className="rounded-md border border-octo-hairline bg-octo-panel-2 px-3 py-2">
+            <div className="flex items-center gap-2 font-mono text-[12px]">
+              <span className="text-octo-brass">§</span>
+              <span className="text-octo-ivory">{e.tool}</span>
+              {e.hint && <><span className="text-octo-sage">·</span><span className="text-octo-sage">{e.hint}</span></>}
+            </div>
+            {res && (
+              <div className="mt-1 flex items-center gap-1.5 font-mono text-[11px] text-octo-mute">
+                <span className={res.ok ? "text-octo-verdigris" : "text-octo-rouge"}>{res.ok ? "✓" : "✕"}</span>
+                <span>{res.detail}</span>
+              </div>
+            )}
+          </div>,
+        );
+      } else if (e.kind === "tool_result") {
+        // orphan result (no preceding tool in buffer) — render compactly
+        items.push(
+          <div key={i} className="flex items-center gap-1.5 font-mono text-[11px] text-octo-mute">
+            <span className={e.ok ? "text-octo-verdigris" : "text-octo-rouge"}>{e.ok ? "✓" : "✕"}</span>
+            <span>{e.detail}</span>
+          </div>,
+        );
+      }
+    }
+    return items;
+  }, [liveEntries]);
 
   if (!stage) {
     return (
@@ -73,20 +112,15 @@ export function StageFocus({ stage, workspacePath }: Props) {
       </div>
       <div
         ref={scrollRef}
-        className="chat-selectable flex-1 overflow-auto px-4 py-3 font-mono text-[12px] leading-relaxed text-octo-sage whitespace-pre-wrap"
+        className="chat-selectable flex flex-1 flex-col gap-2 overflow-auto px-4 py-3 font-mono text-[12px] leading-relaxed text-octo-sage"
       >
         {stage.status === "failed" && stage.error ? (
           <>
             <span className="text-octo-rouge">{stage.error}</span>
-            {liveLog && (
-              <>
-                {"\n\n"}
-                <span className="text-octo-mute">{liveLog}</span>
-              </>
-            )}
+            {journal.length > 0 && <div className="mt-2 flex flex-col gap-2 opacity-70">{journal}</div>}
           </>
         ) : artifact ? (
-          <>
+          <div className="whitespace-pre-wrap">
             {artifact.text || "(no output text)"}
             {artifact.refsWorktree &&
               (diffLoading ? (
@@ -94,11 +128,11 @@ export function StageFocus({ stage, workspacePath }: Props) {
               ) : (
                 <DiffViewer diff={diff} />
               ))}
-          </>
+          </div>
         ) : stage.status === "running" ? (
           <>
-            {liveLog && <>{liveLog}{"\n"}</>}
-            <span className="text-octo-brass">working…</span>
+            {journal}
+            <div className="flex items-center gap-2 text-octo-brass"><span>working…</span></div>
           </>
         ) : (
           <span className="text-octo-mute">No artifact yet.</span>
