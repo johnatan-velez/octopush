@@ -539,6 +539,8 @@ function FileStatusIcon({ status }: { status: FileChange["status"] }) {
       return <FileX {...props} className="shrink-0 text-octo-rouge" />;
     case "renamed":
       return <FileMinus {...props} className="shrink-0 text-octo-sage" />;
+    case "conflicted":
+      return <FileX {...props} className="shrink-0 text-octo-rouge" />;
     default:
       return <FileEdit {...props} className="shrink-0 text-octo-mute" />;
   }
@@ -551,6 +553,7 @@ function StatusGlyph({ status }: { status: FileChange["status"] }) {
     deleted: { letter: "D", color: "text-octo-rouge" },
     renamed: { letter: "R", color: "text-octo-sage" },
     unknown: { letter: "?", color: "text-octo-mute" },
+    conflicted: { letter: "!", color: "text-octo-rouge" },
   };
   const { letter, color } = map[status];
   return (

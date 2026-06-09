@@ -23,9 +23,10 @@ import { ChangesPanel } from "./ChangesPanel";
 
 const STATUS = {
   branch: "main", ahead: 0, behind: 0, hasUpstream: true,
+  conflicted: 0, aheadBehindKnown: true,
   changedFiles: [
-    { path: "a.ts", status: "modified", staged: true, unstaged: false },
-    { path: "b.ts", status: "modified", staged: false, unstaged: true },
+    { path: "a.ts", status: "modified", staged: true, unstaged: false, conflicted: false },
+    { path: "b.ts", status: "modified", staged: false, unstaged: true, conflicted: false },
   ],
 };
 
