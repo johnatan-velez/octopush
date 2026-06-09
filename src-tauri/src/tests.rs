@@ -2084,6 +2084,37 @@ mod run_crud_tests {
         assert_eq!(inp, 150);
         assert_eq!(out, 50);
     }
+
+    #[test]
+    fn builtins_seed_gated_loop_on_review_stages() {
+        let db = test_db();
+        db.seed_builtin_pipelines().unwrap();
+        let ff = db.list_pipelines().unwrap().into_iter().find(|p| p.name == "Feature Factory").unwrap();
+        let stages = db.get_pipeline_stages(&ff.id).unwrap();
+        let cr = stages.iter().find(|s| s.role == "code_review").unwrap();
+        assert_eq!(cr.loop_target_position, Some(2));        // back to implement
+        assert_eq!(cr.loop_max_iterations, 2);
+        assert_eq!(cr.loop_mode.as_deref(), Some("gated"));
+        // A non-review stage stays linear.
+        let imp = stages.iter().find(|s| s.role == "implement").unwrap();
+        assert_eq!(imp.loop_target_position, None);
+    }
+
+    #[test]
+    fn backfill_sets_loop_on_pre_existing_builtin_review_stages() {
+        let db = test_db();
+        // Simulate an old install: seed a builtin-shaped pipeline with NO loop config.
+        let pid = db.insert_pipeline("Feature Factory", "d", true).unwrap();
+        db.insert_pipeline_stage(&pid, 0, "plan", "m", "api", false, None, 0, None).unwrap();
+        db.insert_pipeline_stage(&pid, 1, "implement", "m", "api", true, None, 0, None).unwrap();
+        db.insert_pipeline_stage(&pid, 2, "code_review", "m", "api", true, None, 0, None).unwrap();
+        // Running the seeder backfills the review stage (seeding itself is skipped — name exists).
+        db.seed_builtin_pipelines().unwrap();
+        let stages = db.get_pipeline_stages(&pid).unwrap();
+        let cr = stages.iter().find(|s| s.role == "code_review").unwrap();
+        assert_eq!(cr.loop_target_position, Some(1));
+        assert_eq!(cr.loop_mode.as_deref(), Some("gated"));
+    }
 }
 
 #[cfg(test)]
