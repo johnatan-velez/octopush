@@ -3028,3 +3028,21 @@ mod git_lock_tests {
         assert!(!Arc::ptr_eq(&a1, &b), "distinct paths must have distinct mutexes");
     }
 }
+
+#[cfg(test)]
+mod g7_timeout_tests {
+    use crate::commands::run_with_timeout;
+    use std::time::Duration;
+
+    #[test]
+    fn run_with_timeout_returns_value_when_fast_and_none_when_slow() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let fast = rt.block_on(run_with_timeout(Duration::from_millis(500), || 42));
+        assert_eq!(fast, Some(42));
+        let slow = rt.block_on(run_with_timeout(Duration::from_millis(50), || {
+            std::thread::sleep(Duration::from_millis(300));
+            7
+        }));
+        assert_eq!(slow, None);
+    }
+}
