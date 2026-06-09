@@ -57,3 +57,6 @@ octopus.db-journal
 
 # Superpowers brainstorm scratch (visual companion mockups)
 .superpowers/
+
+# Local git worktrees created by EnterWorktree
+.claude/worktrees/
