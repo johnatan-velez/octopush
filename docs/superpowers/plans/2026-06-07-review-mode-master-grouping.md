@@ -38,7 +38,7 @@ Status Index → open that stream's spec/plan → branch `feat/review-g<N>-<slug
 | G3 Diff Reading | done (merged to main, PR #6) | [design](../specs/2026-06-08-review-g3-diff-reading-design.md) | [plan](2026-06-08-review-g3-diff-reading.md) | merged |
 | G5 AI Review Intelligence | slice 1 done (merged to main, PR #12) | [design](../specs/2026-06-08-review-g5-ai-review-pass-design.md) | [plan](2026-06-08-review-g5-ai-review-pass.md) | merged |
 | G1 Editor Engine | slice 1 done (merged to main, PR #13) | [design](../specs/2026-06-08-review-g1-editor-engine-design.md) | [plan](2026-06-08-review-g1-editor-engine.md) | merged |
-| G2 Editor Reliability | not started | — | — | — |
+| G2 Editor Reliability | slice 1 done (merged to main, PR #18) | [design](../specs/2026-06-09-review-g2-editor-reliability-design.md) | [plan](2026-06-09-review-g2-editor-reliability.md) | merged |
 | G4 Staging & Commit | not started | — | — | — |
 | G7 Git Operations Depth | not started | — | — | — |
 | G6 File Explorer | not started | — | — | — |
@@ -68,6 +68,11 @@ States: `not started` → `brainstorming` → `spec'd` → `planned` → `in pro
 - **Per-tab state across Diff↔Editor toggle.** `EditorPane` only mounts under `viewMode === "editor"`, so toggling to Diff unmounts it and clears the per-tab `EditorState` cache — cursor/undo survive tab switches but not a Diff↔Editor round-trip. Lift the cache above the view-mode boundary if that round-trip preservation is wanted.
 - **Status-bar re-render.** `setPos` fires on every keystroke/selection move, re-rendering `EditorPane` + `EditorStatusBar` each time. Safe (no effect re-runs), but memoize if profiling shows jank on large files.
 - **`o` open-at-line** (handed off from G3) now has the editor scroll-to-line primitive available — wire it.
+
+**From G2 slice 1 (deferred — slices II/III):**
+- **Slice II — External-change safety:** standalone `file_meta` (size+mtime) command; on window-focus and before-save, compare disk `mtime` vs the tracked `OpenFile.mtime` (Slice 1 already captures + refreshes it on save); if an agent/another app changed the file under the user, show a reload-or-overwrite `ConfirmDialog`. The scariest agentic-IDE gap. (Agents write directly via the chat tool executor `std::fs::write`, never notifying the editor.)
+- **Slice III — Auto-save (optional):** `autoSave` toggle in `editorPrefsStore` + debounced save.
+- **Process lesson:** the stream's explore must grep for an EXISTING util before a plan says "create" one. `formatBytes` already existed (used by `PerfMonitorBar`); G2 recreated it and broke 4 tests before reverting to reuse. Check `src/lib/*` for collisions during explore.
 
 ---
 
