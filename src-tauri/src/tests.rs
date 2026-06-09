@@ -2358,6 +2358,23 @@ mod orchestrator_tests {
         assert_eq!(stages[1].status, "done");
         assert_eq!(status, RunStatus::Completed);
     }
+
+    #[tokio::test]
+    async fn send_back_on_failed_review_is_noop() {
+        let (orch, run_id, db) = looped_run(2);
+        orch.run_to_pause(&run_id).await.unwrap();
+        // Force the parked review stage into 'failed' instead of awaiting_checkpoint.
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        let review_id = stages[1].id.clone();
+        db.lock().fail_run_stage(&review_id, "boom").unwrap();
+        // SendBack must NOT loop-back a failed stage.
+        orch.resolve_checkpoint(&run_id, CheckpointAction::SendBack { feedback: Some("x".into()) }).await.unwrap();
+        let after = db.lock().list_run_stages(&run_id).unwrap();
+        let review = after.iter().find(|s| s.id == review_id).unwrap();
+        assert_eq!(review.status, "failed");   // unchanged — not looped, not approved
+        assert_eq!(review.loop_iterations, 0); // no iteration burned
+        assert_eq!(after[0].feedback, None);   // target stage not reset/feedback'd
+    }
 }
 
 #[cfg(test)]

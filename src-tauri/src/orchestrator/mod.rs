@@ -98,7 +98,8 @@ impl Orchestrator {
     fn stage_has_gated_loop(stage: &crate::db::RunStageRow) -> bool {
         stage.loop_target_position.is_some()
             && stage.loop_max_iterations > 0
-            && stage.loop_mode.as_deref() == Some("gated")
+            && stage.loop_mode.as_deref().and_then(crate::orchestrator::types::LoopMode::from_db)
+                == Some(crate::orchestrator::types::LoopMode::Gated)
     }
 
     fn workspace_path(&self, run: &crate::db::RunRow) -> AppResult<PathBuf> {
@@ -394,28 +395,32 @@ impl Orchestrator {
             }
             CheckpointAction::SendBack { feedback } => {
                 if let Some(review) = &blocked {
-                    let target = review.loop_target_position;
-                    let at_cap = review.loop_iterations >= review.loop_max_iterations;
-                    match (target, at_cap) {
-                        (Some(target_pos), false) => {
-                            // Retire the cost of every stage we're about to reset,
-                            // then reset the contiguous [target..=review] range to pending.
+                    // Only a review parked at its checkpoint can be sent back. A failed
+                    // stage is recovered via Reject/re-run, not SendBack → no-op here.
+                    if review.status == "awaiting_checkpoint" {
+                        let can_loop = match review.loop_target_position {
+                            Some(target_pos) => {
+                                target_pos < review.position
+                                    && review.loop_iterations < review.loop_max_iterations
+                            }
+                            None => false,
+                        };
+                        if can_loop {
+                            let target_pos = review.loop_target_position.unwrap();
+                            // Retire each stage's cost BEFORE resetting it (reset zeroes cost).
                             for s in &stages {
                                 if s.position >= target_pos && s.position <= review.position {
                                     self.db.lock().retire_stage_cost(
                                         run_id, s.cost_usd, s.input_tokens, s.output_tokens,
                                     )?;
-                                    // Inject the reviewer feedback onto the target stage only.
                                     let fb = if s.position == target_pos { feedback.as_deref() } else { None };
                                     self.db.lock().reset_run_stage(&s.id, None, fb)?;
                                 }
                             }
                             self.db.lock().increment_loop_iteration(&review.id)?;
                             self.recompute_run_cost(run_id)?;
-                        }
-                        // No loop target, or cap reached → accept the review and move on
-                        // (same effect as Approve).
-                        _ => {
+                        } else {
+                            // No usable loop (no/invalid target or cap reached) → accept the review.
                             self.db.lock().set_run_stage_status(&review.id, "done")?;
                         }
                     }
