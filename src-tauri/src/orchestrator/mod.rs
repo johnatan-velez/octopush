@@ -223,8 +223,16 @@ impl Orchestrator {
             .reference_model
             .clone()
             .or_else(crate::orchestrator::cost::pick_reference_model);
-        let mut cost = 0.0;
+        let (retired_cost, retired_in, retired_out) = self.db.lock().get_retired_cost(run_id)?;
+        let mut cost = retired_cost;
         let mut baseline = 0.0;
+        if let Some(ref_model) = &reference {
+            baseline += crate::orchestrator::cost::baseline_cost(
+                ref_model,
+                retired_in as u64,
+                retired_out as u64,
+            );
+        }
         for s in &stages {
             cost += s.cost_usd;
             if let Some(ref_model) = &reference {

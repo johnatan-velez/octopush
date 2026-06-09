@@ -1725,6 +1725,37 @@ impl Db {
         Ok(())
     }
 
+    /// Accumulate a soon-to-be-reset stage's spend onto the run, so the cost
+    /// meter keeps counting work erased by a loop-back / reject.
+    pub fn retire_stage_cost(
+        &self,
+        run_id: &str,
+        cost_usd: f64,
+        input_tokens: i64,
+        output_tokens: i64,
+    ) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE runs
+             SET retired_cost_usd = retired_cost_usd + ?2,
+                 retired_input_tokens = retired_input_tokens + ?3,
+                 retired_output_tokens = retired_output_tokens + ?4
+             WHERE id = ?1",
+            params![run_id, cost_usd, input_tokens, output_tokens],
+        )?;
+        Ok(())
+    }
+
+    /// `(retired_cost_usd, retired_input_tokens, retired_output_tokens)` for the run.
+    pub fn get_retired_cost(&self, run_id: &str) -> AppResult<(f64, i64, i64)> {
+        self.conn
+            .query_row(
+                "SELECT retired_cost_usd, retired_input_tokens, retired_output_tokens FROM runs WHERE id = ?1",
+                params![run_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(Into::into)
+    }
+
     pub fn set_run_stage_artifact(&self, stage_id: &str, artifact_json: &str) -> AppResult<()> {
         self.conn.execute(
             "UPDATE run_stages SET artifact = ?2 WHERE id = ?1",

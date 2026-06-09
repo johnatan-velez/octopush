@@ -2067,6 +2067,23 @@ mod run_crud_tests {
         let after = db.list_run_stages(&run).unwrap();
         assert_eq!(after[1].loop_iterations, 1);
     }
+
+    #[test]
+    fn retire_stage_cost_accumulates_on_the_run() {
+        let db = test_db();
+        let ws = seed_workspace(&db);
+        let pid = db.insert_pipeline("P", "d", false).unwrap();
+        db.insert_pipeline_stage(&pid, 0, "implement", "m", "api", false, None, 0, None).unwrap();
+        let run = db.create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        assert_eq!(db.get_retired_cost(&run).unwrap(), (0.0, 0, 0));
+
+        db.retire_stage_cost(&run, 0.5, 100, 40).unwrap();
+        db.retire_stage_cost(&run, 0.25, 50, 10).unwrap();
+        let (cost, inp, out) = db.get_retired_cost(&run).unwrap();
+        assert!((cost - 0.75).abs() < 1e-9);
+        assert_eq!(inp, 150);
+        assert_eq!(out, 50);
+    }
 }
 
 #[cfg(test)]
