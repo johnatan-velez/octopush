@@ -156,6 +156,12 @@ pub struct StageSpec {
     pub checkpoint: bool,
     /// Optional human feedback from a prior rejection of this stage.
     pub feedback: Option<String>,
+    /// Loop config (gated mode in L1): where to return to, the cap, the mode,
+    /// and how many loop-backs have already happened.
+    pub loop_target: Option<i64>,
+    pub loop_max: i64,
+    pub loop_mode: Option<LoopMode>,
+    pub loop_iterations: i64,
 }
 
 /// A single tool invocation, captured for the run-event log.

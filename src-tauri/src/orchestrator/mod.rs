@@ -92,6 +92,15 @@ impl Orchestrator {
         );
     }
 
+    /// A just-completed stage that should pause for a human loop decision: it
+    /// carries gated loop config with a target and a positive cap. (Auto mode
+    /// is Plan L3.)
+    fn stage_has_gated_loop(stage: &crate::db::RunStageRow) -> bool {
+        stage.loop_target_position.is_some()
+            && stage.loop_max_iterations > 0
+            && stage.loop_mode.as_deref() == Some("gated")
+    }
+
     fn workspace_path(&self, run: &crate::db::RunRow) -> AppResult<PathBuf> {
         let path: Option<String> = self.db.lock().conn_ref_path(&run.workspace_id)?;
         path.map(PathBuf::from)
@@ -121,6 +130,10 @@ impl Orchestrator {
             substrate,
             checkpoint: stage.checkpoint,
             feedback: stage.feedback.clone(),
+            loop_target: stage.loop_target_position,
+            loop_max: stage.loop_max_iterations,
+            loop_mode: stage.loop_mode.as_deref().and_then(crate::orchestrator::types::LoopMode::from_db),
+            loop_iterations: stage.loop_iterations,
         };
 
         // Input artifact = the previous done stage's artifact, or a seed Note from the task.
@@ -325,7 +338,7 @@ impl Orchestrator {
                     self.emit_checkpoint(run_id, &stage.id);
                     return Ok(RunStatus::Paused);
                 }
-                StageStatus::Done if stage.checkpoint => {
+                StageStatus::Done if stage.checkpoint || Self::stage_has_gated_loop(&stage) => {
                     self.db
                         .lock()
                         .set_run_stage_status(&stage.id, "awaiting_checkpoint")?;

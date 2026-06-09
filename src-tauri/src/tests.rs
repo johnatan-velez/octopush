@@ -2300,6 +2300,29 @@ mod orchestrator_tests {
         let status = orch.run_to_pause(&run_id).await.unwrap();
         assert_eq!(status, RunStatus::Completed);
     }
+
+    /// (orch, run_id, db) for a pipeline: implement(pos 0, no loop) ->
+    /// code_review(pos 1, gated loop back to 0, cap = `max_iter`).
+    fn looped_run(max_iter: i64) -> (Orchestrator, String, Arc<Mutex<Db>>) {
+        let (db, ws) = db_with_workspace();
+        let pid = db.lock().insert_pipeline("Looped", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "implement", "m", "api", false, None, 0, None).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 1, "code_review", "m", "api", false, Some(0), max_iter, Some("gated")).unwrap();
+        let run_id = db.lock().create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+        let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(MockRunner));
+        (orch, run_id, db)
+    }
+
+    #[tokio::test]
+    async fn gated_loop_review_stage_pauses_for_checkpoint() {
+        let (orch, run_id, db) = looped_run(2);
+        let status = orch.run_to_pause(&run_id).await.unwrap();
+        assert_eq!(status, RunStatus::Paused);
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[0].status, "done");                  // implement
+        assert_eq!(stages[1].status, "awaiting_checkpoint");   // code_review parked (gated loop)
+    }
 }
 
 #[cfg(test)]
