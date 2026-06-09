@@ -20,7 +20,6 @@ function lastActivity(entries: LiveEntry[]): string {
     const e = entries[i];
     if (e.kind === "tool") return `§ ${e.tool}${e.hint ? " " + e.hint : ""}`;
     if (e.kind === "text") return e.text.split("\n")[0].slice(0, 60);
-    if (e.kind === "notice") return e.text;
   }
   return "";
 }

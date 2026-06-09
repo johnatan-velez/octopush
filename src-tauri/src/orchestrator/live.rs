@@ -70,6 +70,24 @@ pub fn summarize(result: &str) -> String {
     first.chars().take(120).collect()
 }
 
+/// tool_result `content` is a string OR an array of `{type,text}` blocks.
+fn content_to_text(v: &serde_json::Value) -> String {
+    if let Some(s) = v.as_str() { return s.to_string(); }
+    if let Some(arr) = v.as_array() {
+        return arr.iter().filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>().join(" ");
+    }
+    String::new()
+}
+
+/// Best-effort: does an in-band tool result string look like a failure?
+/// (execute_tool returns errors as strings; the agentic loop has no error flag.)
+pub fn looks_like_error(result: &str) -> bool {
+    let lower = result.trim_start().to_ascii_lowercase();
+    lower.starts_with("error") || lower.starts_with("failed")
+        || lower.starts_with("could not") || lower.starts_with("cannot")
+}
+
 /// Map ONE claude `--output-format stream-json` event to zero or more entries
 /// (as the JSON values `LiveEmitter` would emit). `assistant` → text + tool
 /// entries; `user` tool_result → tool_result entries; everything else → none.
@@ -103,7 +121,7 @@ pub fn entries_from_stream_event(v: &Value) -> Vec<Value> {
             for block in content {
                 if block.get("type").and_then(Value::as_str) == Some("tool_result") {
                     let ok = !block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-                    let detail = block.get("content").and_then(Value::as_str).map(summarize).unwrap_or_default();
+                    let detail = block.get("content").map(content_to_text).map(|s| summarize(&s)).unwrap_or_default();
                     out.push(json!({ "kind": "tool_result", "ok": ok, "detail": detail }));
                 }
             }

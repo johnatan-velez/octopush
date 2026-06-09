@@ -2948,4 +2948,32 @@ mod live_tests {
         assert_eq!(es[0]["ok"], false);
         assert_eq!(es[0]["detail"], "boom: file not found");
     }
+
+    // Fix 1: tool_result content as array of blocks yields joined text.
+    #[test]
+    fn tool_result_array_content_is_joined() {
+        let user = json!({"type":"user","message":{"content":[
+            {"type":"tool_result","is_error":false,"content":[
+                {"type":"text","text":"42 lines"}
+            ]}
+        ]}});
+        let es = crate::orchestrator::live::entries_from_stream_event(&user);
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0]["kind"], "tool_result");
+        assert_eq!(es[0]["ok"], true);
+        assert_eq!(es[0]["detail"], "42 lines");
+    }
+
+    // Fix 2: looks_like_error correctly classifies error/success strings.
+    #[test]
+    fn looks_like_error_detects_failures() {
+        use crate::orchestrator::live::looks_like_error;
+        assert!(looks_like_error("Error: no such file"));
+        assert!(looks_like_error("failed to open file"));
+        assert!(looks_like_error("Could not parse input"));
+        assert!(looks_like_error("Cannot write to path"));
+        assert!(!looks_like_error("42 lines"));
+        assert!(!looks_like_error("ok"));
+        assert!(!looks_like_error("  \n42 lines changed"));
+    }
 }

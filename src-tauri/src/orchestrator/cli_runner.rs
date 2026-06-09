@@ -19,7 +19,6 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 const MAX_CLI_TURNS: u32 = 30;
 const CLI_TIMEOUT_SECS: u64 = 900; // 15-minute wall-clock backstop for a hung CLI
 
-
 #[derive(Deserialize, Debug, Default)]
 struct CliResult {
     #[serde(default)]
@@ -228,7 +227,6 @@ pub fn build_cli_args(model: &str, system_prompt: &str) -> Vec<String> {
 pub fn is_result_event(v: &Value) -> bool {
     v.get("type").and_then(Value::as_str) == Some("result")
 }
-
 
 /// The CLI substrate: runs a stage by shelling out to headless Claude Code.
 pub struct CliRunner;

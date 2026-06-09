@@ -39,6 +39,17 @@ describe("RunTrack liveness", () => {
     expect(screen.getByText(/changes requested/)).toBeInTheDocument();
   });
 
+  it("activity skips notice entries — shows last tool not verdict notice", () => {
+    useRunsStore.setState({ liveByStage: { st1: [
+      { kind: "tool", tool: "Read", hint: "x" },
+      { kind: "notice", text: "Verdict: changes requested" },
+    ] } });
+    const running = stage({ status: "running", startedAt: "2026-06-09T00:00:00Z" });
+    render(<RunTrack run={run} stages={[running]} selectedStageId={null} onSelectStage={() => {}} />);
+    expect(screen.getByText(/§ Read x/)).toBeInTheDocument();
+    expect(screen.queryByText(/Verdict:/)).not.toBeInTheDocument();
+  });
+
   it("a pending stage shows no timer/activity", () => {
     render(<RunTrack run={run} stages={[stage({})]} selectedStageId={null} onSelectStage={() => {}} />);
     expect(screen.queryByText(/§ /)).not.toBeInTheDocument();

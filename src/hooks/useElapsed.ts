@@ -6,6 +6,7 @@ export function useElapsed(startedAt: string | null): string {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!startedAt) return;
+    setNow(Date.now());                       // reset so the first paint is correct
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [startedAt]);

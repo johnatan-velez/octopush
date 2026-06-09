@@ -108,7 +108,7 @@ pub async fn run_agentic_loop(
         for u in &resp.tool_uses {
             emitter.tool(&u.name, &crate::orchestrator::live::tool_hint(&u.input));
             let result = execute_tool(workspace_path, &u.name, &u.input);
-            emitter.tool_result(true, &crate::orchestrator::live::summarize(&result));
+            emitter.tool_result(!crate::orchestrator::live::looks_like_error(&result), &crate::orchestrator::live::summarize(&result));
             out.tool_calls.push(ToolCallLog {
                 name: u.name.clone(),
                 input: u.input.clone(),
