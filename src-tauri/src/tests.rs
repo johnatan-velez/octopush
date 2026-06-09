@@ -2839,4 +2839,15 @@ mod g4_staging_tests {
         let staged = String::from_utf8_lossy(&out.stdout);
         assert!(!staged.contains("new.txt"), "staged index entry drained, got: {staged}");
     }
+
+    #[test]
+    fn discard_deletes_untracked_directory() {
+        let dir = tempdir().unwrap();
+        init_with_commit(dir.path());
+        std::fs::create_dir(dir.path().join("feature")).unwrap();
+        std::fs::write(dir.path().join("feature/a.txt"), "x").unwrap();
+        std::fs::write(dir.path().join("feature/b.txt"), "y").unwrap();
+        discard_file_inner(dir.path().to_str().unwrap(), "feature").unwrap();
+        assert!(!dir.path().join("feature").exists(), "untracked dir should be removed");
+    }
 }

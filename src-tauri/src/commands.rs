@@ -2943,6 +2943,17 @@ pub async fn amend_commit(workspace_path: String, message: String) -> AppResult<
 
 /// Sync core of `discard_file` (testable). Tracked → restore to HEAD; untracked → delete.
 pub(crate) fn discard_file_inner(workspace_path: &str, file_path: &str) -> AppResult<()> {
+    let ws = std::path::Path::new(workspace_path);
+    let full = ws.join(file_path);
+
+    // Containment guard: refuse to act on a path that resolves outside the workspace.
+    let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+    let full_canon = full.canonicalize().unwrap_or_else(|_| full.clone());
+    if !full_canon.starts_with(&ws_canon) {
+        return Err(AppError::Other("refusing to discard a path outside the workspace".into()));
+    }
+
+    // Is the file tracked (exists in HEAD)?
     let tracked = std::process::Command::new("git")
         .args(["cat-file", "-e", &format!("HEAD:{file_path}")])
         .current_dir(workspace_path)
@@ -2961,14 +2972,15 @@ pub(crate) fn discard_file_inner(workspace_path: &str, file_path: &str) -> AppRe
         }
     } else {
         // Not in HEAD. It may still be staged as a new file — drain that index
-        // entry first (best-effort; a pure-untracked file simply isn't in the
-        // index and this no-ops), then delete the worktree copy.
+        // entry first (best-effort), then delete the worktree copy (file or dir).
         let _ = std::process::Command::new("git")
             .args(["restore", "--staged", "--", file_path])
             .current_dir(workspace_path)
             .output();
-        let full = std::path::Path::new(workspace_path).join(file_path);
-        if full.exists() {
+        if full.is_dir() {
+            std::fs::remove_dir_all(&full)
+                .map_err(|e| AppError::Other(format!("discard (delete dir) failed: {e}")))?;
+        } else if full.exists() {
             std::fs::remove_file(&full)
                 .map_err(|e| AppError::Other(format!("discard (delete) failed: {e}")))?;
         }
