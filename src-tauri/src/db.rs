@@ -1923,6 +1923,20 @@ impl Db {
         Ok(())
     }
 
+    /// Append a `{"kind":"reset"}` segment marker — but only when the stage
+    /// already has log rows. Stage starts emit reset unconditionally (including
+    /// the very first), and a leading marker would shift every attempt↔segment
+    /// mapping by one.
+    pub fn append_stage_log_marker(&self, run_id: &str, stage_id: &str) -> AppResult<()> {
+        self.conn.execute(
+            "INSERT INTO stage_log (run_id, stage_id, entry)
+             SELECT ?1, ?2, '{\"kind\":\"reset\"}'
+             WHERE EXISTS (SELECT 1 FROM stage_log WHERE stage_id = ?2)",
+            params![run_id, stage_id],
+        )?;
+        Ok(())
+    }
+
     /// All persisted journal entries for a stage, oldest first.
     pub fn list_stage_log(&self, stage_id: &str) -> AppResult<Vec<String>> {
         let mut stmt = self

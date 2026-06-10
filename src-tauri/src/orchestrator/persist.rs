@@ -30,13 +30,12 @@ impl EventSink for PersistingSink {
             let run_id = payload.get("runId").and_then(Value::as_str);
             let stage_id = payload.get("stageId").and_then(Value::as_str);
             if let (Some(run_id), Some(stage_id)) = (run_id, stage_id) {
-                let entry = if payload.get("reset").and_then(Value::as_bool) == Some(true) {
-                    Some(r#"{"kind":"reset"}"#.to_string())
-                } else {
-                    payload.get("entry").map(Value::to_string)
-                };
-                if let Some(entry) = entry {
-                    // Persistence must never break the run — ignore failures.
+                // Persistence must never break the run — ignore failures.
+                if payload.get("reset").and_then(Value::as_bool) == Some(true) {
+                    // Conditional insert: a stage's FIRST start emits reset too,
+                    // and a leading marker would shift the attempt↔segment mapping.
+                    let _ = self.db.lock().append_stage_log_marker(run_id, stage_id);
+                } else if let Some(entry) = payload.get("entry").map(Value::to_string) {
                     let _ = self.db.lock().append_stage_log(run_id, stage_id, &entry);
                 }
             }

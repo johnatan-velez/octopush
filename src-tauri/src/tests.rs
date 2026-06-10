@@ -3430,6 +3430,27 @@ mod stage_log_tests {
     }
 
     #[test]
+    fn first_start_reset_writes_no_leading_marker() {
+        // Every stage start emits reset — including the very first. A leading
+        // marker would shift the attempt↔segment mapping by one, so the sink
+        // only writes a marker once the stage already has rows.
+        let (db, rec, sink, _tmp) = harness();
+        sink.emit(RUN_LOG_EVENT, json!({ "runId": "r1", "stageId": "s1", "reset": true }));
+        assert!(db.lock().list_stage_log("s1").unwrap().is_empty());
+        sink.emit(
+            RUN_LOG_EVENT,
+            json!({ "runId": "r1", "stageId": "s1", "entry": json!({"kind":"text","text":"work"}) }),
+        );
+        sink.emit(RUN_LOG_EVENT, json!({ "runId": "r1", "stageId": "s1", "reset": true }));
+        let rows = db.lock().list_stage_log("s1").unwrap();
+        assert_eq!(rows.len(), 2);
+        let marker: Value = serde_json::from_str(&rows[1]).unwrap();
+        assert_eq!(marker, json!({ "kind": "reset" }));
+        // Both resets + the entry were still forwarded.
+        assert_eq!(rec.events.lock().len(), 3);
+    }
+
+    #[test]
     fn non_log_events_forward_without_persisting() {
         let (db, rec, sink, _tmp) = harness();
         let payload = json!({ "runId": "r1", "costUsd": 0.5 });

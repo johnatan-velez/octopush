@@ -74,7 +74,10 @@ impl Orchestrator {
     }
 
     fn emit_run_update(&self, run_id: &str) {
-        match self.db.lock().get_run(run_id) {
+        // Bind before emitting: the db guard must be dropped before `emit`
+        // (PersistingSink takes the same lock inside `emit`).
+        let run = self.db.lock().get_run(run_id);
+        match run {
             Ok(Some(run)) => self.events.emit(
                 "run://stage-update",
                 serde_json::json!({ "runId": run_id, "run": run }),
