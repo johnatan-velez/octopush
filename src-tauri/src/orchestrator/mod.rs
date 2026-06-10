@@ -127,6 +127,13 @@ impl Orchestrator {
         let stages = self.db.lock().list_run_stages(run_id)?;
         for s in &stages {
             if s.position >= target_pos && s.position <= review.position {
+                // Archive the attempt before the reset wipes it. Pending/unstarted
+                // stages (no artifact, no error) aren't attempts. The feedback that
+                // closed the iteration is recorded on the review row only.
+                if s.artifact.is_some() || s.error.is_some() {
+                    let cf = if s.id == review.id { feedback } else { None };
+                    self.db.lock().archive_stage_attempt(s, cf)?;
+                }
                 self.db.lock().retire_stage_cost(run_id, s.cost_usd, s.input_tokens, s.output_tokens)?;
                 let fb = if s.position == target_pos { feedback } else { None };
                 self.db.lock().reset_run_stage(&s.id, None, fb)?;
@@ -467,6 +474,10 @@ impl Orchestrator {
                 model_override,
             } => {
                 if let Some(s) = &blocked {
+                    // Archive the rejected attempt before the reset wipes it.
+                    if s.artifact.is_some() || s.error.is_some() {
+                        self.db.lock().archive_stage_attempt(s, feedback.as_deref())?;
+                    }
                     self.db.lock().reset_run_stage(
                         &s.id,
                         model_override.as_deref(),

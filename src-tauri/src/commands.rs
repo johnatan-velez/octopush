@@ -971,6 +971,16 @@ pub async fn get_stage_log(
         .collect())
 }
 
+/// Archived attempts for a stage (snapshots taken before loop-back / reject
+/// resets), oldest first.
+#[tauri::command]
+pub async fn list_stage_iterations(
+    state: State<'_, AppState>,
+    stage_id: String,
+) -> AppResult<Vec<crate::db::StageIterationRow>> {
+    state.db.lock().list_stage_iterations(&stage_id)
+}
+
 #[tauri::command]
 pub async fn estimate_run_cost(
     state: State<'_, AppState>,

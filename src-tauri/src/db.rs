@@ -353,6 +353,25 @@ impl Db {
                 entry     TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_stage_log_stage ON stage_log(stage_id, id);
+
+            CREATE TABLE IF NOT EXISTS stage_iterations (
+                id               TEXT PRIMARY KEY,
+                run_id           TEXT NOT NULL,
+                stage_id         TEXT NOT NULL,
+                iteration        INTEGER NOT NULL,
+                role             TEXT NOT NULL,
+                agent_model      TEXT NOT NULL,
+                status           TEXT NOT NULL,
+                artifact         TEXT,
+                error            TEXT,
+                cost_usd         REAL NOT NULL DEFAULT 0,
+                input_tokens     INTEGER NOT NULL DEFAULT 0,
+                output_tokens    INTEGER NOT NULL DEFAULT 0,
+                closing_feedback TEXT,
+                created_at       TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_stage_iterations_stage
+                ON stage_iterations(stage_id, iteration);
             "#,
         )?;
 
@@ -1913,6 +1932,74 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Snapshot a stage attempt into `stage_iterations` before it gets reset.
+    /// Ordinal = number of prior archives for the stage + 1. `closing_feedback`
+    /// is the feedback that ended the attempt (recorded on the review row only).
+    pub fn archive_stage_attempt(
+        &self,
+        stage: &RunStageRow,
+        closing_feedback: Option<&str>,
+    ) -> AppResult<()> {
+        let prior: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM stage_iterations WHERE stage_id = ?1",
+            params![stage.id],
+            |r| r.get(0),
+        )?;
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO stage_iterations
+                (id, run_id, stage_id, iteration, role, agent_model, status, artifact, error,
+                 cost_usd, input_tokens, output_tokens, closing_feedback, created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            params![
+                id,
+                stage.run_id,
+                stage.id,
+                prior + 1,
+                stage.role,
+                stage.agent_model,
+                stage.status,
+                stage.artifact,
+                stage.error,
+                stage.cost_usd,
+                stage.input_tokens,
+                stage.output_tokens,
+                closing_feedback,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// All archived attempts for a stage, oldest first.
+    pub fn list_stage_iterations(&self, stage_id: &str) -> AppResult<Vec<StageIterationRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, stage_id, iteration, role, agent_model, status, artifact, error,
+                    cost_usd, input_tokens, output_tokens, closing_feedback, created_at
+             FROM stage_iterations WHERE stage_id = ?1 ORDER BY iteration",
+        )?;
+        let rows = stmt.query_map(params![stage_id], |r| {
+            Ok(StageIterationRow {
+                id: r.get(0)?,
+                run_id: r.get(1)?,
+                stage_id: r.get(2)?,
+                iteration: r.get(3)?,
+                role: r.get(4)?,
+                agent_model: r.get(5)?,
+                status: r.get(6)?,
+                artifact: r.get(7)?,
+                error: r.get(8)?,
+                cost_usd: r.get(9)?,
+                input_tokens: r.get(10)?,
+                output_tokens: r.get(11)?,
+                closing_feedback: r.get(12)?,
+                created_at: r.get(13)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn insert_run_event(&self, run_id: &str, kind: &str, payload_json: &str) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
@@ -2140,6 +2227,27 @@ pub struct RunStageRow {
     pub loop_max_iterations: i64,
     pub loop_mode: Option<String>,
     pub loop_iterations: i64,
+}
+
+/// One archived stage attempt (a snapshot taken just before a loop-back /
+/// reject reset wiped the live row).
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StageIterationRow {
+    pub id: String,
+    pub run_id: String,
+    pub stage_id: String,
+    pub iteration: i64,
+    pub role: String,
+    pub agent_model: String,
+    pub status: String,
+    pub artifact: Option<String>,
+    pub error: Option<String>,
+    pub cost_usd: f64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub closing_feedback: Option<String>,
+    pub created_at: String,
 }
 
 fn row_to_session(row: &rusqlite::Row) -> AppResult<Session> {

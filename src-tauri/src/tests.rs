@@ -2529,6 +2529,81 @@ mod orchestrator_tests {
         assert_eq!(after[0].feedback, None);   // target stage not reset/feedback'd
     }
 
+    #[tokio::test]
+    async fn loop_back_archives_each_attempt_with_ordinals() {
+        let (orch, run_id, db) = looped_run(2);
+        orch.run_to_pause(&run_id).await.unwrap();
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        let (impl_id, review_id) = (stages[0].id.clone(), stages[1].id.clone());
+
+        orch.resolve_checkpoint(
+            &run_id,
+            CheckpointAction::SendBack { feedback: Some("polish".into()) },
+        ).await.unwrap();
+
+        // Both reset stages were snapshotted before the wipe.
+        let impl_iters = db.lock().list_stage_iterations(&impl_id).unwrap();
+        assert_eq!(impl_iters.len(), 1);
+        assert_eq!(impl_iters[0].iteration, 1);
+        assert_eq!(impl_iters[0].status, "done");
+        assert!(impl_iters[0].artifact.as_deref().unwrap().contains("did implement"));
+        // The feedback that closed the attempt lives on the review row only.
+        assert_eq!(impl_iters[0].closing_feedback, None);
+        let rev_iters = db.lock().list_stage_iterations(&review_id).unwrap();
+        assert_eq!(rev_iters.len(), 1);
+        assert!(rev_iters[0].closing_feedback.is_some());
+
+        // Second loop-back → ordinal 2.
+        orch.resolve_checkpoint(&run_id, CheckpointAction::SendBack { feedback: None })
+            .await.unwrap();
+        let impl_iters = db.lock().list_stage_iterations(&impl_id).unwrap();
+        assert_eq!(impl_iters.len(), 2);
+        assert_eq!(impl_iters[1].iteration, 2);
+    }
+
+    #[tokio::test]
+    async fn loop_back_does_not_archive_stages_without_an_attempt() {
+        let (orch, run_id, db) = looped_run(2);
+        orch.run_to_pause(&run_id).await.unwrap();
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        let impl_id = stages[0].id.clone();
+        // Wipe the implement stage's outcome so it looks unstarted (no artifact/error).
+        db.lock().reset_run_stage(&impl_id, None, None).unwrap();
+
+        orch.resolve_checkpoint(&run_id, CheckpointAction::SendBack { feedback: None })
+            .await.unwrap();
+
+        // The artifactless stage was reset but never archived; its re-run is
+        // attempt #1 when it eventually loops again.
+        let from_first_loop: Vec<_> = db.lock().list_stage_iterations(&impl_id).unwrap()
+            .into_iter().filter(|i| i.iteration == 1).collect();
+        assert!(from_first_loop.is_empty(), "pending stage must not be archived");
+    }
+
+    #[tokio::test]
+    async fn reject_archives_the_prior_attempt() {
+        let (db, ws) = db_with_workspace();
+        let pr = db.lock().list_pipelines().unwrap().into_iter()
+            .find(|p| p.name == "Plan & review").unwrap();
+        let run_id = db.lock().create_run(&ws, &pr.id, "think", None, None, &[]).unwrap();
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+        let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(MockRunner));
+
+        // plan, critique (no cp), refine (cp) -> pause at refine.
+        orch.run_to_pause(&run_id).await.unwrap();
+        let refine_id = db.lock().list_run_stages(&run_id).unwrap()[2].id.clone();
+        orch.resolve_checkpoint(&run_id, CheckpointAction::Reject {
+            feedback: Some("tighten it".into()),
+            model_override: None,
+        }).await.unwrap();
+
+        let iters = db.lock().list_stage_iterations(&refine_id).unwrap();
+        assert_eq!(iters.len(), 1);
+        assert_eq!(iters[0].iteration, 1);
+        assert!(iters[0].artifact.as_deref().unwrap().contains("did refine"));
+        assert_eq!(iters[0].closing_feedback.as_deref(), Some("tighten it"));
+    }
+
     /// A runner whose review-role output carries a verdict; everything else Done.
     struct VerdictRunner { verdict: &'static str } // "PASS" | "CHANGES_REQUESTED" | "" (none)
     #[async_trait::async_trait]
