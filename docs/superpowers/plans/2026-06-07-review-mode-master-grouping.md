@@ -40,7 +40,7 @@ Status Index → open that stream's spec/plan → branch `feat/review-g<N>-<slug
 | G1 Editor Engine | slice 1 done (merged to main, PR #13) | [design](../specs/2026-06-08-review-g1-editor-engine-design.md) | [plan](2026-06-08-review-g1-editor-engine.md) | merged |
 | G2 Editor Reliability | slice 1 done (merged to main, PR #18) | [design](../specs/2026-06-09-review-g2-editor-reliability-design.md) | [plan](2026-06-09-review-g2-editor-reliability.md) | merged |
 | G4 Staging & Commit | slice 1 done (merged to main, PR #20) | [design](../specs/2026-06-09-review-g4-staging-commit-design.md) | [plan](2026-06-09-review-g4-staging-commit.md) | merged |
-| G7 Git Operations Depth | not started | — | — | — |
+| G7 Git Operations Depth | slice 1 done (merged to main, PR #24) | [design](../specs/2026-06-09-review-g7-git-ops-design.md) | [plan](2026-06-09-review-g7-git-ops.md) | merged |
 | G6 File Explorer | not started | — | — | — |
 
 States: `not started` → `brainstorming` → `spec'd` → `planned` → `in progress` → `done (merged to trunk)`.
@@ -78,6 +78,13 @@ States: `not started` → `brainstorming` → `spec'd` → `planned` → `in pro
 - **Slice II — Unified staging model + staged dimming:** make the Review diff include staged changes (the `get_staged_diff` command shipped in G4-s1 is the building block) so an accepted hunk *dims in place* via the `HunkRail.staged` hook instead of vanishing; reconcile the per-file toggle with G3's per-hunk Accept into one mental model; discard-hunk; wire the **`/` file-filter** (G4-s1 wired only `c`); rename-display polish.
 - **Slice III — Per-line staging** (`git add -p` granularity).
 - **Review debt (optional, non-blocking):** extract a shared `git_commit_via_login_shell` helper (`amend_commit` duplicates `commit_changes`); a single shared `DEFAULT_MODEL` constant (the `"claude-sonnet-4-6"` literal is repeated in aiReviewStore/chatStore/ChangesPanel); symlink-hardening of `discard_file_inner`'s containment guard.
+
+**From G7 slice 1 (deferred — slices II–V):**
+- **Slice II — Conflict resolution** (the user's terminal pain): per-file ours/theirs/edit, mark-resolved, continue/abort, AI resolution (reuses `ipc.aiComplete`). Builds on the `conflicted` detection G7-s1 shipped. The G7-s1 conflict banner currently points users to the terminal — Slice II replaces that.
+- **Slice III — Inspect:** log/history browser; per-line blame gutter.
+- **Slice IV — Branch & stash:** branch list/switch/create; stash push/pop/list.
+- **Slice V — Advanced:** reset (soft/mixed/hard, guarded); clean untracked; cherry-pick; tags.
+- **Review notes:** expand the per-workspace `git_lock` to stage/unstage/discard (G7-s1 covers only pull/fetch/commit/amend); `aheadBehindKnown=false` currently conflates timeout with no-upstream (both hide the badge — fine, but a distinct signal would be cleaner); fetch/pull use sync `std::process::Command` in async fns (pre-existing pattern; `tokio::process` later).
 
 ---
 
