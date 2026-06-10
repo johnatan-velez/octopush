@@ -57,7 +57,8 @@ interface RunsState {
     modelOverride?: string,
   ) => Promise<void>;
   abort: (runId: string) => Promise<void>;
-  selectStage: (runId: string, stageId: string) => void;
+  /** null clears a manual pin — the canvas falls back to the active stage. */
+  selectStage: (runId: string, stageId: string | null) => void;
 
   applyStageUpdate: (runId: string, run: Run) => void;
   applyCost: (runId: string, costUsd: number, baselineUsd: number) => void;

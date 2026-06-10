@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { RunStage } from "../lib/ipc";
 import { useRunsStore } from "../stores/runsStore";
 import { usePipelineStore } from "../stores/pipelineStore";
@@ -47,6 +47,27 @@ export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey,
   const stages = detail?.stages ?? [];
   const blockedStage = stages.find((s) => s.status === "awaiting_checkpoint" || s.status === "failed") ?? null;
   useEffect(() => { if (blockedStage) setLastBlocked(blockedStage); }, [blockedStage]);
+
+  // D4 — focus follows the action. When the MANUALLY selected stage transitions
+  // out of "running" (→ done / failed / awaiting_checkpoint), release the pin so
+  // the shown stage falls back to activeStage. A pin placed on an already-terminal
+  // stage never observes that transition, so it is respected.
+  const watchedStage = useRef<{ stageId: string | null; status: string | null }>({ stageId: null, status: null });
+  useEffect(() => {
+    const stageId = selectedStageId;
+    const status = stageId ? stages.find((s) => s.id === stageId)?.status ?? null : null;
+    const prev = watchedStage.current;
+    if (
+      prev.stageId === stageId && stageId !== null && viewedId &&
+      prev.status === "running" && status !== null && status !== "running"
+    ) {
+      selectStage(viewedId, null);
+      watchedStage.current = { stageId: null, status: null };
+      return;
+    }
+    // Selection changed (or no transition): re-key the ref to the current pair.
+    watchedStage.current = { stageId, status };
+  }, [selectedStageId, detail, viewedId, selectStage]); // eslint-disable-line react-hooks/exhaustive-deps -- stages derives from detail
 
   const canvasKey =
     builder !== undefined ? "builder" : !viewedId || !run ? "launcher" : `run:${viewedId}`;
