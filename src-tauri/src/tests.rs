@@ -1967,7 +1967,7 @@ mod pipeline_crud_tests {
 
     #[test]
     fn validate_pipeline_stages_enforces_roles_substrates_and_loop_contract() {
-        use crate::db::{validate_pipeline_stages, StageDraft};
+        use crate::db::validate_pipeline_stages;
         // valid linear pipeline
         assert!(validate_pipeline_stages(&[draft("plan"), draft("implement")]).is_ok());
         // empty pipeline / unknown role / bad substrate / empty model
