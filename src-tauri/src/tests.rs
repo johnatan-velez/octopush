@@ -1938,6 +1938,13 @@ mod pipeline_crud_tests {
         Db::open(tmp.path()).unwrap()
     }
 
+    fn draft(role: &str) -> crate::db::StageDraft {
+        crate::db::StageDraft {
+            role: role.into(), agent_model: "claude-haiku-4-5".into(), substrate: "api".into(),
+            checkpoint: false, loop_target_position: None, loop_max_iterations: 0, loop_mode: None,
+        }
+    }
+
     #[test]
     fn seed_is_idempotent_and_lists_three() {
         let db = test_db();
@@ -1956,6 +1963,44 @@ mod pipeline_crud_tests {
         assert!(implement.checkpoint);
         let plan = stages.iter().find(|s| s.role == "plan").unwrap();
         assert!(!plan.checkpoint);
+    }
+
+    #[test]
+    fn validate_pipeline_stages_enforces_roles_substrates_and_loop_contract() {
+        use crate::db::{validate_pipeline_stages, StageDraft};
+        // valid linear pipeline
+        assert!(validate_pipeline_stages(&[draft("plan"), draft("implement")]).is_ok());
+        // empty pipeline / unknown role / bad substrate / empty model
+        assert!(validate_pipeline_stages(&[]).is_err());
+        assert!(validate_pipeline_stages(&[draft("dance")]).is_err());
+        let mut bad_sub = draft("plan"); bad_sub.substrate = "ftp".into();
+        assert!(validate_pipeline_stages(&[bad_sub]).is_err());
+        let mut no_model = draft("plan"); no_model.agent_model = "".into();
+        assert!(validate_pipeline_stages(&[no_model]).is_err());
+
+        // valid gated loop: code_review at index 1 loops back to 0
+        let mut review = draft("code_review");
+        review.loop_target_position = Some(0); review.loop_max_iterations = 2; review.loop_mode = Some("gated".into());
+        assert!(validate_pipeline_stages(&[draft("implement"), review.clone()]).is_ok());
+
+        // loop on a non-review role
+        let mut looped_impl = draft("implement");
+        looped_impl.loop_target_position = Some(0); looped_impl.loop_max_iterations = 2; looped_impl.loop_mode = Some("gated".into());
+        assert!(validate_pipeline_stages(&[draft("plan"), looped_impl]).is_err());
+        // target not strictly earlier (self)
+        let mut self_loop = review.clone(); self_loop.loop_target_position = Some(1);
+        assert!(validate_pipeline_stages(&[draft("implement"), self_loop]).is_err());
+        // target out of range
+        let mut far = review.clone(); far.loop_target_position = Some(5);
+        assert!(validate_pipeline_stages(&[draft("implement"), far]).is_err());
+        // max 0 with a target / bad mode
+        let mut zero = review.clone(); zero.loop_max_iterations = 0;
+        assert!(validate_pipeline_stages(&[draft("implement"), zero]).is_err());
+        let mut mode = review.clone(); mode.loop_mode = Some("magic".into());
+        assert!(validate_pipeline_stages(&[draft("implement"), mode]).is_err());
+        // no target but leftover loop fields → invalid (builder must normalize)
+        let mut leftover = draft("code_review"); leftover.loop_max_iterations = 2;
+        assert!(validate_pipeline_stages(&[draft("implement"), leftover]).is_err());
     }
 }
 

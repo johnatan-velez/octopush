@@ -1872,6 +1872,67 @@ pub struct UsageBreakdown {
     pub estimated_local_savings_usd: f64,
 }
 
+/// A builder-authored stage. Position is the array index; the loop contract
+/// (review-loop spec §3.7) is enforced by [`validate_pipeline_stages`].
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StageDraft {
+    pub role: String,
+    pub agent_model: String,
+    pub substrate: String,
+    pub checkpoint: bool,
+    pub loop_target_position: Option<i64>,
+    pub loop_max_iterations: i64,
+    pub loop_mode: Option<String>,
+}
+
+const KNOWN_ROLES: &[&str] = &[
+    "plan", "plan_review", "implement", "code_review", "test",
+    "repro", "fix", "verify", "critique", "refine",
+];
+const REVIEW_ROLES: &[&str] = &["plan_review", "code_review", "critique", "verify"];
+
+/// Validate a pipeline's stage drafts (the §3.7 builder contract). Pure.
+pub fn validate_pipeline_stages(stages: &[StageDraft]) -> crate::error::AppResult<()> {
+    use crate::error::AppError;
+    if stages.is_empty() {
+        return Err(AppError::Other("a pipeline needs at least one stage".into()));
+    }
+    for (i, s) in stages.iter().enumerate() {
+        if !KNOWN_ROLES.contains(&s.role.as_str()) {
+            return Err(AppError::Other(format!("unknown stage role '{}'", s.role)));
+        }
+        if !matches!(s.substrate.as_str(), "api" | "cli") {
+            return Err(AppError::Other(format!("unknown substrate '{}'", s.substrate)));
+        }
+        if s.agent_model.trim().is_empty() {
+            return Err(AppError::Other(format!("stage {} has no model", i + 1)));
+        }
+        match s.loop_target_position {
+            Some(target) => {
+                if !REVIEW_ROLES.contains(&s.role.as_str()) {
+                    return Err(AppError::Other(format!("stage '{}' cannot carry a loop (not a review role)", s.role)));
+                }
+                if target < 0 || target >= i as i64 {
+                    return Err(AppError::Other("loop target must be an earlier stage".into()));
+                }
+                if s.loop_max_iterations < 1 {
+                    return Err(AppError::Other("loop max iterations must be at least 1".into()));
+                }
+                if !matches!(s.loop_mode.as_deref(), Some("gated") | Some("auto")) {
+                    return Err(AppError::Other("loop mode must be 'gated' or 'auto'".into()));
+                }
+            }
+            None => {
+                if s.loop_max_iterations != 0 || s.loop_mode.is_some() {
+                    return Err(AppError::Other("loop fields set without a loop target".into()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(serde::Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineRow {
