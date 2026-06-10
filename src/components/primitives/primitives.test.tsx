@@ -1,0 +1,58 @@
+// src/components/primitives/primitives.test.tsx
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { Reveal } from "./Reveal";
+import { FadeSwap } from "./FadeSwap";
+
+describe("Reveal", () => {
+  it("renders children and reflects open state via grid-template-rows + aria-hidden", () => {
+    const { rerender, container } = render(<Reveal open={false}><p>hidden content</p></Reveal>);
+    const outer = container.firstElementChild as HTMLElement;
+    expect(outer.style.gridTemplateRows).toBe("0fr");
+    expect(outer.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByText("hidden content")).toBeInTheDocument(); // stays mounted
+    rerender(<Reveal open><p>hidden content</p></Reveal>);
+    expect(outer.style.gridTemplateRows).toBe("1fr");
+    expect(outer.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("makes closed content inert", () => {
+    const { container } = render(<Reveal open={false}><button>act</button></Reveal>);
+    // `container` itself is a div, so "div > div" would match the outer Reveal
+    // element — grab the inner content wrapper explicitly instead.
+    const inner = (container.firstElementChild as HTMLElement).firstElementChild as HTMLElement;
+    expect(inner.hasAttribute("inert")).toBe(true);
+  });
+});
+
+describe("FadeSwap", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("renders children straight through for a stable key", () => {
+    const { rerender } = render(<FadeSwap swapKey="a"><p>one</p></FadeSwap>);
+    rerender(<FadeSwap swapKey="a"><p>two</p></FadeSwap>);
+    expect(screen.getByText("two")).toBeInTheDocument(); // live content passes through
+  });
+
+  it("holds the old subtree during exit, then mounts the new one", () => {
+    const { rerender, container } = render(<FadeSwap swapKey="a"><p>old view</p></FadeSwap>);
+    rerender(<FadeSwap swapKey="b"><p>new view</p></FadeSwap>);
+    // exit phase: old content still visible, fade-out class applied
+    expect(screen.getByText("old view")).toBeInTheDocument();
+    expect(screen.queryByText("new view")).not.toBeInTheDocument();
+    expect((container.firstElementChild as HTMLElement).className).toContain("octo-fade-out");
+    act(() => { vi.advanceTimersByTime(130); });
+    expect(screen.getByText("new view")).toBeInTheDocument();
+    expect(screen.queryByText("old view")).not.toBeInTheDocument();
+    expect((container.firstElementChild as HTMLElement).className).toContain("octo-fade-in");
+  });
+
+  it("settles on the latest key when keys change rapidly", () => {
+    const { rerender } = render(<FadeSwap swapKey="a"><p>A</p></FadeSwap>);
+    rerender(<FadeSwap swapKey="b"><p>B</p></FadeSwap>);
+    rerender(<FadeSwap swapKey="c"><p>C</p></FadeSwap>);
+    act(() => { vi.advanceTimersByTime(300); });
+    expect(screen.getByText("C")).toBeInTheDocument();
+  });
+});

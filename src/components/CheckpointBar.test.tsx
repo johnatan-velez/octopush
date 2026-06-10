@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // ─── No IPC mocks needed — CheckpointBar has no ipc calls ─────────────────────
 
@@ -37,6 +37,8 @@ function makeStage(overrides = {}) {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("CheckpointBar", () => {
+  afterEach(() => { vi.useRealTimers(); });
+
   it("renders Approve, Reject, Abort for a normal checkpoint (no loop)", () => {
     render(
       <CheckpointBar
@@ -71,6 +73,7 @@ describe("CheckpointBar", () => {
   });
 
   it("calls onSendBack with feedback when Send back is clicked and submitted", () => {
+    vi.useFakeTimers(); // the decision row crossfades into the feedback editor
     const onSendBack = vi.fn();
     render(
       <CheckpointBar
@@ -86,6 +89,7 @@ describe("CheckpointBar", () => {
 
     // Click "Send back to Implement" to open the feedback panel
     fireEvent.click(screen.getByText(/Send back to Implement/i));
+    act(() => { vi.advanceTimersByTime(130); }); // let the FadeSwap settle
 
     // Type feedback
     const textarea = screen.getByRole("textbox");
@@ -140,6 +144,59 @@ describe("CheckpointBar", () => {
         onSendBack={vi.fn()}
       />,
     );
-    expect(screen.getByText(/Review loop · 1 of 2 used/i)).toBeInTheDocument();
+    expect(screen.getByText(/review loop/i)).toBeInTheDocument();
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
+  });
+
+  it("renders loop numerals tabular and turns the meter brass at cap (S2)", () => {
+    const props = {
+      onApprove: vi.fn(), onReject: vi.fn(), onAbort: vi.fn(),
+      loopTargetRole: "Implement", onSendBack: vi.fn(),
+    };
+    const { rerender } = render(
+      <CheckpointBar
+        blockedStage={makeStage({ loopMode: "gated", loopTargetPosition: 0, loopMaxIterations: 3, loopIterations: 1 })}
+        loopState={{ iteration: 1, max: 3 }}
+        {...props}
+      />,
+    );
+    const numerals = screen.getByText("1 of 3");
+    expect(numerals.className).toContain("octo-tabular");
+    expect(screen.getByText(/review loop/i).className).toContain("text-octo-mute");
+
+    rerender(
+      <CheckpointBar
+        blockedStage={makeStage({ loopMode: "gated", loopTargetPosition: 0, loopMaxIterations: 3, loopIterations: 3 })}
+        loopState={{ iteration: 3, max: 3 }}
+        {...props}
+      />,
+    );
+    expect(screen.getByText("3/3").className).toContain("octo-tabular");
+    expect(screen.getByText(/loop exhausted/i).className).toContain("text-octo-brass");
+  });
+
+  it("resets the feedback editor when a new checkpoint arrives (bar stays mounted in the Reveal dock)", () => {
+    vi.useFakeTimers();
+    const props = {
+      onApprove: vi.fn(), onReject: vi.fn(), onAbort: vi.fn(),
+      loopTargetRole: null, loopState: null, onSendBack: vi.fn(),
+    };
+    const { rerender } = render(<CheckpointBar blockedStage={makeStage()} {...props} />);
+
+    // Open the reject editor and type feedback, but don't submit.
+    fireEvent.click(screen.getByText(/^Reject$/));
+    act(() => { vi.advanceTimersByTime(130); });
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "stale text" } });
+
+    // A different stage pauses next — the editor must reset to the decision row.
+    rerender(<CheckpointBar blockedStage={makeStage({ id: "s2", role: "test" })} {...props} />);
+    act(() => { vi.advanceTimersByTime(130); });
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByText(/Approve/i)).toBeInTheDocument();
+
+    // And reopening the editor starts blank.
+    fireEvent.click(screen.getByText(/^Reject$/));
+    act(() => { vi.advanceTimersByTime(130); });
+    expect(screen.getByRole("textbox")).toHaveValue("");
   });
 });

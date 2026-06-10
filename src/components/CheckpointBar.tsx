@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { RunStage } from "../lib/ipc";
 import { labelForRole } from "./RunTrack";
+import { FadeSwap } from "./primitives/FadeSwap";
 
 interface LoopState {
   iteration: number;
@@ -20,117 +21,99 @@ interface Props {
 }
 
 export function CheckpointBar({ blockedStage, onApprove, onReject, onAbort, loopTargetRole, loopState, onSendBack }: Props) {
-  const [rejecting, setRejecting] = useState(false);
-  const [sendingBack, setSendingBack] = useState(false);
-  const [rejectFeedback, setRejectFeedback] = useState("");
-  const [sendBackFeedback, setSendBackFeedback] = useState("");
+  const [mode, setMode] = useState<"decide" | "reject" | "sendback">("decide");
+  const [feedback, setFeedback] = useState("");
   const failed = blockedStage.status === "failed";
+
+  // The bar stays mounted inside the Reveal dock across pauses — a new
+  // checkpoint must never inherit the previous one's editor mode or text.
+  useEffect(() => {
+    setMode("decide");
+    setFeedback("");
+  }, [blockedStage.id]);
 
   const atCap = loopState !== null && loopState.iteration >= loopState.max;
   const canSendBack = loopTargetRole !== null && !atCap;
 
-  function handleSendBack() {
-    onSendBack(sendBackFeedback);
-    setSendingBack(false);
-    setSendBackFeedback("");
-  }
-
-  function handleReject() {
-    onReject(rejectFeedback);
-    setRejecting(false);
-    setRejectFeedback("");
+  function submitFeedback() {
+    (mode === "reject" ? onReject : onSendBack)(feedback);
+    setMode("decide");
+    setFeedback("");
   }
 
   return (
-    <div className="m-4 rounded-lg border border-dashed border-octo-brass bg-[var(--brass-faint)] px-4 py-3 octo-pop-in">
-      {/* Iteration meta row */}
+    <div className={`border-t px-4 py-3 ${failed ? "border-octo-rouge bg-[var(--rouge-ghost)]" : "border-[var(--brass-dim)] bg-[var(--brass-faint)]"}`}>
       {loopState !== null && (
-        <div className="mb-2 font-mono text-[9px] uppercase tracking-[0.12em] text-octo-mute octo-rise-in">
-          {atCap
-            ? <>Loop exhausted ({loopState.iteration}/{loopState.max}) — approve or abort</>
-            : <>Review loop · {loopState.iteration} of {loopState.max} used</>
-          }
+        <div className="mb-2 h-4 font-mono text-[10px] uppercase tracking-[0.25em]">
+          {atCap ? (
+            <span className="text-octo-brass">
+              loop exhausted · <span className="octo-tabular">{loopState.iteration}/{loopState.max}</span> — approve or abort
+            </span>
+          ) : (
+            <span className="text-octo-mute">
+              review loop · <span className="octo-tabular">{loopState.iteration} of {loopState.max}</span> used
+            </span>
+          )}
         </div>
       )}
 
-      <div className="flex items-center gap-3">
-        <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-octo-brass">
-          {failed ? "✕ stage failed" : "⟶ checkpoint"}
-        </span>
-        <span className="flex-1 text-sm text-octo-sage">
-          {failed ? (
-            <>Stage <b className="text-octo-ivory">{labelForRole(blockedStage.role)}</b> failed. Re-run or abort.</>
-          ) : (
-            <>Review <b className="text-octo-ivory">{labelForRole(blockedStage.role)}</b> and choose how to proceed.</>
-          )}
-        </span>
-        {!rejecting && !sendingBack && (
-          <>
+      <FadeSwap swapKey={mode}>
+        {mode === "decide" ? (
+          <div className="flex items-center gap-3">
+            <span className={`font-mono text-[10px] uppercase tracking-[0.25em] ${failed ? "text-octo-rouge" : "text-octo-brass"}`}>
+              {failed ? "✕ stage halted" : "⟜ checkpoint"}
+            </span>
+            <span className="flex-1 text-sm text-octo-sage">
+              {failed ? (
+                <>Stage <b className="text-octo-ivory">{labelForRole(blockedStage.role)}</b> halted. Re-run it or abort the run.</>
+              ) : (
+                <>Review <b className="text-octo-ivory">{labelForRole(blockedStage.role)}</b> and choose how to proceed.</>
+              )}
+            </span>
             {!failed && (
               <button type="button" onClick={onApprove}
-                className="rounded-md bg-octo-brass px-3 py-1.5 font-serif text-sm text-octo-onyx">
+                className="rounded-md bg-octo-brass px-3 py-1.5 font-serif text-sm text-octo-onyx transition-colors duration-[180ms] hover:bg-octo-brass-hi">
                 Approve &amp; continue
               </button>
             )}
             {canSendBack && (
-              <button type="button" onClick={() => setSendingBack(true)}
-                className="rounded-md bg-octo-brass px-3 py-1.5 font-serif text-sm text-octo-onyx">
-                ⟶ Send back to {loopTargetRole}
+              <button type="button" onClick={() => setMode("sendback")}
+                className="rounded-md border border-octo-brass px-3 py-1.5 font-serif text-sm text-octo-brass transition-colors duration-[180ms] hover:bg-[var(--brass-ghost)]">
+                Send back to {loopTargetRole} ⟜
               </button>
             )}
-            <button type="button" onClick={() => setRejecting(true)}
-              className="rounded-md border border-octo-brass px-3 py-1.5 font-mono text-xs text-octo-brass">
+            <button type="button" onClick={() => setMode("reject")}
+              className="rounded-md border border-octo-hairline px-3 py-1.5 font-mono text-xs text-octo-sage transition-colors duration-[180ms] hover:text-octo-ivory">
               {failed ? "Re-run" : "Reject"}
             </button>
             <button type="button" onClick={onAbort}
-              className="rounded-md border border-octo-hairline px-3 py-1.5 font-mono text-xs text-octo-mute hover:text-octo-rouge">
+              className="rounded-md border border-octo-hairline px-3 py-1.5 font-mono text-xs text-octo-mute transition-colors duration-[180ms] hover:text-octo-rouge">
               Abort
             </button>
-          </>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <textarea
+              autoFocus
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              placeholder={mode === "reject" ? "Optional feedback for the re-run…" : "Optional feedback for the send-back…"}
+              className="h-20 resize-none rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-xs text-octo-ivory placeholder:font-serif placeholder:text-octo-mute"
+            />
+            <div className="flex gap-2">
+              <button type="button" onClick={submitFeedback}
+                className="rounded-md bg-octo-brass px-3 py-1.5 font-serif text-sm text-octo-onyx transition-colors duration-[180ms] hover:bg-octo-brass-hi">
+                {mode === "reject" ? "Re-run the stage ⟶" : "Send back ⟶"}
+              </button>
+              <button type="button"
+                onClick={() => { setMode("decide"); setFeedback(""); }}
+                className="rounded-md border border-octo-hairline px-3 py-1.5 font-mono text-xs text-octo-mute">
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
-      </div>
-
-      {rejecting && (
-        <div className="mt-3 flex flex-col gap-2 octo-rise-in">
-          <textarea
-            value={rejectFeedback}
-            onChange={(e) => setRejectFeedback(e.target.value)}
-            placeholder="Optional feedback for the re-run…"
-            className="h-20 resize-none rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-xs text-octo-ivory placeholder:text-octo-mute"
-          />
-          <div className="flex gap-2">
-            <button type="button" onClick={handleReject}
-              className="rounded-md bg-octo-brass px-3 py-1.5 font-serif text-sm text-octo-onyx">
-              Re-run the stage ⟶
-            </button>
-            <button type="button" onClick={() => { setRejecting(false); setRejectFeedback(""); }}
-              className="rounded-md border border-octo-hairline px-3 py-1.5 font-mono text-xs text-octo-mute">
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {sendingBack && (
-        <div className="mt-3 flex flex-col gap-2 octo-rise-in">
-          <textarea
-            value={sendBackFeedback}
-            onChange={(e) => setSendBackFeedback(e.target.value)}
-            placeholder="Optional feedback for the send-back…"
-            className="h-20 resize-none rounded-md border border-octo-hairline bg-octo-onyx px-3 py-2 font-mono text-xs text-octo-ivory placeholder:text-octo-mute"
-          />
-          <div className="flex gap-2">
-            <button type="button" onClick={handleSendBack}
-              className="rounded-md bg-octo-brass px-3 py-1.5 font-serif text-sm text-octo-onyx">
-              Send back ⟶
-            </button>
-            <button type="button" onClick={() => { setSendingBack(false); setSendBackFeedback(""); }}
-              className="rounded-md border border-octo-hairline px-3 py-1.5 font-mono text-xs text-octo-mute">
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
+      </FadeSwap>
     </div>
   );
 }
