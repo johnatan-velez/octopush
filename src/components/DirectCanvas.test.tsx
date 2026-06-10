@@ -22,6 +22,13 @@ const { useRunsStore } = await import("../stores/runsStore");
 const run: Run = { id: "r1", workspaceId: "w1", pipelineId: "p", task: "t", status: "running",
   costUsd: 0, baselineUsd: 0, referenceModel: null, linkedIssueKey: null, createdAt: "t", finishedAt: null };
 
+const mkStage = (id: string, position: number, status: string) => ({
+  id, runId: "r1", position, role: "implement", agentModel: "haiku",
+  substrate: "api", checkpoint: false, status, inputTokens: 0, outputTokens: 0,
+  costUsd: 0, artifact: null, feedback: null, error: null, startedAt: null, finishedAt: null,
+  loopTargetPosition: null, loopMaxIterations: 0, loopMode: null, loopIterations: 0,
+}) as any;
+
 describe("DirectCanvas viewed-run routing", () => {
   afterEach(() => { vi.useRealTimers(); });
   beforeEach(() => {
@@ -52,6 +59,54 @@ describe("DirectCanvas viewed-run routing", () => {
     act(() => { vi.advanceTimersByTime(130); });
     expect(screen.getByText("BUILDER")).toBeInTheDocument();
     expect(screen.queryByText("LAUNCHER")).not.toBeInTheDocument();
+  });
+
+  it("clears a manual pin when the watched stage finishes (focus follows the action)", () => {
+    const s1 = mkStage("s1", 0, "running");
+    const s2 = mkStage("s2", 1, "pending");
+    useRunsStore.setState({ detailByRun: { r1: { run, stages: [s1, s2] } } });
+    useRunsStore.getState().selectRun("w1", "r1");
+    useRunsStore.getState().selectStage("r1", "s1");
+    render(<DirectCanvas active workspaceId="w1" defaultTask="" linkedIssueKey={null} workspacePath="/tmp" />);
+    expect(useRunsStore.getState().getSelectedStageId("r1")).toBe("s1");
+
+    act(() => {
+      useRunsStore.setState({
+        detailByRun: { r1: { run, stages: [{ ...s1, status: "done" }, { ...s2, status: "running" }] } },
+      });
+    });
+    expect(useRunsStore.getState().getSelectedStageId("r1")).toBe(null);
+  });
+
+  it("clears a manual pin when the watched stage halts at a checkpoint", () => {
+    const s1 = mkStage("s1", 0, "running");
+    useRunsStore.setState({ detailByRun: { r1: { run, stages: [s1] } } });
+    useRunsStore.getState().selectRun("w1", "r1");
+    useRunsStore.getState().selectStage("r1", "s1");
+    render(<DirectCanvas active workspaceId="w1" defaultTask="" linkedIssueKey={null} workspacePath="/tmp" />);
+
+    act(() => {
+      useRunsStore.setState({
+        detailByRun: { r1: { run, stages: [{ ...s1, status: "awaiting_checkpoint" }] } },
+      });
+    });
+    expect(useRunsStore.getState().getSelectedStageId("r1")).toBe(null);
+  });
+
+  it("respects a pin on an already-finished stage while OTHER stages change status", () => {
+    const s1 = mkStage("s1", 0, "done");
+    const s2 = mkStage("s2", 1, "running");
+    useRunsStore.setState({ detailByRun: { r1: { run, stages: [s1, s2] } } });
+    useRunsStore.getState().selectRun("w1", "r1");
+    useRunsStore.getState().selectStage("r1", "s1"); // pinned on a terminal stage
+    render(<DirectCanvas active workspaceId="w1" defaultTask="" linkedIssueKey={null} workspacePath="/tmp" />);
+
+    act(() => {
+      useRunsStore.setState({
+        detailByRun: { r1: { run, stages: [s1, { ...s2, status: "done" }] } },
+      });
+    });
+    expect(useRunsStore.getState().getSelectedStageId("r1")).toBe("s1");
   });
 
   it("keeps the checkpoint strip mounted in a Reveal and folds it away on resume", () => {

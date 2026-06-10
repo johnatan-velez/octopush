@@ -1899,6 +1899,23 @@ mod runner_helpers_tests {
         let with_fb = user_input_for("implement", "Build Y", &prior, Some("be more careful"));
         assert!(with_fb.contains("be more careful"));
     }
+
+    #[test]
+    fn feedback_reruns_say_revise_dont_restart() {
+        let prior = StageArtifact {
+            kind: ArtifactKind::Plan,
+            text: "Step 1".into(),
+            payload: None,
+            refs_worktree: false,
+        };
+        // With feedback: the prompt warns the previous attempt may still be in
+        // the workspace and asks for a revision, not a restart.
+        let with_fb = user_input_for("implement", "Build Y", &prior, Some("fix it"));
+        assert!(with_fb.contains("revise them rather than starting over"));
+        // Without feedback: no such line.
+        let without = user_input_for("implement", "Build Y", &prior, None);
+        assert!(!without.contains("revise them rather than starting over"));
+    }
 }
 
 #[cfg(test)]
@@ -2496,7 +2513,11 @@ mod orchestrator_tests {
         assert_eq!(after[1].status, "awaiting_checkpoint");
         let review = after.iter().find(|s| s.id == review_id).unwrap();
         assert_eq!(review.loop_iterations, 1);
-        assert_eq!(after[0].feedback.as_deref(), Some("fix the bug"));
+        // D3: the target receives the review findings + the director's note.
+        assert_eq!(
+            after[0].feedback.as_deref(),
+            Some("did code_review\n\nDirector's note: fix the bug"),
+        );
         let spent_after = db.lock().get_run(&run_id).unwrap().unwrap().cost_usd;
         assert!(spent_after + 1e-9 >= spent_before);
     }
@@ -2527,6 +2548,155 @@ mod orchestrator_tests {
         assert_eq!(review.status, "failed");   // unchanged — not looped, not approved
         assert_eq!(review.loop_iterations, 0); // no iteration burned
         assert_eq!(after[0].feedback, None);   // target stage not reset/feedback'd
+    }
+
+    #[tokio::test]
+    async fn loop_back_archives_each_attempt_with_ordinals() {
+        let (orch, run_id, db) = looped_run(2);
+        orch.run_to_pause(&run_id).await.unwrap();
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        let (impl_id, review_id) = (stages[0].id.clone(), stages[1].id.clone());
+
+        orch.resolve_checkpoint(
+            &run_id,
+            CheckpointAction::SendBack { feedback: Some("polish".into()) },
+        ).await.unwrap();
+
+        // Both reset stages were snapshotted before the wipe.
+        let impl_iters = db.lock().list_stage_iterations(&impl_id).unwrap();
+        assert_eq!(impl_iters.len(), 1);
+        assert_eq!(impl_iters[0].iteration, 1);
+        assert_eq!(impl_iters[0].status, "done");
+        assert!(impl_iters[0].artifact.as_deref().unwrap().contains("did implement"));
+        // The feedback that closed the attempt lives on the review row only.
+        assert_eq!(impl_iters[0].closing_feedback, None);
+        let rev_iters = db.lock().list_stage_iterations(&review_id).unwrap();
+        assert_eq!(rev_iters.len(), 1);
+        assert!(rev_iters[0].closing_feedback.is_some());
+
+        // Second loop-back → ordinal 2.
+        orch.resolve_checkpoint(&run_id, CheckpointAction::SendBack { feedback: None })
+            .await.unwrap();
+        let impl_iters = db.lock().list_stage_iterations(&impl_id).unwrap();
+        assert_eq!(impl_iters.len(), 2);
+        assert_eq!(impl_iters[1].iteration, 2);
+    }
+
+    #[tokio::test]
+    async fn loop_back_does_not_archive_stages_without_an_attempt() {
+        let (orch, run_id, db) = looped_run(2);
+        orch.run_to_pause(&run_id).await.unwrap();
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        let impl_id = stages[0].id.clone();
+        // Wipe the implement stage's outcome so it looks unstarted (no artifact/error).
+        db.lock().reset_run_stage(&impl_id, None, None).unwrap();
+
+        orch.resolve_checkpoint(&run_id, CheckpointAction::SendBack { feedback: None })
+            .await.unwrap();
+
+        // The artifactless stage was reset but never archived; its re-run is
+        // attempt #1 when it eventually loops again.
+        let from_first_loop: Vec<_> = db.lock().list_stage_iterations(&impl_id).unwrap()
+            .into_iter().filter(|i| i.iteration == 1).collect();
+        assert!(from_first_loop.is_empty(), "pending stage must not be archived");
+    }
+
+    #[tokio::test]
+    async fn reject_archives_the_prior_attempt() {
+        let (db, ws) = db_with_workspace();
+        let pr = db.lock().list_pipelines().unwrap().into_iter()
+            .find(|p| p.name == "Plan & review").unwrap();
+        let run_id = db.lock().create_run(&ws, &pr.id, "think", None, None, &[]).unwrap();
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+        let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(MockRunner));
+
+        // plan, critique (no cp), refine (cp) -> pause at refine.
+        orch.run_to_pause(&run_id).await.unwrap();
+        let refine_id = db.lock().list_run_stages(&run_id).unwrap()[2].id.clone();
+        orch.resolve_checkpoint(&run_id, CheckpointAction::Reject {
+            feedback: Some("tighten it".into()),
+            model_override: None,
+        }).await.unwrap();
+
+        let iters = db.lock().list_stage_iterations(&refine_id).unwrap();
+        assert_eq!(iters.len(), 1);
+        assert_eq!(iters[0].iteration, 1);
+        assert!(iters[0].artifact.as_deref().unwrap().contains("did refine"));
+        assert_eq!(iters[0].closing_feedback.as_deref(), Some("tighten it"));
+    }
+
+    #[tokio::test]
+    async fn send_back_composes_findings_and_directors_note() {
+        let (orch, run_id, db) = looped_run(3);
+        orch.run_to_pause(&run_id).await.unwrap();
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        let (impl_id, review_id) = (stages[0].id.clone(), stages[1].id.clone());
+
+        // Findings + note → both, joined by the Director's note marker.
+        orch.resolve_checkpoint(
+            &run_id,
+            CheckpointAction::SendBack { feedback: Some("fix the bug".into()) },
+        ).await.unwrap();
+        // The composed feedback reached the target's feedback column. The target
+        // has already re-run by now (feedback is consumed by the re-run), so read
+        // it from the archived attempt's review row instead.
+        let rev_iters = db.lock().list_stage_iterations(&review_id).unwrap();
+        assert_eq!(
+            rev_iters[0].closing_feedback.as_deref(),
+            Some("did code_review\n\nDirector's note: fix the bug"),
+        );
+        // The re-run target consumed the same composed feedback.
+        let impl_iters = db.lock().list_stage_iterations(&impl_id).unwrap();
+        assert_eq!(impl_iters.len(), 1);
+
+        // Findings alone when the note is empty.
+        orch.resolve_checkpoint(&run_id, CheckpointAction::SendBack { feedback: None })
+            .await.unwrap();
+        let rev_iters = db.lock().list_stage_iterations(&review_id).unwrap();
+        assert_eq!(rev_iters[1].closing_feedback.as_deref(), Some("did code_review"));
+
+        // Note alone when the review somehow has no artifact.
+        db.lock().conn_ref().execute(
+            "UPDATE run_stages SET artifact = NULL WHERE id = ?1",
+            [&review_id],
+        ).unwrap();
+        orch.resolve_checkpoint(
+            &run_id,
+            CheckpointAction::SendBack { feedback: Some("just a note".into()) },
+        ).await.unwrap();
+        // The third loop-back's target feedback is the bare note (it survives on
+        // the row until the next reset), and the artifact-less review row was
+        // not archived again (no attempt content to snapshot).
+        let after = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(after[0].feedback.as_deref(), Some("just a note"));
+        let impl_iters = db.lock().list_stage_iterations(&impl_id).unwrap();
+        assert_eq!(impl_iters.len(), 3);
+        let rev_iters = db.lock().list_stage_iterations(&review_id).unwrap();
+        assert_eq!(rev_iters.len(), 2);
+    }
+
+    /// The target's feedback column receives the composed findings+note before
+    /// the re-run starts (checked mid-flight via the archive-free path: a fresh
+    /// loop with no auto-drive). Uses loop_back's persisted effect directly.
+    #[tokio::test]
+    async fn send_back_target_feedback_column_gets_composed_findings() {
+        let (orch, run_id, db) = looped_run(1);
+        orch.run_to_pause(&run_id).await.unwrap();
+        // Stop the re-drive from consuming the feedback: abort the run after
+        // the loop-back by checking the column straight after resolve starts is
+        // racy — instead mark the run aborted so resolve_checkpoint's re-drive
+        // is a no-op and the pending target keeps its feedback.
+        db.lock().set_run_status(&run_id, "aborted", true).unwrap();
+        orch.resolve_checkpoint(
+            &run_id,
+            CheckpointAction::SendBack { feedback: Some("polish".into()) },
+        ).await.unwrap();
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(
+            stages[0].feedback.as_deref(),
+            Some("did code_review\n\nDirector's note: polish"),
+        );
+        assert_eq!(stages[0].status, "pending"); // reset, not re-run (aborted)
     }
 
     /// A runner whose review-role output carries a verdict; everything else Done.
@@ -3187,6 +3357,136 @@ mod git_lock_tests {
         let b = lock_for("/repo/b");
         assert!(Arc::ptr_eq(&a1, &a2), "same path must share one mutex");
         assert!(!Arc::ptr_eq(&a1, &b), "distinct paths must have distinct mutexes");
+    }
+}
+
+#[cfg(test)]
+mod stage_log_tests {
+    use crate::db::Db;
+    use crate::orchestrator::events::EventSink;
+    use crate::orchestrator::live::RUN_LOG_EVENT;
+    use crate::orchestrator::persist::PersistingSink;
+    use parking_lot::Mutex;
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+    use tempfile::NamedTempFile;
+
+    /// Records every forwarded (event, payload) pair.
+    struct Recorder {
+        events: Mutex<Vec<(String, Value)>>,
+    }
+    impl EventSink for Recorder {
+        fn emit(&self, event: &str, payload: Value) {
+            self.events.lock().push((event.to_string(), payload));
+        }
+    }
+
+    /// (db, recorder, persisting sink, tempfile guard).
+    fn harness() -> (Arc<Mutex<Db>>, Arc<Recorder>, PersistingSink, NamedTempFile) {
+        let tmp = NamedTempFile::new().unwrap();
+        let db = Arc::new(Mutex::new(Db::open(tmp.path()).unwrap()));
+        let rec = Arc::new(Recorder { events: Mutex::new(vec![]) });
+        let sink = PersistingSink::new(rec.clone(), Arc::clone(&db));
+        (db, rec, sink, tmp)
+    }
+
+    #[test]
+    fn run_log_entry_is_persisted_and_forwarded() {
+        let (db, rec, sink, _tmp) = harness();
+        let entry = json!({ "kind": "text", "text": "hello" });
+        sink.emit(
+            RUN_LOG_EVENT,
+            json!({ "runId": "r1", "stageId": "s1", "entry": entry }),
+        );
+        // Persisted, parseable, in order.
+        let rows = db.lock().list_stage_log("s1").unwrap();
+        assert_eq!(rows.len(), 1);
+        let parsed: Value = serde_json::from_str(&rows[0]).unwrap();
+        assert_eq!(parsed, entry);
+        // Forwarded untouched.
+        let fwd = rec.events.lock();
+        assert_eq!(fwd.len(), 1);
+        assert_eq!(fwd[0].0, RUN_LOG_EVENT);
+        assert_eq!(fwd[0].1["entry"], entry);
+    }
+
+    #[test]
+    fn reset_payload_persists_a_reset_marker_row() {
+        let (db, rec, sink, _tmp) = harness();
+        sink.emit(
+            RUN_LOG_EVENT,
+            json!({ "runId": "r1", "stageId": "s1", "entry": json!({"kind":"text","text":"old"}) }),
+        );
+        sink.emit(
+            RUN_LOG_EVENT,
+            json!({ "runId": "r1", "stageId": "s1", "reset": true }),
+        );
+        let rows = db.lock().list_stage_log("s1").unwrap();
+        assert_eq!(rows.len(), 2);
+        let marker: Value = serde_json::from_str(&rows[1]).unwrap();
+        assert_eq!(marker, json!({ "kind": "reset" }));
+        // The reset event itself still reaches the frontend.
+        assert_eq!(rec.events.lock().len(), 2);
+    }
+
+    #[test]
+    fn first_start_reset_writes_no_leading_marker() {
+        // Every stage start emits reset — including the very first. A leading
+        // marker would shift the attempt↔segment mapping by one, so the sink
+        // only writes a marker once the stage already has rows.
+        let (db, rec, sink, _tmp) = harness();
+        sink.emit(RUN_LOG_EVENT, json!({ "runId": "r1", "stageId": "s1", "reset": true }));
+        assert!(db.lock().list_stage_log("s1").unwrap().is_empty());
+        sink.emit(
+            RUN_LOG_EVENT,
+            json!({ "runId": "r1", "stageId": "s1", "entry": json!({"kind":"text","text":"work"}) }),
+        );
+        sink.emit(RUN_LOG_EVENT, json!({ "runId": "r1", "stageId": "s1", "reset": true }));
+        let rows = db.lock().list_stage_log("s1").unwrap();
+        assert_eq!(rows.len(), 2);
+        let marker: Value = serde_json::from_str(&rows[1]).unwrap();
+        assert_eq!(marker, json!({ "kind": "reset" }));
+        // Both resets + the entry were still forwarded.
+        assert_eq!(rec.events.lock().len(), 3);
+    }
+
+    #[test]
+    fn non_log_events_forward_without_persisting() {
+        let (db, rec, sink, _tmp) = harness();
+        let payload = json!({ "runId": "r1", "costUsd": 0.5 });
+        sink.emit("run://cost", payload.clone());
+        let count: i64 = db
+            .lock()
+            .conn_ref()
+            .query_row("SELECT COUNT(*) FROM stage_log", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+        let fwd = rec.events.lock();
+        assert_eq!(fwd.len(), 1);
+        assert_eq!(fwd[0].0, "run://cost");
+        assert_eq!(fwd[0].1, payload);
+    }
+
+    #[test]
+    fn stage_log_rows_are_ordered_and_scoped_by_stage() {
+        let (db, _rec, sink, _tmp) = harness();
+        for i in 0..3 {
+            sink.emit(
+                RUN_LOG_EVENT,
+                json!({ "runId": "r1", "stageId": "s1", "entry": json!({"kind":"text","text": format!("e{i}")}) }),
+            );
+        }
+        sink.emit(
+            RUN_LOG_EVENT,
+            json!({ "runId": "r1", "stageId": "s2", "entry": json!({"kind":"text","text":"other"}) }),
+        );
+        let rows = db.lock().list_stage_log("s1").unwrap();
+        assert_eq!(rows.len(), 3);
+        let texts: Vec<String> = rows
+            .iter()
+            .map(|r| serde_json::from_str::<Value>(r).unwrap()["text"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(texts, vec!["e0", "e1", "e2"]);
     }
 }
 

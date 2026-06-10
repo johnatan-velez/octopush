@@ -88,6 +88,27 @@ export interface RunDetail {
 }
 export type CheckpointActionName = "approve" | "reject" | "edit" | "abort" | "send_back";
 
+/** An archived stage attempt — a snapshot taken just before a loop-back /
+ *  reject reset wiped the live stage row (matches Rust `StageIterationRow`). */
+export interface StageIteration {
+  id: string;
+  runId: string;
+  stageId: string;
+  iteration: number;
+  role: string;
+  agentModel: string;
+  status: string;
+  /** Artifact JSON string (same shape as RunStage.artifact), or null. */
+  artifact: string | null;
+  error: string | null;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** The feedback that sent this attempt back (recorded on the review row). */
+  closingFeedback: string | null;
+  createdAt: string;
+}
+
 /** One live-activity entry streamed on `run://log` (see RUN_EVENTS.log). */
 export type LiveEntry =
   | { kind: "text"; text: string }
@@ -536,6 +557,16 @@ export const ipc = {
 
   abortRun: (runId: string) =>
     invoke<void>("abort_run", { runId }),
+
+  /** The persisted live journal for a stage, oldest first. Entries are
+   *  LiveEntry-shaped JSON plus `{kind:"reset"}` marker objects that split
+   *  the log into per-attempt segments. */
+  getStageLog: (stageId: string) =>
+    invoke<unknown[]>("get_stage_log", { stageId }),
+
+  /** Archived attempts for a stage, oldest first (iteration ascending). */
+  listStageIterations: (stageId: string) =>
+    invoke<StageIteration[]>("list_stage_iterations", { stageId }),
 
   estimateRunCost: (pipelineId: string, stageOverrides?: [number, string][]) =>
     invoke<{ estimateUsd: number; baselineUsd: number }>("estimate_run_cost", {

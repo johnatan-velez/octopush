@@ -40,6 +40,9 @@ interface RunsState {
   getLiveEntries: (stageId: string) => LiveEntry[];
   appendEntry: (stageId: string, entry: LiveEntry) => void;
   clearLog: (stageId: string) => void;
+  /** Restore a terminal stage's journal from the persisted log (D1). Only
+   *  fills an EMPTY buffer — a live stream is never clobbered. */
+  hydrateLog: (stageId: string, entries: LiveEntry[]) => void;
 
   loadRuns: (workspaceId: string) => Promise<void>;
   refreshDetail: (runId: string) => Promise<void>;
@@ -57,7 +60,8 @@ interface RunsState {
     modelOverride?: string,
   ) => Promise<void>;
   abort: (runId: string) => Promise<void>;
-  selectStage: (runId: string, stageId: string) => void;
+  /** null clears a manual pin — the canvas falls back to the active stage. */
+  selectStage: (runId: string, stageId: string | null) => void;
 
   applyStageUpdate: (runId: string, run: Run) => void;
   applyCost: (runId: string, costUsd: number, baselineUsd: number) => void;
@@ -101,6 +105,17 @@ export const useRunsStore = create<RunsState>((set, get) => ({
           ? [...prev.slice(prev.length - MAX_LOG_LINES + 1), entry]
           : [...prev, entry];
       return { liveByStage: { ...s.liveByStage, [stageId]: next } };
+    }),
+
+  hydrateLog: (stageId, entries) =>
+    set((s) => {
+      if ((s.liveByStage[stageId] ?? EMPTY_ENTRIES).length > 0) return {};
+      return {
+        liveByStage: {
+          ...s.liveByStage,
+          [stageId]: entries.slice(Math.max(0, entries.length - MAX_LOG_LINES)),
+        },
+      };
     }),
 
   clearLog: (stageId) =>

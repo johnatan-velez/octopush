@@ -6,6 +6,7 @@ pub mod cli_runner;
 pub mod live;
 pub mod cost;
 pub mod events;
+pub mod persist;
 pub mod runner;
 pub mod types;
 
@@ -33,6 +34,10 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     pub fn new(db: Arc<Mutex<Db>>, events: Arc<dyn EventSink>) -> Self {
+        // Mirror run://log entries into stage_log so journals survive reloads.
+        let events: Arc<dyn EventSink> = Arc::new(
+            crate::orchestrator::persist::PersistingSink::new(events, Arc::clone(&db)),
+        );
         Self {
             db,
             events,
@@ -69,7 +74,10 @@ impl Orchestrator {
     }
 
     fn emit_run_update(&self, run_id: &str) {
-        match self.db.lock().get_run(run_id) {
+        // Bind before emitting: the db guard must be dropped before `emit`
+        // (PersistingSink takes the same lock inside `emit`).
+        let run = self.db.lock().get_run(run_id);
+        match run {
             Ok(Some(run)) => self.events.emit(
                 "run://stage-update",
                 serde_json::json!({ "runId": run_id, "run": run }),
@@ -122,6 +130,13 @@ impl Orchestrator {
         let stages = self.db.lock().list_run_stages(run_id)?;
         for s in &stages {
             if s.position >= target_pos && s.position <= review.position {
+                // Archive the attempt before the reset wipes it. Pending/unstarted
+                // stages (no artifact, no error) aren't attempts. The feedback that
+                // closed the iteration is recorded on the review row only.
+                if s.artifact.is_some() || s.error.is_some() {
+                    let cf = if s.id == review.id { feedback } else { None };
+                    self.db.lock().archive_stage_attempt(s, cf)?;
+                }
                 self.db.lock().retire_stage_cost(run_id, s.cost_usd, s.input_tokens, s.output_tokens)?;
                 let fb = if s.position == target_pos { feedback } else { None };
                 self.db.lock().reset_run_stage(&s.id, None, fb)?;
@@ -462,6 +477,10 @@ impl Orchestrator {
                 model_override,
             } => {
                 if let Some(s) = &blocked {
+                    // Archive the rejected attempt before the reset wipes it.
+                    if s.artifact.is_some() || s.error.is_some() {
+                        self.db.lock().archive_stage_attempt(s, feedback.as_deref())?;
+                    }
                     self.db.lock().reset_run_stage(
                         &s.id,
                         model_override.as_deref(),
@@ -483,7 +502,27 @@ impl Orchestrator {
                             None => false,
                         };
                         if can_loop {
-                            self.loop_back(run_id, review, feedback.as_deref())?;
+                            // Forward the review's findings to the target (the reset is
+                            // about to erase them), with the user's note appended.
+                            let findings = review
+                                .artifact
+                                .as_deref()
+                                .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+                                .and_then(|v| {
+                                    v.get("text").and_then(|t| t.as_str()).map(str::to_string)
+                                })
+                                .filter(|t| !t.trim().is_empty());
+                            let note = feedback
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|n| !n.is_empty());
+                            let composed = match (findings, note) {
+                                (Some(f), Some(n)) => Some(format!("{f}\n\nDirector's note: {n}")),
+                                (Some(f), None) => Some(f),
+                                (None, Some(n)) => Some(n.to_string()),
+                                (None, None) => None,
+                            };
+                            self.loop_back(run_id, review, composed.as_deref())?;
                         } else {
                             // No usable loop (no/invalid target or cap reached) → accept the review.
                             self.db.lock().set_run_stage_status(&review.id, "done")?;
