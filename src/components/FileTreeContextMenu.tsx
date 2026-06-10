@@ -59,15 +59,42 @@ export function FileTreeContextMenu({ path, name, isDir, rootPath, x, y, onDismi
         {name}
       </div>
 
-      <button type="button" role="menuitem" className={ITEM} onClick={run(() => void ipc.revealInFinder(path))}>
+      <button
+        type="button"
+        role="menuitem"
+        className={ITEM}
+        onClick={run(() =>
+          void ipc
+            .revealInFinder(path)
+            .catch((err) => pushToast({ level: "error", title: "Reveal failed", body: String(err) })),
+        )}
+      >
         <FolderOpen size={12} className="shrink-0" /> Reveal in Finder
       </button>
       {isDir ? (
-        <button type="button" role="menuitem" className={ITEM} onClick={run(() => void ipc.openInTerminal(path))}>
+        <button
+          type="button"
+          role="menuitem"
+          className={ITEM}
+          onClick={run(() =>
+            void ipc
+              .openInTerminal(path)
+              .catch((err) => pushToast({ level: "error", title: "Open in terminal failed", body: String(err) })),
+          )}
+        >
           <SquareTerminal size={12} className="shrink-0" /> Open in terminal
         </button>
       ) : (
-        <button type="button" role="menuitem" className={ITEM} onClick={run(() => void ipc.openFileInSystem(path))}>
+        <button
+          type="button"
+          role="menuitem"
+          className={ITEM}
+          onClick={run(() =>
+            void ipc
+              .openFileInSystem(path)
+              .catch((err) => pushToast({ level: "error", title: "Open failed", body: String(err) })),
+          )}
+        >
           <ExternalLink size={12} className="shrink-0" /> Open in system app
         </button>
       )}

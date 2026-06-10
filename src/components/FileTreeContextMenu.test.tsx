@@ -68,6 +68,17 @@ describe("FileTreeContextMenu", () => {
     expect(onDismiss).toHaveBeenCalled();
   });
 
+  it("toasts when Reveal in Finder fails", async () => {
+    mockReveal.mockRejectedValueOnce(new Error("gone"));
+    renderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: /reveal in finder/i }));
+    await vi.waitFor(() =>
+      expect(mockPushToast).toHaveBeenCalledWith(
+        expect.objectContaining({ level: "error", title: "Reveal failed" }),
+      ),
+    );
+  });
+
   it("Open in system app calls ipc with the file path", async () => {
     renderMenu();
     await userEvent.click(screen.getByRole("menuitem", { name: /open in system app/i }));
