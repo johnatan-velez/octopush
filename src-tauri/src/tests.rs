@@ -2002,6 +2002,59 @@ mod pipeline_crud_tests {
         let mut leftover = draft("code_review"); leftover.loop_max_iterations = 2;
         assert!(validate_pipeline_stages(&[draft("implement"), leftover]).is_err());
     }
+
+    #[test]
+    fn save_pipeline_creates_forks_builtins_and_updates_customs() {
+        let db = test_db();
+        db.seed_builtin_pipelines().unwrap();
+        let ff = db.list_pipelines().unwrap().into_iter().find(|p| p.name == "Feature Factory").unwrap();
+        let ff_stages_before = db.get_pipeline_stages(&ff.id).unwrap();
+
+        // CREATE: no id → new custom pipeline.
+        let created = db.save_pipeline(None, "Mine", "d", &[draft("plan"), draft("implement")]).unwrap();
+        let mine = db.list_pipelines().unwrap().into_iter().find(|p| p.id == created).unwrap();
+        assert!(!mine.is_builtin);
+        assert_eq!(db.get_pipeline_stages(&created).unwrap().len(), 2);
+
+        // FORK: saving a builtin returns a NEW id; the builtin is untouched.
+        let forked = db.save_pipeline(Some(ff.id.clone()), "Feature Factory (custom)", "my copy", &[draft("plan")]).unwrap();
+        assert_ne!(forked, ff.id);
+        let ff_stages_after = db.get_pipeline_stages(&ff.id).unwrap();
+        assert_eq!(ff_stages_before.len(), ff_stages_after.len()); // builtin intact
+        assert_eq!(db.get_pipeline_stages(&forked).unwrap().len(), 1);
+        assert!(!db.list_pipelines().unwrap().iter().find(|p| p.id == forked).unwrap().is_builtin);
+
+        // UPDATE: saving a custom updates in place (same id, replaced stages + meta).
+        let updated = db.save_pipeline(Some(created.clone()), "Mine v2", "d2", &[draft("plan"), draft("implement"), draft("test")]).unwrap();
+        assert_eq!(updated, created);
+        let row = db.list_pipelines().unwrap().into_iter().find(|p| p.id == created).unwrap();
+        assert_eq!(row.name, "Mine v2");
+        assert_eq!(db.get_pipeline_stages(&created).unwrap().len(), 3);
+
+        // INVALID draft → error AND the custom's prior stages survive (transactional).
+        let err = db.save_pipeline(Some(created.clone()), "Mine v3", "d3", &[draft("dance")]);
+        assert!(err.is_err());
+        assert_eq!(db.get_pipeline_stages(&created).unwrap().len(), 3); // unchanged
+        assert_eq!(db.list_pipelines().unwrap().into_iter().find(|p| p.id == created).unwrap().name, "Mine v2");
+
+        // Unknown id → error.
+        assert!(db.save_pipeline(Some("nope".into()), "x", "d", &[draft("plan")]).is_err());
+        // Empty name → error.
+        assert!(db.save_pipeline(None, "   ", "d", &[draft("plan")]).is_err());
+    }
+
+    #[test]
+    fn delete_pipeline_rejects_builtins_and_removes_customs_with_stages() {
+        let db = test_db();
+        db.seed_builtin_pipelines().unwrap();
+        let ff = db.list_pipelines().unwrap().into_iter().find(|p| p.name == "Feature Factory").unwrap();
+        assert!(db.delete_pipeline(&ff.id).is_err()); // builtin protected
+
+        let id = db.save_pipeline(None, "Mine", "d", &[draft("plan")]).unwrap();
+        db.delete_pipeline(&id).unwrap();
+        assert!(db.list_pipelines().unwrap().iter().all(|p| p.id != id));
+        assert!(db.get_pipeline_stages(&id).unwrap().is_empty()); // stages gone too
+    }
 }
 
 #[cfg(test)]

@@ -1534,6 +1534,99 @@ impl Db {
         Ok(())
     }
 
+    /// Create, fork, or update a pipeline from builder drafts (validated).
+    /// - `None` → create a new custom pipeline.
+    /// - `Some(builtin)` → FORK: a new custom copy is created; the builtin is never touched.
+    /// - `Some(custom)` → update meta + replace the stage set, transactionally.
+    /// Returns the saved pipeline's id (the new id when created/forked).
+    pub fn save_pipeline(
+        &self,
+        pipeline_id: Option<String>,
+        name: &str,
+        description: &str,
+        stages: &[StageDraft],
+    ) -> AppResult<String> {
+        use crate::error::AppError;
+        if name.trim().is_empty() {
+            return Err(AppError::Other("the pipeline needs a name".into()));
+        }
+        validate_pipeline_stages(stages)?;
+
+        // Resolve the edit target: does it exist, and is it a builtin?
+        let target: Option<(String, bool)> = match pipeline_id.as_deref() {
+            Some(id) => Some(
+                self.conn
+                    .query_row(
+                        "SELECT id, is_builtin FROM pipelines WHERE id = ?1",
+                        params![id],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0)),
+                    )
+                    .optional()?
+                    .ok_or_else(|| AppError::Other("pipeline not found".into()))?,
+            ),
+            None => None,
+        };
+
+        let tx = self.conn.unchecked_transaction()?;
+        let saved_id = match target {
+            // Update a custom pipeline in place.
+            Some((id, false)) => {
+                tx.execute(
+                    "UPDATE pipelines SET name = ?2, description = ?3 WHERE id = ?1",
+                    params![id, name, description],
+                )?;
+                tx.execute("DELETE FROM pipeline_stages WHERE pipeline_id = ?1", params![id])?;
+                id
+            }
+            // Create (no target) or fork (builtin target): a fresh custom pipeline.
+            _ => {
+                let id = Uuid::new_v4().to_string();
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT INTO pipelines (id, name, description, is_builtin, created_at)
+                     VALUES (?1,?2,?3,0,?4)",
+                    params![id, name, description, now],
+                )?;
+                id
+            }
+        };
+        for (i, s) in stages.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO pipeline_stages
+                    (id, pipeline_id, position, role, agent_model, substrate, checkpoint,
+                     loop_target_position, loop_max_iterations, loop_mode)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                params![Uuid::new_v4().to_string(), saved_id, i as i64, s.role, s.agent_model,
+                        s.substrate, s.checkpoint as i64,
+                        s.loop_target_position, s.loop_max_iterations, s.loop_mode],
+            )?;
+        }
+        tx.commit()?;
+        Ok(saved_id)
+    }
+
+    /// Delete a custom pipeline and its stages. Builtins are protected.
+    pub fn delete_pipeline(&self, pipeline_id: &str) -> AppResult<()> {
+        use crate::error::AppError;
+        let is_builtin: bool = self
+            .conn
+            .query_row(
+                "SELECT is_builtin FROM pipelines WHERE id = ?1",
+                params![pipeline_id],
+                |r| Ok(r.get::<_, i64>(0)? != 0),
+            )
+            .optional()?
+            .ok_or_else(|| AppError::Other("pipeline not found".into()))?;
+        if is_builtin {
+            return Err(AppError::Other("builtin pipelines cannot be deleted".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM pipeline_stages WHERE pipeline_id = ?1", params![pipeline_id])?;
+        tx.execute("DELETE FROM pipelines WHERE id = ?1", params![pipeline_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     // ─── Runs ─────────────────────────────────────────────────────
 
     /// Create a run and copy the pipeline's stages into `run_stages` (a private copy
