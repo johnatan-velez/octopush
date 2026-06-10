@@ -499,7 +499,27 @@ impl Orchestrator {
                             None => false,
                         };
                         if can_loop {
-                            self.loop_back(run_id, review, feedback.as_deref())?;
+                            // Forward the review's findings to the target (the reset is
+                            // about to erase them), with the user's note appended.
+                            let findings = review
+                                .artifact
+                                .as_deref()
+                                .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+                                .and_then(|v| {
+                                    v.get("text").and_then(|t| t.as_str()).map(str::to_string)
+                                })
+                                .filter(|t| !t.trim().is_empty());
+                            let note = feedback
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|n| !n.is_empty());
+                            let composed = match (findings, note) {
+                                (Some(f), Some(n)) => Some(format!("{f}\n\nDirector's note: {n}")),
+                                (Some(f), None) => Some(f),
+                                (None, Some(n)) => Some(n.to_string()),
+                                (None, None) => None,
+                            };
+                            self.loop_back(run_id, review, composed.as_deref())?;
                         } else {
                             // No usable loop (no/invalid target or cap reached) → accept the review.
                             self.db.lock().set_run_stage_status(&review.id, "done")?;

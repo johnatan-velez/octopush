@@ -1899,6 +1899,23 @@ mod runner_helpers_tests {
         let with_fb = user_input_for("implement", "Build Y", &prior, Some("be more careful"));
         assert!(with_fb.contains("be more careful"));
     }
+
+    #[test]
+    fn feedback_reruns_say_revise_dont_restart() {
+        let prior = StageArtifact {
+            kind: ArtifactKind::Plan,
+            text: "Step 1".into(),
+            payload: None,
+            refs_worktree: false,
+        };
+        // With feedback: the prompt warns the previous attempt may still be in
+        // the workspace and asks for a revision, not a restart.
+        let with_fb = user_input_for("implement", "Build Y", &prior, Some("fix it"));
+        assert!(with_fb.contains("revise them rather than starting over"));
+        // Without feedback: no such line.
+        let without = user_input_for("implement", "Build Y", &prior, None);
+        assert!(!without.contains("revise them rather than starting over"));
+    }
 }
 
 #[cfg(test)]
@@ -2496,7 +2513,11 @@ mod orchestrator_tests {
         assert_eq!(after[1].status, "awaiting_checkpoint");
         let review = after.iter().find(|s| s.id == review_id).unwrap();
         assert_eq!(review.loop_iterations, 1);
-        assert_eq!(after[0].feedback.as_deref(), Some("fix the bug"));
+        // D3: the target receives the review findings + the director's note.
+        assert_eq!(
+            after[0].feedback.as_deref(),
+            Some("did code_review\n\nDirector's note: fix the bug"),
+        );
         let spent_after = db.lock().get_run(&run_id).unwrap().unwrap().cost_usd;
         assert!(spent_after + 1e-9 >= spent_before);
     }
@@ -2602,6 +2623,80 @@ mod orchestrator_tests {
         assert_eq!(iters[0].iteration, 1);
         assert!(iters[0].artifact.as_deref().unwrap().contains("did refine"));
         assert_eq!(iters[0].closing_feedback.as_deref(), Some("tighten it"));
+    }
+
+    #[tokio::test]
+    async fn send_back_composes_findings_and_directors_note() {
+        let (orch, run_id, db) = looped_run(3);
+        orch.run_to_pause(&run_id).await.unwrap();
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        let (impl_id, review_id) = (stages[0].id.clone(), stages[1].id.clone());
+
+        // Findings + note → both, joined by the Director's note marker.
+        orch.resolve_checkpoint(
+            &run_id,
+            CheckpointAction::SendBack { feedback: Some("fix the bug".into()) },
+        ).await.unwrap();
+        // The composed feedback reached the target's feedback column. The target
+        // has already re-run by now (feedback is consumed by the re-run), so read
+        // it from the archived attempt's review row instead.
+        let rev_iters = db.lock().list_stage_iterations(&review_id).unwrap();
+        assert_eq!(
+            rev_iters[0].closing_feedback.as_deref(),
+            Some("did code_review\n\nDirector's note: fix the bug"),
+        );
+        // The re-run target consumed the same composed feedback.
+        let impl_iters = db.lock().list_stage_iterations(&impl_id).unwrap();
+        assert_eq!(impl_iters.len(), 1);
+
+        // Findings alone when the note is empty.
+        orch.resolve_checkpoint(&run_id, CheckpointAction::SendBack { feedback: None })
+            .await.unwrap();
+        let rev_iters = db.lock().list_stage_iterations(&review_id).unwrap();
+        assert_eq!(rev_iters[1].closing_feedback.as_deref(), Some("did code_review"));
+
+        // Note alone when the review somehow has no artifact.
+        db.lock().conn_ref().execute(
+            "UPDATE run_stages SET artifact = NULL WHERE id = ?1",
+            [&review_id],
+        ).unwrap();
+        orch.resolve_checkpoint(
+            &run_id,
+            CheckpointAction::SendBack { feedback: Some("just a note".into()) },
+        ).await.unwrap();
+        // The third loop-back's target feedback is the bare note (it survives on
+        // the row until the next reset), and the artifact-less review row was
+        // not archived again (no attempt content to snapshot).
+        let after = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(after[0].feedback.as_deref(), Some("just a note"));
+        let impl_iters = db.lock().list_stage_iterations(&impl_id).unwrap();
+        assert_eq!(impl_iters.len(), 3);
+        let rev_iters = db.lock().list_stage_iterations(&review_id).unwrap();
+        assert_eq!(rev_iters.len(), 2);
+    }
+
+    /// The target's feedback column receives the composed findings+note before
+    /// the re-run starts (checked mid-flight via the archive-free path: a fresh
+    /// loop with no auto-drive). Uses loop_back's persisted effect directly.
+    #[tokio::test]
+    async fn send_back_target_feedback_column_gets_composed_findings() {
+        let (orch, run_id, db) = looped_run(1);
+        orch.run_to_pause(&run_id).await.unwrap();
+        // Stop the re-drive from consuming the feedback: abort the run after
+        // the loop-back by checking the column straight after resolve starts is
+        // racy — instead mark the run aborted so resolve_checkpoint's re-drive
+        // is a no-op and the pending target keeps its feedback.
+        db.lock().set_run_status(&run_id, "aborted", true).unwrap();
+        orch.resolve_checkpoint(
+            &run_id,
+            CheckpointAction::SendBack { feedback: Some("polish".into()) },
+        ).await.unwrap();
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(
+            stages[0].feedback.as_deref(),
+            Some("did code_review\n\nDirector's note: polish"),
+        );
+        assert_eq!(stages[0].status, "pending"); // reset, not re-run (aborted)
     }
 
     /// A runner whose review-role output carries a verdict; everything else Done.

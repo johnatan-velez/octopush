@@ -100,6 +100,9 @@ pub fn user_input_for(
     }
     if let Some(fb) = feedback {
         s.push_str(&format!("Reviewer feedback to address this time:\n{fb}\n\n"));
+        s.push_str(
+            "Your previous attempt's changes may still be present in the workspace — revise them rather than starting over.\n\n",
+        );
     }
     let _ = role; // role currently only affects system prompt; reserved for future shaping
     s
