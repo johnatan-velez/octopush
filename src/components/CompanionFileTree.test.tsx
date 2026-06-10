@@ -1,14 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Hoist the mock so it is available when vi.mock factory runs.
-const { mockReadDirectory } = vi.hoisted(() => ({
+const { mockReadDirectory, mockReveal, mockOpenSystem, mockOpenTerminal } = vi.hoisted(() => ({
   mockReadDirectory: vi.fn(),
+  mockReveal: vi.fn().mockResolvedValue(undefined),
+  mockOpenSystem: vi.fn().mockResolvedValue(undefined),
+  mockOpenTerminal: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../lib/ipc", () => ({
-  ipc: { readDirectory: mockReadDirectory },
+  ipc: {
+    readDirectory: mockReadDirectory,
+    revealInFinder: mockReveal,
+    openFileInSystem: mockOpenSystem,
+    openInTerminal: mockOpenTerminal,
+  },
 }));
 
 // Import after mock is set up.
@@ -325,5 +333,22 @@ describe("CompanionFileTree", () => {
 
     await waitFor(() => expect(screen.getByText("gen.ts")).toBeInTheDocument());
     expect(mockReadDirectory).toHaveBeenCalledWith("/repo/src", true);
+  });
+
+  it("right-clicking a file row opens the context menu with file items", async () => {
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={CHANGED} />);
+    await waitFor(() => expect(screen.getByText("src")).toBeInTheDocument());
+    await userEvent.click(screen.getByText("src"));
+    await waitFor(() => expect(screen.getByText("Main.java")).toBeInTheDocument());
+
+    fireEvent.contextMenu(screen.getByTestId("file-row-/repo/src/Main.java"));
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /open in system app/i })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /open in terminal/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: /reveal in finder/i }));
+    expect(mockReveal).toHaveBeenCalledWith("/repo/src/Main.java");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
   });
 });

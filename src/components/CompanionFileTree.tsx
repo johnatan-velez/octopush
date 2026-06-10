@@ -4,6 +4,7 @@ import { ipc } from "../lib/ipc";
 import type { DirectoryEntry } from "../lib/types";
 import { fileIcon } from "../lib/fileIcons";
 import { useReviewPrefs } from "../stores/reviewPrefsStore";
+import { FileTreeContextMenu } from "./FileTreeContextMenu";
 
 interface Props {
   rootPath: string;
@@ -19,6 +20,13 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
   const [children, setChildren] = useState<Record<string, ChildState>>({});
   const showIgnored = useReviewPrefs((s) => !!s.showIgnoredFiles[rootPath]);
   const toggleShowIgnored = useReviewPrefs((s) => s.toggleShowIgnored);
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    path: string;
+    name: string;
+    isDir: boolean;
+  } | null>(null);
   const genRef = useRef(0);
 
   const fetchChildren = useCallback(
@@ -78,6 +86,14 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
     [fetchChildren],
   );
 
+  const onRowContextMenu = useCallback(
+    (e: React.MouseEvent, path: string, name: string, isDir: boolean) => {
+      e.preventDefault();
+      setMenu({ x: e.clientX, y: e.clientY, path, name, isDir });
+    },
+    [],
+  );
+
   return (
     <section className="flex h-full min-h-0 flex-col">
       {/* Eyebrow — same height & padding as the canvas toolbar and the
@@ -113,8 +129,21 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
           changedPaths={changedPaths}
           onToggle={toggleExpand}
           onFileClick={onFileClick}
+          onRowContextMenu={onRowContextMenu}
         />
       </div>
+
+      {menu && (
+        <FileTreeContextMenu
+          path={menu.path}
+          name={menu.name}
+          isDir={menu.isDir}
+          rootPath={rootPath}
+          x={menu.x}
+          y={menu.y}
+          onDismiss={() => setMenu(null)}
+        />
+      )}
     </section>
   );
 }
@@ -131,6 +160,7 @@ interface TreeNodeProps {
   changedPaths: Set<string>;
   onToggle: (path: string) => void;
   onFileClick?: (absPath: string) => void;
+  onRowContextMenu: (e: React.MouseEvent, path: string, name: string, isDir: boolean) => void;
 }
 
 /** Returns the label color class for a file/folder based on state and depth. */
@@ -153,6 +183,7 @@ function TreeNode({
   changedPaths,
   onToggle,
   onFileClick,
+  onRowContextMenu,
 }: TreeNodeProps) {
   const isExpanded = expanded.has(path);
   const isChanged = !isDir && changedPaths.has(path);
@@ -180,6 +211,7 @@ function TreeNode({
             onFileClick(path);
           }
         }}
+        onContextMenu={(e) => onRowContextMenu(e, path, label, isDir)}
         data-testid={!isDir ? `file-row-${path}` : undefined}
       >
         {/* Indent guides — one 1px hairline per depth level */}
@@ -295,6 +327,7 @@ function TreeNode({
                 changedPaths={changedPaths}
                 onToggle={onToggle}
                 onFileClick={onFileClick}
+                onRowContextMenu={onRowContextMenu}
               />
             ));
           })()}
