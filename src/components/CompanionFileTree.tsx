@@ -189,6 +189,14 @@ function TreeNode({
   const isChanged = !isDir && changedPaths.has(path);
   const Icon = !isDir ? fileIcon(label) : null;
 
+  const activate = () => {
+    if (isDir) {
+      onToggle(path);
+    } else if (onFileClick) {
+      onFileClick(path);
+    }
+  };
+
   return (
     <div>
       {/* Row */}
@@ -207,21 +215,11 @@ function TreeNode({
         onMouseLeave={(e) => {
           (e.currentTarget as HTMLElement).style.background = "transparent";
         }}
-        onClick={() => {
-          if (isDir) {
-            onToggle(path);
-          } else if (onFileClick) {
-            onFileClick(path);
-          }
-        }}
+        onClick={activate}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            if (isDir) {
-              onToggle(path);
-            } else if (onFileClick) {
-              onFileClick(path);
-            }
+            activate();
           }
         }}
         onContextMenu={(e) => onRowContextMenu(e, path, label, isDir)}

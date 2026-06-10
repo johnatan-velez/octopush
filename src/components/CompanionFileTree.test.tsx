@@ -381,11 +381,11 @@ describe("CompanionFileTree", () => {
 
     const fileRow = screen.getByTestId("file-row-/repo/pom.xml");
     fileRow.focus();
-    fireEvent.keyDown(fileRow, { key: "Enter" });
+    expect(fireEvent.keyDown(fileRow, { key: "Enter" })).toBe(false);
     expect(onFileClick).toHaveBeenCalledWith("/repo/pom.xml");
 
     const srcRow = screen.getByText("src").closest('[role="treeitem"]') as HTMLElement;
-    fireEvent.keyDown(srcRow, { key: " " });
+    expect(fireEvent.keyDown(srcRow, { key: " " })).toBe(false);
     await waitFor(() => expect(screen.getByText("Main.java")).toBeInTheDocument());
   });
 });
