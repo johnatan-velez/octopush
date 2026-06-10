@@ -67,6 +67,25 @@ describe("runsStore", () => {
     expect(useRunsStore.getState().getLiveEntries("st1")).toEqual([]);
   });
 
+  it("hydrateLog fills an empty stage buffer from the persisted log", () => {
+    useRunsStore.getState().hydrateLog("st1", [
+      { kind: "text", text: "restored" },
+      { kind: "tool", tool: "Edit", hint: "src/x.rs" },
+    ]);
+    expect(useRunsStore.getState().getLiveEntries("st1")).toEqual([
+      { kind: "text", text: "restored" },
+      { kind: "tool", tool: "Edit", hint: "src/x.rs" },
+    ]);
+  });
+
+  it("hydrateLog never clobbers a non-empty (live) buffer", () => {
+    useRunsStore.getState().appendEntry("st1", { kind: "text", text: "live" });
+    useRunsStore.getState().hydrateLog("st1", [{ kind: "text", text: "stale" }]);
+    expect(useRunsStore.getState().getLiveEntries("st1")).toEqual([
+      { kind: "text", text: "live" },
+    ]);
+  });
+
   it("getRuns returns the stable empty default for an unknown workspace", () => {
     expect(useRunsStore.getState().getRuns("nope")).toBe(EMPTY_RUNS);
   });
