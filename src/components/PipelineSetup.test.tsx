@@ -21,14 +21,14 @@ const { PipelineSetup } = await import("./PipelineSetup");
 
 describe("PipelineSetup begin gate", () => {
   it("disables Begin + shows the helper when a run is executing", () => {
-    render(<PipelineSetup defaultTask="build it" onBegin={vi.fn()} executingRun />);
+    render(<PipelineSetup defaultTask="build it" onBegin={vi.fn()} executingRun onEditPipeline={vi.fn()} />);
     const begin = screen.getByRole("button", { name: /Begin the run/i });
     expect(begin).toBeDisabled();
     expect(screen.getByText(/A run is in progress/i)).toBeInTheDocument();
   });
 
   it("enables Begin when no run is executing and a task is set", () => {
-    render(<PipelineSetup defaultTask="build it" onBegin={vi.fn()} executingRun={false} />);
+    render(<PipelineSetup defaultTask="build it" onBegin={vi.fn()} executingRun={false} onEditPipeline={vi.fn()} />);
     expect(screen.getByRole("button", { name: /Begin the run/i })).not.toBeDisabled();
     expect(screen.queryByText(/A run is in progress/i)).not.toBeInTheDocument();
   });
