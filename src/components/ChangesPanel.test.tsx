@@ -26,6 +26,12 @@ vi.mock("./ConflictAiModal", () => ({
     <div data-testid="conflict-ai-modal">{file}:{model}</div>
   ),
 }));
+// The history browser has its own test file — here we only assert the wiring.
+vi.mock("./HistoryModal", () => ({
+  HistoryModal: ({ projectPath }: { projectPath: string }) => (
+    <div data-testid="history-modal">{projectPath}</div>
+  ),
+}));
 
 import { ChangesPanel } from "./ChangesPanel";
 
@@ -131,6 +137,14 @@ describe("ChangesPanel G4", () => {
     });
     render(<ChangesPanel projectPath="/repo" />);
     expect(await screen.findByText(/2 conflicts/i)).toBeInTheDocument();
+  });
+
+  it("History button in the header opens the commit-history browser", async () => {
+    render(<ChangesPanel projectPath="/repo" />);
+    await screen.findByText("main");
+    expect(screen.queryByTestId("history-modal")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /commit history/i }));
+    expect(screen.getByTestId("history-modal")).toHaveTextContent("/repo");
   });
 
   it("hides the ahead/behind badge when aheadBehindKnown is false", async () => {

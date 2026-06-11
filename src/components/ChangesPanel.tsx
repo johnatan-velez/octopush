@@ -20,6 +20,7 @@ import {
   Check,
   Loader2,
   GitCommit,
+  History,
   Pencil,
   Sparkles,
 } from "lucide-react";
@@ -30,6 +31,7 @@ import { pushToast } from "./Toasts";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ModalShell } from "./ModalShell";
 import { ConflictAiModal } from "./ConflictAiModal";
+import { HistoryModal } from "./HistoryModal";
 import { COMMIT_SYSTEM, buildCommitPrompt } from "../lib/commitMessage";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useProjectStore } from "../stores/projectStore";
@@ -81,6 +83,7 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
   const [abortConfirm, setAbortConfirm] = useState(false);
   const [opBusy, setOpBusy] = useState(false);
   const [aiTarget, setAiTarget] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const commitRef = useRef<HTMLTextAreaElement>(null);
   const modelFor = useAiReview((s) => s.modelFor);
   // Per-workspace review model; modelFor falls back to its default for
@@ -390,6 +393,15 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
           </span>
         )}
         <span className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setShowHistory(true)}
+            title="Commit history"
+            aria-label="Commit history"
+            className="flex items-center justify-center rounded p-1 text-octo-sage transition-colors hover:text-octo-brass focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-octo-brass"
+          >
+            <History size={12} />
+          </button>
           <button type="button" onClick={handleFetch} disabled={syncing} title="Fetch from remote"
             className="rounded px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-octo-sage disabled:opacity-40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-octo-brass">Fetch</button>
           <button type="button" onClick={() => runPull("ffOnly")} disabled={syncing || behind === 0} title="Pull from remote"
@@ -651,6 +663,10 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
             void refresh().then(() => onChange?.());
           }}
         />
+      )}
+
+      {showHistory && (
+        <HistoryModal projectPath={projectPath} onClose={() => setShowHistory(false)} />
       )}
 
       {abortConfirm && operation && (
