@@ -782,6 +782,82 @@ pub fn create_and_switch_branch(path: &Path, name: &str, base: &str) -> AppResul
     switch_branch(path, name)
 }
 
+// ─── G7 slice IV: stash ────────────────────────────────────────────
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StashInfo {
+    /// Position in the stash stack — 0 is the most recent (`stash@{0}`).
+    pub index: usize,
+    /// Full stash message as git records it ("On main: …" / "WIP on main: …").
+    pub message: String,
+    /// Stash creation time, ms since epoch — formatted relatively in the UI.
+    pub timestamp_ms: i64,
+}
+
+fn stash_signature(repo: &Repository) -> AppResult<git2::Signature<'static>> {
+    repo.signature()
+        .or_else(|_| git2::Signature::now("Octopush", "octopush@localhost"))
+        .map_err(|e| AppError::Other(format!("git signature: {e}")))
+}
+
+/// `git stash push -u [-m <message>]` equivalent (untracked files included).
+/// A clean tree errors friendly instead of with libgit2's raw ENOTFOUND.
+pub fn stash_push(path: &Path, message: &str) -> AppResult<()> {
+    let mut repo = open_repo(path)?;
+    let sig = stash_signature(&repo)?;
+    let msg = message.trim();
+    let flags = git2::StashFlags::INCLUDE_UNTRACKED;
+    repo.stash_save2(&sig, if msg.is_empty() { None } else { Some(msg) }, Some(flags))
+        .map_err(|e| {
+            if e.code() == git2::ErrorCode::NotFound {
+                AppError::Other("Nothing to stash — the working tree is clean.".into())
+            } else {
+                AppError::Other(format!("git stash push: {e}"))
+            }
+        })?;
+    Ok(())
+}
+
+/// The stash stack, most recent first (index 0 = `stash@{0}`).
+pub fn stash_list(path: &Path) -> AppResult<Vec<StashInfo>> {
+    let mut repo = open_repo(path)?;
+    let mut raw: Vec<(usize, String, git2::Oid)> = Vec::new();
+    repo.stash_foreach(|index, message, oid| {
+        raw.push((index, message.to_string(), *oid));
+        true
+    })
+    .map_err(|e| AppError::Other(format!("git stash list: {e}")))?;
+    Ok(raw
+        .into_iter()
+        .map(|(index, message, oid)| {
+            let timestamp_ms = repo
+                .find_commit(oid)
+                .map(|c| c.time().seconds() * 1000)
+                .unwrap_or(0);
+            StashInfo { index, message, timestamp_ms }
+        })
+        .collect())
+}
+
+/// `git stash pop stash@{index}` — apply then drop on success. Apply
+/// conflicts surface as errors and leave the stash entry intact (git's
+/// own pop semantics).
+pub fn stash_pop(path: &Path, index: usize) -> AppResult<()> {
+    let mut repo = open_repo(path)?;
+    repo.stash_pop(index, None)
+        .map_err(|e| AppError::Other(format!("git stash pop: {e}")))?;
+    Ok(())
+}
+
+/// `git stash drop stash@{index}` — discard one stash entry.
+pub fn stash_drop(path: &Path, index: usize) -> AppResult<()> {
+    let mut repo = open_repo(path)?;
+    repo.stash_drop(index)
+        .map_err(|e| AppError::Other(format!("git stash drop: {e}")))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1092,6 +1168,68 @@ mod tests {
         create_and_switch_branch(dir.path(), "feat/fresh", &base).unwrap();
         let repo = Repository::open(dir.path()).unwrap();
         assert_eq!(current_branch(&repo).unwrap(), "feat/fresh");
+    }
+
+    // ── G7 slice IV: stash ────────────────────────────────────────
+
+    #[test]
+    fn stash_push_list_pop_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+
+        // Dirty the tree: one tracked edit + one untracked file (-u behavior).
+        fs::write(dir.path().join("a.txt"), "edited\n").unwrap();
+        fs::write(dir.path().join("untracked.txt"), "new\n").unwrap();
+
+        stash_push(dir.path(), "wip: experiment").unwrap();
+
+        // Tree is clean again; the untracked file went into the stash too.
+        assert!(!is_dirty(dir.path()).unwrap(), "stash -u leaves a clean tree");
+        assert!(!dir.path().join("untracked.txt").exists());
+
+        let list = stash_list(dir.path()).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].index, 0);
+        assert!(list[0].message.contains("wip: experiment"), "msg: {}", list[0].message);
+        assert!(list[0].timestamp_ms > 0);
+
+        stash_pop(dir.path(), 0).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "edited\n");
+        assert!(dir.path().join("untracked.txt").exists(), "untracked file restored");
+        assert!(stash_list(dir.path()).unwrap().is_empty(), "pop drops the entry");
+    }
+
+    #[test]
+    fn stash_push_clean_tree_errors_friendly() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+        let err = stash_push(dir.path(), "").unwrap_err();
+        assert!(err.to_string().contains("Nothing to stash"), "friendly: {err}");
+    }
+
+    #[test]
+    fn stash_drop_discards_one_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+
+        fs::write(dir.path().join("a.txt"), "two\n").unwrap();
+        stash_push(dir.path(), "older").unwrap();
+        fs::write(dir.path().join("a.txt"), "three\n").unwrap();
+        stash_push(dir.path(), "newer").unwrap();
+
+        let list = stash_list(dir.path()).unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list[0].message.contains("newer"), "stack is newest-first");
+
+        stash_drop(dir.path(), 0).unwrap();
+        let after = stash_list(dir.path()).unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0].message.contains("older"));
+        // The dropped stash is gone — its changes are NOT in the tree.
+        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "one\n");
     }
 
     #[test]

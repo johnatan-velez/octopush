@@ -262,6 +262,10 @@ pub fn run() {
             // Branch & stash (G7 slice IV)
             commands::switch_branch,
             commands::create_and_switch_branch,
+            commands::stash_push,
+            commands::stash_list,
+            commands::stash_pop,
+            commands::stash_drop,
             commands::find_pr_for_branch,
             commands::open_prs_for_project,
             // Workspace-wide file & text search

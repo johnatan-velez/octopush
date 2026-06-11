@@ -2941,6 +2941,39 @@ pub async fn create_and_switch_branch(
     )
 }
 
+// ─── G7 slice IV: stash ───────────────────────────────────────────
+
+/// Stash the working tree (untracked included) with an optional message.
+#[tauri::command]
+pub async fn stash_push(workspace_path: String, message: String) -> AppResult<()> {
+    let workspace_path = expand_tilde(&workspace_path);
+    let _guard = crate::git_lock::git_lock(&workspace_path).await;
+    crate::git_ops::stash_push(std::path::Path::new(&workspace_path), &message)
+}
+
+/// The stash stack, most recent first. Read-only — no git_lock needed.
+#[tauri::command]
+pub async fn stash_list(workspace_path: String) -> AppResult<Vec<crate::git_ops::StashInfo>> {
+    let workspace_path = expand_tilde(&workspace_path);
+    crate::git_ops::stash_list(std::path::Path::new(&workspace_path))
+}
+
+/// Apply + drop one stash entry.
+#[tauri::command]
+pub async fn stash_pop(workspace_path: String, index: usize) -> AppResult<()> {
+    let workspace_path = expand_tilde(&workspace_path);
+    let _guard = crate::git_lock::git_lock(&workspace_path).await;
+    crate::git_ops::stash_pop(std::path::Path::new(&workspace_path), index)
+}
+
+/// Discard one stash entry without applying it.
+#[tauri::command]
+pub async fn stash_drop(workspace_path: String, index: usize) -> AppResult<()> {
+    let workspace_path = expand_tilde(&workspace_path);
+    let _guard = crate::git_lock::git_lock(&workspace_path).await;
+    crate::git_ops::stash_drop(std::path::Path::new(&workspace_path), index)
+}
+
 // ─── Test runner ──────────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone, Debug)]
