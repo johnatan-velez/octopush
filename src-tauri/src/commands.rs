@@ -3224,21 +3224,61 @@ pub fn ensure_not_truncated(stop_reason: &crate::providers::LlmStopReason) -> Ap
     Ok(())
 }
 
+/// Build the `token_events` row for a one-shot AI call. Session attribution
+/// reuses the workspace id (the same convention ChatEngine uses); callers
+/// without a workspace (e.g. commit drafting from a bare project path) land
+/// in a shared "ai-adhoc" bucket so the spend still shows up in Usage.
+/// `timestamp` stays empty — `TokenEngine::record` stamps now(). Unit-testable.
+pub(crate) fn ai_token_event(
+    workspace_id: Option<&str>,
+    model: &str,
+    resp: &crate::providers::LlmResponse,
+    cost_usd: f64,
+) -> TokenEvent {
+    TokenEvent {
+        id: None,
+        session_id: workspace_id.unwrap_or("ai-adhoc").to_string(),
+        timestamp: String::new(),
+        input_tokens: resp.input_tokens,
+        output_tokens: resp.output_tokens,
+        cache_read_tokens: resp.cache_read_tokens,
+        cache_creation_tokens: resp.cache_creation_tokens,
+        model: model.to_string(),
+        cost_usd,
+    }
+}
+
 /// Generic one-shot model call — the shared G5 AI primitive. Returns text +
-/// token counts + computed cost. Does NOT record to the token DB in slice 1.
+/// token counts + computed cost, and records the usage to `token_events`
+/// (attributed to `workspace_id` when given) so Usage dashboards see
+/// AI-review / draft / conflict spend.
 #[tauri::command]
 pub async fn ai_complete(
+    state: State<'_, AppState>,
     model: String,
     system: String,
     prompt: String,
     max_tokens: Option<u32>,
+    workspace_id: Option<String>,
 ) -> AppResult<AiCompleteResult> {
     let (provider, api_base, api_key) = crate::chat_engine::resolve_provider(&model)?;
     let req = build_ai_request(&model, system, prompt, max_tokens.unwrap_or(8192));
     let client = crate::chat_engine::shared_http_client();
     let resp = provider.complete(&api_base, api_key.as_deref(), &req, client).await?;
     ensure_not_truncated(&resp.stop_reason)?;
-    let cost = crate::token_engine::compute_cost(&model, resp.input_tokens, resp.output_tokens, 0, 0);
+    let cost = crate::token_engine::compute_cost(
+        &model,
+        resp.input_tokens,
+        resp.output_tokens,
+        resp.cache_read_tokens,
+        resp.cache_creation_tokens,
+    );
+    if resp.input_tokens > 0 || resp.output_tokens > 0 {
+        // Best-effort: a recording failure must not fail the AI call itself.
+        if let Err(e) = state.tokens.record(ai_token_event(workspace_id.as_deref(), &model, &resp, cost)) {
+            tracing::warn!(error = %e, "failed to record ai_complete token event");
+        }
+    }
     Ok(AiCompleteResult {
         text: resp.text,
         input_tokens: resp.input_tokens,

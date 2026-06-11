@@ -628,10 +628,25 @@ export const ipc = {
     }),
 
   // ─── AI primitive (G5) ────────────────────────────────────────
-  aiComplete: (model: string, system: string, prompt: string, maxTokens?: number) =>
+  aiComplete: (
+    model: string,
+    system: string,
+    prompt: string,
+    opts?: {
+      maxTokens?: number;
+      /** Attributes the spend to this workspace in Usage dashboards. */
+      workspaceId?: string;
+    },
+  ) =>
     invoke<{ text: string; inputTokens: number; outputTokens: number; costUsd: number }>(
       "ai_complete",
-      { model, system, prompt, maxTokens: maxTokens ?? null },
+      {
+        model,
+        system,
+        prompt,
+        maxTokens: opts?.maxTokens ?? null,
+        workspaceId: opts?.workspaceId ?? null,
+      },
     ),
 };
 

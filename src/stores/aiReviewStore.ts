@@ -63,7 +63,9 @@ export const useAiReview = create<State>()(
           reviews: { ...s.reviews, [ws]: { ...EMPTY, status: "running" } },
         }));
         try {
-          const res = await ipc.aiComplete(model, AI_REVIEW_SYSTEM, buildReviewPrompt(gitDiff));
+          const res = await ipc.aiComplete(model, AI_REVIEW_SYSTEM, buildReviewPrompt(gitDiff), {
+            workspaceId: ws,
+          });
           if (get().runGen[ws] !== gen) return; // a newer run superseded this one
           const result = parseAiReview(res.text);
           set((s) => ({

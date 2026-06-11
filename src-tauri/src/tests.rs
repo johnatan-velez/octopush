@@ -4475,3 +4475,70 @@ mod shared_http_client_tests {
         assert!(std::ptr::eq(a, b));
     }
 }
+
+// ─── ai_complete token recording (G5 follow-up) ───────────────────────
+
+mod ai_token_event_tests {
+    use crate::db::Db;
+    use crate::providers::{LlmResponse, LlmStopReason};
+    use crate::token_engine::TokenEngine;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use tempfile::NamedTempFile;
+
+    fn response() -> LlmResponse {
+        LlmResponse {
+            text: "{}".into(),
+            tool_uses: vec![],
+            stop_reason: LlmStopReason::EndTurn,
+            input_tokens: 1200,
+            output_tokens: 340,
+            cache_read_tokens: 5000,
+            cache_creation_tokens: 700,
+        }
+    }
+
+    #[test]
+    fn event_carries_workspace_model_cache_counts_and_cost() {
+        let ev = crate::commands::ai_token_event(Some("ws-42"), "claude-sonnet-4-6", &response(), 0.123);
+        assert_eq!(ev.session_id, "ws-42");
+        assert_eq!(ev.model, "claude-sonnet-4-6");
+        assert_eq!(ev.input_tokens, 1200);
+        assert_eq!(ev.output_tokens, 340);
+        assert_eq!(ev.cache_read_tokens, 5000);
+        assert_eq!(ev.cache_creation_tokens, 700);
+        assert_eq!(ev.cost_usd, 0.123);
+    }
+
+    #[test]
+    fn missing_workspace_falls_back_to_adhoc_bucket() {
+        let ev = crate::commands::ai_token_event(None, "m", &response(), 0.01);
+        assert_eq!(ev.session_id, "ai-adhoc");
+    }
+
+    /// The seam ai_complete uses: recording must persist a token_events row
+    /// (visible to Usage dashboards) even when the workspace has no sessions
+    /// row — increment_session_tokens is then a 0-row UPDATE, not an error.
+    #[test]
+    fn record_persists_a_token_event_without_a_sessions_row() {
+        let tmp = NamedTempFile::new().unwrap();
+        let db = Arc::new(Mutex::new(Db::open(tmp.path()).unwrap()));
+        let engine = TokenEngine::new(Arc::clone(&db));
+
+        let ev = crate::commands::ai_token_event(Some("ws-no-session"), "claude-sonnet-4-6", &response(), 0.5);
+        engine.record(ev).unwrap();
+
+        let rows = db.lock().list_token_events("ws-no-session").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_tokens, 1200);
+        assert_eq!(rows[0].cache_read_tokens, 5000);
+        assert_eq!(rows[0].cost_usd, 0.5);
+        assert!(!rows[0].timestamp.is_empty(), "record() must stamp a timestamp");
+
+        // And it rolls up into the aggregate report the dashboards read.
+        let report = engine.report(None).unwrap();
+        assert_eq!(report.total_input, 1200);
+        assert_eq!(report.total_output, 340);
+        assert!(report.total_cost_usd > 0.0);
+    }
+}

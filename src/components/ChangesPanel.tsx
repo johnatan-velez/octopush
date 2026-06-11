@@ -172,7 +172,9 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
     setDrafting(true);
     try {
       const d = await ipc.getStagedDiff(projectPath);
-      const r = await ipc.aiComplete("claude-sonnet-4-6", COMMIT_SYSTEM, buildCommitPrompt(d));
+      const r = await ipc.aiComplete("claude-sonnet-4-6", COMMIT_SYSTEM, buildCommitPrompt(d), {
+        workspaceId,
+      });
       setCommitMessage(r.text.trim());
     } catch (e) {
       pushToast({ level: "error", title: "Couldn't draft message", body: String(e) });
@@ -640,6 +642,7 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
       {aiTarget && (
         <ConflictAiModal
           workspacePath={projectPath}
+          workspaceId={workspaceId}
           file={aiTarget}
           model={aiModel}
           onClose={() => setAiTarget(null)}
