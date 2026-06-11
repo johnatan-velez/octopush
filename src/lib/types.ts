@@ -141,6 +141,9 @@ export interface Workspace {
   tint: TintName | null;
   testCommand?: string | null;
   linkedIssueKey: string | null;
+  /** Resolved base branch this workspace was created from (null for rows
+   *  predating the column and for the auto-created default-branch row). */
+  fromBranch: string | null;
 }
 
 // ─── File edits ───────────────────────────────────────────────────

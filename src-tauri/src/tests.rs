@@ -161,7 +161,7 @@ mod workspace_tests {
     fn setup_workspace(db: &Db, project_id: &str, workspace_id: &str) {
         db.insert_project(project_id, "Test Project", &format!("/tmp/{}", project_id))
             .unwrap();
-        db.insert_workspace(workspace_id, project_id, "ws", "", "main", None, "")
+        db.insert_workspace(workspace_id, project_id, "ws", "", "main", None, "", None)
             .unwrap();
     }
 
@@ -203,7 +203,7 @@ mod workspace_tests {
         // order is stable creation-ascending (new at end) regardless of which
         // one was touched most recently.
         for id in ["ws-a", "ws-b", "ws-c"] {
-            db.insert_workspace(id, "proj-1", "ws", "", "main", None, "")
+            db.insert_workspace(id, "proj-1", "ws", "", "main", None, "", None)
                 .unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
@@ -217,9 +217,9 @@ mod workspace_tests {
     fn archive_hides_workspace_but_keeps_row() {
         let db = test_db();
         db.insert_project("p", "P", "/tmp/octo-arch-p").unwrap();
-        db.insert_workspace("w1", "p", "ws", "", "main", None, "")
+        db.insert_workspace("w1", "p", "ws", "", "main", None, "", None)
             .unwrap();
-        db.insert_workspace("w2", "p", "ws", "", "feat/keep", None, "")
+        db.insert_workspace("w2", "p", "ws", "", "feat/keep", None, "", None)
             .unwrap();
         assert_eq!(db.list_workspaces("p").unwrap().len(), 2);
 
@@ -236,7 +236,7 @@ mod workspace_tests {
     fn archive_then_list_archived_and_restore() {
         let db = test_db();
         db.insert_project("p", "P", "/tmp/octo-arch2-p").unwrap();
-        db.insert_workspace("w1", "p", "alpha", "", "feat/a", Some("/tmp/x/a"), "").unwrap();
+        db.insert_workspace("w1", "p", "alpha", "", "feat/a", Some("/tmp/x/a"), "", None).unwrap();
 
         db.archive_workspace("w1").unwrap();
         assert!(db.list_workspaces("p").unwrap().is_empty());
@@ -250,10 +250,32 @@ mod workspace_tests {
     }
 
     #[test]
+    fn from_branch_roundtrips_through_insert_list_get_and_archive() {
+        let db = test_db();
+        db.insert_project("p", "P", "/tmp/octo-fb-p").unwrap();
+        db.insert_workspace("w1", "p", "ws", "", "feat-x", None, "", Some("develop"))
+            .unwrap();
+        db.insert_workspace("w2", "p", "ws", "", "feat-y", None, "", None)
+            .unwrap();
+
+        let rows = db.list_workspaces("p").unwrap();
+        assert_eq!(rows[0].from_branch.as_deref(), Some("develop"));
+        assert_eq!(rows[1].from_branch, None);
+        assert_eq!(
+            db.get_workspace("w1").unwrap().unwrap().from_branch.as_deref(),
+            Some("develop"),
+        );
+
+        db.archive_workspace("w1").unwrap();
+        let archived = db.list_archived_workspaces("p").unwrap();
+        assert_eq!(archived[0].from_branch.as_deref(), Some("develop"));
+    }
+
+    #[test]
     fn rename_workspace_updates_name() {
         let db = test_db();
         db.insert_project("p", "P", "/tmp/octo-rn-p").unwrap();
-        db.insert_workspace("w1", "p", "old", "", "main", None, "")
+        db.insert_workspace("w1", "p", "old", "", "main", None, "", None)
             .unwrap();
         db.rename_workspace("w1", "new name").unwrap();
         let rows = db.list_workspaces("p").unwrap();
@@ -347,7 +369,7 @@ mod workspace_tests {
         let db = test_db();
         db.insert_project("proj-link", "Test Project", "/tmp/proj-link")
             .unwrap();
-        db.insert_workspace("ws-link", "proj-link", "ws", "", "main", None, "")
+        db.insert_workspace("ws-link", "proj-link", "ws", "", "main", None, "", None)
             .unwrap();
 
         // Set linked_issue_key, then read back.
@@ -405,7 +427,7 @@ mod workspace_tests {
         let db = test_db();
         db.insert_project("proj-err", "Test Project", "/tmp/proj-err")
             .unwrap();
-        db.insert_workspace("ws-err", "proj-err", "ws", "", "main", None, "")
+        db.insert_workspace("ws-err", "proj-err", "ws", "", "main", None, "", None)
             .unwrap();
 
         db.insert_chat_message("ws-err", "user", "hello", None, None, None, None)
@@ -446,7 +468,7 @@ mod terminal_tests {
     fn setup_workspace(db: &Db, project_id: &str, workspace_id: &str) {
         db.insert_project(project_id, "Test Project", &format!("/tmp/{}", project_id))
             .unwrap();
-        db.insert_workspace(workspace_id, project_id, "ws", "", "main", None, "")
+        db.insert_workspace(workspace_id, project_id, "ws", "", "main", None, "", None)
             .unwrap();
     }
 
@@ -749,7 +771,7 @@ mod budget_tests {
     fn setup_project_and_workspace(db: &Db, project_id: &str, workspace_id: &str) {
         db.insert_project(project_id, "Test Project", &format!("/tmp/{}", project_id))
             .unwrap();
-        db.insert_workspace(workspace_id, project_id, "ws", "", "main", None, "")
+        db.insert_workspace(workspace_id, project_id, "ws", "", "main", None, "", None)
             .unwrap();
     }
 
@@ -927,7 +949,7 @@ mod review_rethink_tests {
 
     fn setup_workspace(db: &Db) {
         db.insert_project("proj-r", "Test Project", "/tmp/proj-r").unwrap();
-        db.insert_workspace("ws-r", "proj-r", "ws", "", "feat/test", None, "").unwrap();
+        db.insert_workspace("ws-r", "proj-r", "ws", "", "feat/test", None, "", None).unwrap();
     }
 
     // ── file_edits CRUD ────────────────────────────────────────────

@@ -39,6 +39,7 @@ const mockWorkspace: Workspace = {
   tint: null,
   testCommand: null,
   linkedIssueKey: null,
+  fromBranch: null,
 };
 
 beforeEach(() => {

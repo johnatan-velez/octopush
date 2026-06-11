@@ -509,7 +509,7 @@ fn ensure_main_workspace(
     let id = uuid::Uuid::new_v4().to_string();
     // name = branch name so the rail shows "main" / "master" / whatever the
     // user's default branch is.
-    db.insert_workspace(&id, project_id, &branch, "", &branch, Some(project_path), "")?;
+    db.insert_workspace(&id, project_id, &branch, "", &branch, Some(project_path), "", None)?;
     Ok(())
 }
 
@@ -563,6 +563,7 @@ pub async fn create_workspace(
     state.db.lock().insert_workspace(
         &id, &project_id, &name, &task, &branch,
         Some(&wt_path.to_string_lossy()), &setup_script,
+        Some(&base), // the RESOLVED base, not the raw (possibly blank) request
     )?;
     let workspaces = state.db.lock().list_workspaces(&project_id)?;
     Ok(workspaces.into_iter().find(|w| w.id == id).unwrap())
