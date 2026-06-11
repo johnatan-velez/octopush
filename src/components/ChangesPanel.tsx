@@ -58,6 +58,13 @@ interface Props {
 
 const POLL_MS = 5_000;
 
+/** Toast-facing labels for the in-progress multi-step operation. */
+const OP_LABEL = {
+  merge: "Merge",
+  rebase: "Rebase",
+  "cherry-pick": "Cherry-pick",
+} as const;
+
 const MAX_VISIBLE_FILES = 200;
 
 // Quiet conflict-row chips — rouge is the conflict hue; the tint only
@@ -325,7 +332,7 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
       if (r.kind === "ok") {
         pushToast({
           level: "success",
-          title: operation === "merge" ? "Merge completed" : "Rebase continued",
+          title: operation === "merge" ? "Merge completed" : `${OP_LABEL[operation]} continued`,
           body: r.output.trim().split("\n").slice(-1)[0] || undefined,
         });
       } else if (r.kind === "moreConflicts") {
@@ -352,7 +359,7 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
     setOpBusy(true);
     try {
       await ipc.abortOperation(projectPath);
-      pushToast({ level: "success", title: operation === "merge" ? "Merge aborted" : "Rebase aborted" });
+      pushToast({ level: "success", title: `${OP_LABEL[operation]} aborted` });
       await refresh();
       onChange?.();
     } catch (e) {

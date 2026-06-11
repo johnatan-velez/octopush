@@ -232,7 +232,7 @@ export interface GitStatus {
   /** False when ahead/behind timed out (huge graph); UI hides the ↑/↓ badge. */
   aheadBehindKnown: boolean;
   /** The in-progress multi-step operation, if any. */
-  operation: "merge" | "rebase" | null;
+  operation: "merge" | "rebase" | "cherry-pick" | null;
 }
 
 /** Branches offered as a base for new workspaces. Locals come repo-default

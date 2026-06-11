@@ -47,6 +47,7 @@ export function PrPicker({ projectPath, onPick }: Props) {
         type="button"
         aria-haspopup="menu"
         aria-expanded={menuAt !== null}
+        aria-label="Start from a pull request"
         title="Start from a pull request"
         onClick={open}
         className="inline-flex items-center rounded-sm text-octo-mute transition-colors duration-[220ms] hover:text-octo-brass focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-octo-brass"
