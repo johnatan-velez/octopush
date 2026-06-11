@@ -468,4 +468,43 @@ describe("CompanionFileTree", () => {
     expect(fireEvent.keyDown(srcRow, { key: " " })).toBe(false);
     await waitFor(() => expect(screen.getByText("Main.java")).toBeInTheDocument());
   });
+
+  it("roving tabindex: exactly one row is tabbable", async () => {
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={CHANGED} />);
+    await waitFor(() => expect(screen.getByText("src")).toBeInTheDocument());
+    const rows = screen.getAllByRole("treeitem");
+    expect(rows.filter((r) => r.tabIndex === 0)).toHaveLength(1);
+    expect(rows.filter((r) => r.tabIndex === -1)).toHaveLength(rows.length - 1);
+  });
+
+  it("ArrowDown/ArrowUp move focus through visible rows", async () => {
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={CHANGED} />);
+    await waitFor(() => expect(screen.getByText("src")).toBeInTheDocument());
+    const rows = screen.getAllByRole("treeitem");
+    rows[0].focus();
+    fireEvent.keyDown(rows[0], { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows[1]);
+    fireEvent.keyDown(rows[1], { key: "ArrowUp" });
+    expect(document.activeElement).toBe(rows[0]);
+  });
+
+  it("ArrowRight expands a collapsed dir; ArrowLeft collapses it", async () => {
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={CHANGED} />);
+    await waitFor(() => expect(screen.getByText("src")).toBeInTheDocument());
+    const srcRow = screen.getByText("src").closest('[role="treeitem"]') as HTMLElement;
+    fireEvent.keyDown(srcRow, { key: "ArrowRight" });
+    await waitFor(() => expect(screen.getByText("Main.java")).toBeInTheDocument());
+    fireEvent.keyDown(srcRow, { key: "ArrowLeft" });
+    await waitFor(() => expect(screen.queryByText("Main.java")).not.toBeInTheDocument());
+  });
+
+  it("Shift+F10 opens the context menu for the focused row", async () => {
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={CHANGED} />);
+    await waitFor(() => expect(screen.getByText("pom.xml")).toBeInTheDocument());
+    const fileRow = screen.getByTestId("file-row-/repo/pom.xml");
+    fileRow.focus();
+    fireEvent.keyDown(fileRow, { key: "F10", shiftKey: true });
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /open in system app/i })).toBeInTheDocument();
+  });
 });

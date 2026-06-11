@@ -27,6 +27,10 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
     name: string;
     isDir: boolean;
   } | null>(null);
+  // Roving tabindex: exactly one row (the focused one) is tabbable; arrows
+  // move within the tree. Invariant: focusedPath always points at a rendered
+  // row — collapsing an ancestor or hiding ignored files resets it to root.
+  const [focusedPath, setFocusedPath] = useState(rootPath);
   const genRef = useRef(0);
 
   const fetchChildren = useCallback(
@@ -67,9 +71,13 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
       setChildren({});
       setMenu(null);
       setExpanded(new Set([rootPath]));
+      setFocusedPath(rootPath);
       void fetchChildren(rootPath, { force: true });
       return;
     }
+    // Toggling ignored files OFF may hide the focused row; reset the roving
+    // tabindex to the root so the tree stays Tab-reachable.
+    if (!showIgnored) setFocusedPath(rootPath);
     const toFetch = new Set(expanded);
     toFetch.add(rootPath);
     for (const p of toFetch) {
@@ -84,6 +92,9 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
         const next = new Set(prev);
         if (next.has(path)) {
           next.delete(path);
+          // Collapsing an ancestor of the focused row would unrender it and
+          // leave no tabbable row; fall back to the root.
+          setFocusedPath((cur) => (cur.startsWith(path + "/") ? rootPath : cur));
         } else {
           next.add(path);
           fetchChildren(path);
@@ -91,15 +102,22 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
         return next;
       });
     },
-    [fetchChildren],
+    [fetchChildren, rootPath],
+  );
+
+  const openMenuAt = useCallback(
+    (x: number, y: number, path: string, name: string, isDir: boolean) => {
+      setMenu({ x, y, path, name, isDir });
+    },
+    [],
   );
 
   const onRowContextMenu = useCallback(
     (e: React.MouseEvent, path: string, name: string, isDir: boolean) => {
       e.preventDefault();
-      setMenu({ x: e.clientX, y: e.clientY, path, name, isDir });
+      openMenuAt(e.clientX, e.clientY, path, name, isDir);
     },
-    [],
+    [openMenuAt],
   );
 
   return (
@@ -133,9 +151,12 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
           expanded={expanded}
           children={children}
           changedPaths={changedPaths}
+          focusedPath={focusedPath}
           onToggle={toggleExpand}
           onFileClick={onFileClick}
           onRowContextMenu={onRowContextMenu}
+          onRowFocus={setFocusedPath}
+          onShowMenuAt={openMenuAt}
         />
       </div>
 
@@ -164,9 +185,12 @@ interface TreeNodeProps {
   expanded: Set<string>;
   children: Record<string, ChildState>;
   changedPaths: Set<string>;
+  focusedPath: string;
   onToggle: (path: string) => void;
   onFileClick?: (absPath: string) => void;
   onRowContextMenu: (e: React.MouseEvent, path: string, name: string, isDir: boolean) => void;
+  onRowFocus: (path: string) => void;
+  onShowMenuAt: (x: number, y: number, path: string, name: string, isDir: boolean) => void;
 }
 
 /** Returns the label color class for a file/folder based on state and depth. */
@@ -186,9 +210,12 @@ function TreeNode({
   expanded,
   children,
   changedPaths,
+  focusedPath,
   onToggle,
   onFileClick,
   onRowContextMenu,
+  onRowFocus,
+  onShowMenuAt,
 }: TreeNodeProps) {
   const isExpanded = expanded.has(path);
   const isChanged = !isDir && changedPaths.has(path);
@@ -208,7 +235,9 @@ function TreeNode({
       <div
         role="treeitem"
         aria-expanded={isDir ? isExpanded : undefined}
-        tabIndex={0}
+        tabIndex={path === focusedPath ? 0 : -1}
+        data-depth={depth}
+        onFocus={() => onRowFocus(path)}
         title={isIgnored ? "Ignored by .gitignore" : undefined}
         className={`octo-rise-in group relative flex cursor-pointer items-center gap-1 rounded-sm py-1 pr-1 transition duration-[220ms] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-octo-brass${
           isIgnored ? " opacity-60" : ""
@@ -228,6 +257,56 @@ function TreeNode({
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             activate();
+            return;
+          }
+          // Keyboard route to the context menu (WAI-ARIA: Shift+F10 / Menu key).
+          if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+            e.preventDefault();
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            onShowMenuAt(r.left + 8, r.bottom, path, label, isDir);
+            return;
+          }
+          if (!["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Home", "End"].includes(e.key)) {
+            return;
+          }
+          e.preventDefault();
+          // Document order of treeitem rows = visual order of the tree.
+          const rows = Array.from(
+            (e.currentTarget.closest('[role="tree"]') as HTMLElement | null)
+              ?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [],
+          );
+          const idx = rows.indexOf(e.currentTarget as HTMLElement);
+          switch (e.key) {
+            case "ArrowDown":
+              rows[idx + 1]?.focus();
+              break;
+            case "ArrowUp":
+              rows[idx - 1]?.focus();
+              break;
+            case "ArrowRight":
+              if (!isDir) break;
+              if (!isExpanded) onToggle(path);
+              else rows[idx + 1]?.focus(); // first child in document order
+              break;
+            case "ArrowLeft":
+              if (isDir && isExpanded) {
+                onToggle(path);
+                break;
+              }
+              // Focus the parent: first preceding row with a smaller depth.
+              for (let i = idx - 1; i >= 0; i--) {
+                if (Number(rows[i].dataset.depth) < depth) {
+                  rows[i].focus();
+                  break;
+                }
+              }
+              break;
+            case "Home":
+              rows[0]?.focus();
+              break;
+            case "End":
+              rows[rows.length - 1]?.focus();
+              break;
           }
         }}
         onContextMenu={(e) => onRowContextMenu(e, path, label, isDir)}
@@ -337,9 +416,12 @@ function TreeNode({
                 expanded={expanded}
                 children={children}
                 changedPaths={changedPaths}
+                focusedPath={focusedPath}
                 onToggle={onToggle}
                 onFileClick={onFileClick}
                 onRowContextMenu={onRowContextMenu}
+                onRowFocus={onRowFocus}
+                onShowMenuAt={onShowMenuAt}
               />
             ));
           })()}
