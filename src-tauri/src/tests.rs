@@ -2239,6 +2239,45 @@ mod run_crud_tests {
     }
 
     #[test]
+    fn stage_diff_snapshot_sets_and_reads_back() {
+        let db = test_db();
+        let ws = seed_workspace(&db);
+        let pid = db.insert_pipeline("P", "d", false).unwrap();
+        db.insert_pipeline_stage(&pid, 0, "implement", "m", "api", false, None, 0, None).unwrap();
+        let run = db.create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        let stage = db.list_run_stages(&run).unwrap().remove(0);
+        assert_eq!(stage.diff_snapshot, None);
+
+        db.set_stage_diff_snapshot(&stage.id, "diff --git a/x b/x").unwrap();
+        let reloaded = db.list_run_stages(&run).unwrap();
+        assert_eq!(reloaded[0].diff_snapshot.as_deref(), Some("diff --git a/x b/x"));
+    }
+
+    #[test]
+    fn archive_copies_diff_snapshot_and_reset_clears_it() {
+        let db = test_db();
+        let ws = seed_workspace(&db);
+        let pid = db.insert_pipeline("P", "d", false).unwrap();
+        db.insert_pipeline_stage(&pid, 0, "implement", "m", "api", false, None, 0, None).unwrap();
+        let run = db.create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        let stage_id = db.list_run_stages(&run).unwrap()[0].id.clone();
+        db.complete_run_stage(&stage_id, "done", 10, 5, 0.1, Some("{\"kind\":\"diff\",\"text\":\"x\"}"))
+            .unwrap();
+        db.set_stage_diff_snapshot(&stage_id, "the worktree diff").unwrap();
+
+        let row = db.list_run_stages(&run).unwrap().remove(0);
+        db.archive_stage_attempt(&row, Some("again")).unwrap();
+        let iters = db.list_stage_iterations(&stage_id).unwrap();
+        assert_eq!(iters.len(), 1);
+        assert_eq!(iters[0].diff_snapshot.as_deref(), Some("the worktree diff"));
+
+        // The reset wipes the live snapshot along with the rest of the attempt,
+        // so a re-run whose capture is skipped can't show a stale diff.
+        db.reset_run_stage(&stage_id, None, None).unwrap();
+        assert_eq!(db.list_run_stages(&run).unwrap()[0].diff_snapshot, None);
+    }
+
+    #[test]
     fn backfill_sets_loop_on_pre_existing_builtin_review_stages() {
         let db = test_db();
         // Simulate an old install: seed a builtin-shaped pipeline with NO loop config.
