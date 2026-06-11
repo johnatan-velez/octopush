@@ -2974,6 +2974,69 @@ pub async fn stash_drop(workspace_path: String, index: usize) -> AppResult<()> {
     crate::git_ops::stash_drop(std::path::Path::new(&workspace_path), index)
 }
 
+// ─── G7 slice V: advanced ops ─────────────────────────────────────
+
+/// `git reset --soft|--mixed|--hard [target]` (target defaults to HEAD;
+/// typically a SHA from the history browser). Mode is validated; the UI
+/// confirm-gates hard resets.
+#[tauri::command]
+pub async fn reset_head(
+    workspace_path: String,
+    mode: String,
+    target: Option<String>,
+) -> AppResult<String> {
+    let workspace_path = expand_tilde(&workspace_path);
+    let _guard = crate::git_lock::git_lock(&workspace_path).await;
+    crate::git_ops::reset_head(
+        std::path::Path::new(&workspace_path),
+        &mode,
+        target.as_deref(),
+    )
+}
+
+/// `git clean -fd` — returns the removed paths for the confirmation toast.
+#[tauri::command]
+pub async fn clean_untracked(workspace_path: String) -> AppResult<Vec<String>> {
+    let workspace_path = expand_tilde(&workspace_path);
+    let _guard = crate::git_lock::git_lock(&workspace_path).await;
+    crate::git_ops::clean_untracked(std::path::Path::new(&workspace_path))
+}
+
+/// Cherry-pick one commit onto HEAD. Conflict is a tagged outcome (the
+/// conflict section takes over), never an Err.
+#[tauri::command]
+pub async fn cherry_pick(
+    workspace_path: String,
+    sha: String,
+) -> AppResult<crate::git_ops::PullOutcome> {
+    let workspace_path = expand_tilde(&workspace_path);
+    let _guard = crate::git_lock::git_lock(&workspace_path).await;
+    crate::git_ops::cherry_pick(std::path::Path::new(&workspace_path), &sha)
+}
+
+/// Create a lightweight tag at `sha` (or HEAD when omitted).
+#[tauri::command]
+pub async fn create_tag(
+    workspace_path: String,
+    name: String,
+    sha: Option<String>,
+) -> AppResult<()> {
+    let workspace_path = expand_tilde(&workspace_path);
+    let _guard = crate::git_lock::git_lock(&workspace_path).await;
+    crate::git_ops::create_tag(
+        std::path::Path::new(&workspace_path),
+        &name,
+        sha.as_deref(),
+    )
+}
+
+/// All tag names. Read-only — no git_lock needed.
+#[tauri::command]
+pub async fn list_tags(workspace_path: String) -> AppResult<Vec<String>> {
+    let workspace_path = expand_tilde(&workspace_path);
+    crate::git_ops::list_tags(std::path::Path::new(&workspace_path))
+}
+
 // ─── Test runner ──────────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone, Debug)]

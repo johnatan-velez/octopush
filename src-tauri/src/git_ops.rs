@@ -84,12 +84,16 @@ pub fn classify_pull(success: bool, combined: &str) -> PullKind {
 }
 
 /// Map a libgit2 repository state to the operation name the UI cares about.
+/// `cherry-pick` slots into the same continue/abort machinery: both
+/// `git cherry-pick --continue` and `--abort` are valid verbs.
 fn state_to_operation(state: git2::RepositoryState) -> Option<&'static str> {
     match state {
         git2::RepositoryState::Merge => Some("merge"),
         git2::RepositoryState::Rebase
         | git2::RepositoryState::RebaseInteractive
         | git2::RepositoryState::RebaseMerge => Some("rebase"),
+        git2::RepositoryState::CherryPick
+        | git2::RepositoryState::CherryPickSequence => Some("cherry-pick"),
         _ => None,
     }
 }
@@ -858,6 +862,119 @@ pub fn stash_drop(path: &Path, index: usize) -> AppResult<()> {
     Ok(())
 }
 
+// ─── G7 slice V: advanced ops ──────────────────────────────────────
+
+/// `git reset --<mode> <target>`. `mode` ∈ soft|mixed|hard (validated);
+/// `target` defaults to HEAD and is typically a SHA from the history
+/// browser. Returns the trimmed combined output.
+pub fn reset_head(path: &Path, mode: &str, target: Option<&str>) -> AppResult<String> {
+    if !matches!(mode, "soft" | "mixed" | "hard") {
+        return Err(AppError::Other(format!(
+            "invalid reset mode '{mode}' — expected \"soft\", \"mixed\" or \"hard\""
+        )));
+    }
+    let target = target.unwrap_or("HEAD");
+    if target.starts_with('-') {
+        return Err(AppError::Other(format!("invalid reset target '{target}'")));
+    }
+    let output = std::process::Command::new("git")
+        .arg("reset")
+        .arg(format!("--{mode}"))
+        .arg(target)
+        .current_dir(path)
+        .output()
+        .map_err(|e| AppError::Other(format!("failed to run git reset: {e}")))?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    )
+    .trim()
+    .to_string();
+    if !output.status.success() {
+        return Err(AppError::Other(format!("git reset failed: {combined}")));
+    }
+    Ok(combined)
+}
+
+/// `git clean -fd` — remove untracked files and directories. Returns the
+/// removed paths (as git reports them, e.g. `docs/` for a directory).
+pub fn clean_untracked(path: &Path) -> AppResult<Vec<String>> {
+    let output = std::process::Command::new("git")
+        .args(["clean", "-fd"])
+        .current_dir(path)
+        .output()
+        .map_err(|e| AppError::Other(format!("failed to run git clean: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Other(format!("git clean failed: {}", stderr.trim())));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .filter_map(|l| l.strip_prefix("Removing "))
+        .map(String::from)
+        .collect())
+}
+
+/// `git cherry-pick <sha>` via the user's login shell (the resulting commit
+/// honours gitconfig identity/signing like a terminal run). Conflicts are a
+/// tagged outcome, not an error — the repo enters the cherry-pick state and
+/// the existing conflict section (resolve / continue / abort) takes over.
+/// `classify_pull` is reused: cherry-pick output never matches its diverged
+/// patterns, so the kinds collapse to Ok / Conflict / Error.
+pub fn cherry_pick(path: &Path, sha: &str) -> AppResult<PullOutcome> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+    let cmd = format!(
+        "git -c core.editor=true cherry-pick '{}' 2>&1",
+        sha.replace('\'', "'\\''")
+    );
+    let output = std::process::Command::new(&shell)
+        .arg("-l").arg("-c").arg(&cmd)
+        .current_dir(path)
+        .output()
+        .map_err(|e| AppError::Other(format!("failed to spawn git cherry-pick: {e}")))?;
+    let combined = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let kind = classify_pull(output.status.success(), &combined);
+    Ok(PullOutcome { kind, output: combined })
+}
+
+/// Create a lightweight tag `name` at `sha` (or HEAD when None).
+pub fn create_tag(path: &Path, name: &str, sha: Option<&str>) -> AppResult<()> {
+    let repo = open_repo(path)?;
+    let oid = match sha {
+        Some(s) => git2::Oid::from_str(s)
+            .map_err(|e| AppError::Other(format!("bad commit sha '{s}': {e}")))?,
+        None => repo
+            .head()
+            .ok()
+            .and_then(|h| h.target())
+            .ok_or_else(|| AppError::Other("this repository has no commits yet".into()))?,
+    };
+    let obj = repo
+        .find_object(oid, None)
+        .map_err(|e| AppError::Other(format!("commit {oid} not found: {e}")))?;
+    repo.tag_lightweight(name, &obj, false).map_err(|e| {
+        if e.code() == git2::ErrorCode::Exists {
+            AppError::Other(format!("Tag '{name}' already exists."))
+        } else {
+            AppError::Other(format!("create tag: {e}"))
+        }
+    })?;
+    Ok(())
+}
+
+/// All tag names, as git lists them (alphabetical).
+pub fn list_tags(path: &Path) -> AppResult<Vec<String>> {
+    let repo = open_repo(path)?;
+    Ok(repo
+        .tag_names(None)
+        .map_err(|e| AppError::Other(format!("list tags: {e}")))?
+        .iter()
+        .filter_map(|t| t.map(String::from))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1230,6 +1347,130 @@ mod tests {
         assert!(after[0].message.contains("older"));
         // The dropped stash is gone — its changes are NOT in the tree.
         assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "one\n");
+    }
+
+    // ── G7 slice V: advanced ops ──────────────────────────────────
+
+    #[test]
+    fn reset_soft_moves_head_but_keeps_changes_staged() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        let first = commit_file(dir.path(), "a.txt", "one\n", "first");
+        commit_file(dir.path(), "a.txt", "two\n", "second");
+
+        reset_head(dir.path(), "soft", Some(&first.to_string())).unwrap();
+
+        let lc = last_commit(dir.path()).unwrap().unwrap();
+        assert_eq!(lc.1, "first", "HEAD moved back to the first commit");
+        // The second commit's content survives in the tree (staged).
+        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "two\n");
+        assert!(is_dirty(dir.path()).unwrap(), "soft reset leaves staged changes");
+    }
+
+    #[test]
+    fn reset_hard_discards_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        let first = commit_file(dir.path(), "a.txt", "one\n", "first");
+        commit_file(dir.path(), "a.txt", "two\n", "second");
+        fs::write(dir.path().join("a.txt"), "uncommitted\n").unwrap();
+
+        reset_head(dir.path(), "hard", Some(&first.to_string())).unwrap();
+
+        let lc = last_commit(dir.path()).unwrap().unwrap();
+        assert_eq!(lc.1, "first");
+        assert_eq!(fs::read_to_string(dir.path().join("a.txt")).unwrap(), "one\n");
+        assert!(!is_dirty(dir.path()).unwrap(), "hard reset leaves a clean tree");
+    }
+
+    #[test]
+    fn reset_validates_mode_and_target() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+        let err = reset_head(dir.path(), "yolo", None).unwrap_err();
+        assert!(err.to_string().contains("invalid reset mode"), "{err}");
+        assert!(reset_head(dir.path(), "hard", Some("--evil")).is_err());
+    }
+
+    #[test]
+    fn clean_untracked_removes_untracked_only() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+        // A tracked edit must survive; untracked file + dir must go.
+        fs::write(dir.path().join("a.txt"), "edited\n").unwrap();
+        fs::write(dir.path().join("loose.txt"), "x\n").unwrap();
+        fs::create_dir(dir.path().join("junk")).unwrap();
+        fs::write(dir.path().join("junk/b.txt"), "y\n").unwrap();
+
+        let removed = clean_untracked(dir.path()).unwrap();
+
+        assert!(removed.iter().any(|p| p.contains("loose.txt")), "{removed:?}");
+        assert!(removed.iter().any(|p| p.contains("junk")), "{removed:?}");
+        assert!(!dir.path().join("loose.txt").exists());
+        assert!(!dir.path().join("junk").exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "edited\n",
+            "tracked modification untouched"
+        );
+    }
+
+    #[test]
+    fn cherry_pick_applies_a_clean_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+        let base = default_branch(dir.path()).unwrap().unwrap();
+        create_and_switch_branch(dir.path(), "side", &base).unwrap();
+        let side_commit = commit_file(dir.path(), "b.txt", "side\n", "side: add b");
+        switch_branch(dir.path(), &base).unwrap();
+        assert!(!dir.path().join("b.txt").exists());
+
+        let r = cherry_pick(dir.path(), &side_commit.to_string()).unwrap();
+        assert_eq!(r.kind, PullKind::Ok, "output: {}", r.output);
+        assert_eq!(fs::read_to_string(dir.path().join("b.txt")).unwrap(), "side\n");
+        let lc = last_commit(dir.path()).unwrap().unwrap();
+        assert_eq!(lc.1, "side: add b");
+    }
+
+    #[test]
+    fn cherry_pick_conflict_is_classified_and_enters_the_operation_state() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+        let base = default_branch(dir.path()).unwrap().unwrap();
+        create_and_switch_branch(dir.path(), "side", &base).unwrap();
+        let side_commit = commit_file(dir.path(), "a.txt", "side\n", "side edit");
+        switch_branch(dir.path(), &base).unwrap();
+        commit_file(dir.path(), "a.txt", "main\n", "main edit");
+
+        let r = cherry_pick(dir.path(), &side_commit.to_string()).unwrap();
+        assert_eq!(r.kind, PullKind::Conflict, "output: {}", r.output);
+        // The existing conflict machinery takes over: operation + conflicted files.
+        assert_eq!(operation_state(dir.path()).unwrap(), Some("cherry-pick"));
+        let status = get_status(dir.path()).unwrap();
+        assert!(status.conflicted > 0, "conflicted files reported");
+    }
+
+    #[test]
+    fn tag_create_and_list_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        let first = commit_file(dir.path(), "a.txt", "one\n", "first");
+        commit_file(dir.path(), "a.txt", "two\n", "second");
+
+        create_tag(dir.path(), "v0.1.0", None).unwrap();
+        create_tag(dir.path(), "v0.0.1", Some(&first.to_string())).unwrap();
+
+        let tags = list_tags(dir.path()).unwrap();
+        assert_eq!(tags, vec!["v0.0.1".to_string(), "v0.1.0".to_string()]);
+
+        let err = create_tag(dir.path(), "v0.1.0", None).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "friendly: {err}");
+        let bad = create_tag(dir.path(), "vX", Some("not-a-sha")).unwrap_err();
+        assert!(bad.to_string().contains("bad commit sha"), "{bad}");
     }
 
     #[test]

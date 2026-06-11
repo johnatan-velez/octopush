@@ -266,6 +266,12 @@ pub fn run() {
             commands::stash_list,
             commands::stash_pop,
             commands::stash_drop,
+            // Advanced git ops (G7 slice V)
+            commands::reset_head,
+            commands::clean_untracked,
+            commands::cherry_pick,
+            commands::create_tag,
+            commands::list_tags,
             commands::find_pr_for_branch,
             commands::open_prs_for_project,
             // Workspace-wide file & text search
