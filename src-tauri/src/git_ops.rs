@@ -21,6 +21,9 @@ pub struct GitStatus {
     /// False when ahead/behind couldn't be computed in time (huge-graph timeout);
     /// the UI hides the ↑/↓ badge rather than showing a misleading 0.
     pub ahead_behind_known: bool,
+    /// The in-progress multi-step operation, if any: "merge" or "rebase".
+    /// None when the repo is in its normal state.
+    pub operation: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -56,6 +59,25 @@ pub fn classify_pull(success: bool, combined: &str) -> PullKind {
     } else {
         PullKind::Error
     }
+}
+
+/// Map a libgit2 repository state to the operation name the UI cares about.
+fn state_to_operation(state: git2::RepositoryState) -> Option<&'static str> {
+    match state {
+        git2::RepositoryState::Merge => Some("merge"),
+        git2::RepositoryState::Rebase
+        | git2::RepositoryState::RebaseInteractive
+        | git2::RepositoryState::RebaseMerge => Some("rebase"),
+        _ => None,
+    }
+}
+
+/// The in-progress multi-step operation ("merge" or "rebase"), if any.
+/// Cheap: `repo.state()` is a flag read (checks for MERGE_HEAD / rebase
+/// directories) — no graph walk.
+pub fn operation_state(path: &Path) -> AppResult<Option<&'static str>> {
+    let repo = open_repo(path)?;
+    Ok(state_to_operation(repo.state()))
 }
 
 pub fn init_repo(path: &Path) -> AppResult<()> {
@@ -244,9 +266,10 @@ pub fn status_files(path: &Path) -> AppResult<GitStatus> {
         .and_then(|name| repo.find_branch(&name, git2::BranchType::Local).ok())
         .map(|b| b.upstream().is_ok())
         .unwrap_or(false);
+    let operation = state_to_operation(repo.state()).map(String::from);
     Ok(GitStatus {
         branch, changed_files, ahead: 0, behind: 0, has_upstream, conflicted,
-        ahead_behind_known: false,
+        ahead_behind_known: false, operation,
     })
 }
 

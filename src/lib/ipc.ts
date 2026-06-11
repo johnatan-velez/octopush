@@ -427,6 +427,15 @@ export const ipc = {
   discardFile: (workspacePath: string, filePath: string) =>
     invoke<void>("discard_file", { workspacePath, filePath }),
 
+  // ─── Conflict resolution ──────────────────────────────────────
+  /** Take one side of a conflicted file wholesale (checkout --ours/--theirs + add). */
+  resolveConflictTake: (workspacePath: string, file: string, side: "ours" | "theirs") =>
+    invoke<void>("resolve_conflict_take", { workspacePath, file, side }),
+
+  /** Mark a hand-merged conflicted file as resolved (git add). */
+  markConflictResolved: (workspacePath: string, file: string) =>
+    invoke<void>("mark_conflict_resolved", { workspacePath, file }),
+
   fetchChanges: (workspacePath: string) => invoke<string>("fetch_changes", { workspacePath }),
 
   pull: (workspacePath: string, strategy: "ffOnly" | "rebase" | "merge") =>
