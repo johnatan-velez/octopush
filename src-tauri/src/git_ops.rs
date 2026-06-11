@@ -591,6 +591,78 @@ pub fn last_commit(path: &Path) -> AppResult<Option<(String, String, String)>> {
     Ok(Some((short_sha, subject, body)))
 }
 
+// ─── G7 slice III: history + blame ─────────────────────────────────
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitInfo {
+    pub sha: String,
+    pub sha_short: String,
+    pub summary: String,
+    pub author_name: String,
+    /// Author time in milliseconds since the epoch — the UI formats it
+    /// relatively ("3h ago") so locales/clock-skew stay a frontend concern.
+    pub timestamp_ms: i64,
+}
+
+/// First-parent-ordered commit page from HEAD: newest first, `skip` commits
+/// offset, at most `limit` entries. An empty repo (no HEAD) yields `[]`.
+pub fn git_log(path: &Path, limit: usize, skip: usize) -> AppResult<Vec<CommitInfo>> {
+    let repo = open_repo(path)?;
+    if repo.head().is_err() {
+        return Ok(Vec::new()); // no commits yet
+    }
+    let mut walk = repo
+        .revwalk()
+        .map_err(|e| AppError::Other(format!("revwalk: {e}")))?;
+    walk.push_head()
+        .map_err(|e| AppError::Other(format!("revwalk head: {e}")))?;
+    let mut out = Vec::with_capacity(limit.min(256));
+    for oid in walk.filter_map(|o| o.ok()).skip(skip).take(limit) {
+        let Ok(commit) = repo.find_commit(oid) else { continue };
+        out.push(commit_info(&commit));
+    }
+    Ok(out)
+}
+
+fn commit_info(commit: &git2::Commit) -> CommitInfo {
+    let sha = commit.id().to_string();
+    CommitInfo {
+        sha_short: sha[..7].to_string(),
+        sha,
+        summary: commit.summary().unwrap_or("").to_string(),
+        author_name: commit.author().name().unwrap_or("").to_string(),
+        timestamp_ms: commit.time().seconds() * 1000,
+    }
+}
+
+/// Unified diff of one commit against its first parent (a root commit diffs
+/// against the empty tree). Capped by the shared `diff_to_text` 1 MiB guard.
+pub fn commit_diff_text(path: &Path, sha: &str) -> AppResult<String> {
+    let repo = open_repo(path)?;
+    let oid = git2::Oid::from_str(sha)
+        .map_err(|e| AppError::Other(format!("bad commit sha '{sha}': {e}")))?;
+    let commit = repo
+        .find_commit(oid)
+        .map_err(|e| AppError::Other(format!("commit {sha} not found: {e}")))?;
+    let tree = commit
+        .tree()
+        .map_err(|e| AppError::Other(format!("commit tree: {e}")))?;
+    // First parent, or None (empty tree) for a root commit.
+    let parent_tree = match commit.parent(0) {
+        Ok(parent) => Some(
+            parent
+                .tree()
+                .map_err(|e| AppError::Other(format!("parent tree: {e}")))?,
+        ),
+        Err(_) => None,
+    };
+    let diff = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+        .map_err(|e| AppError::Other(format!("commit diff: {e}")))?;
+    diff_to_text(&diff)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -712,6 +784,70 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path()).unwrap();
         assert!(last_commit(dir.path()).unwrap().is_none());
+    }
+
+    // ── G7 slice III: log / commit diff ───────────────────────────
+
+    #[test]
+    fn git_log_returns_newest_first_and_paginates() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+        commit_file(dir.path(), "a.txt", "two\n", "second");
+        commit_file(dir.path(), "a.txt", "three\n", "third");
+
+        let all = git_log(dir.path(), 10, 0).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].summary, "third");
+        assert_eq!(all[1].summary, "second");
+        assert_eq!(all[2].summary, "first");
+        assert_eq!(all[0].sha_short.len(), 7);
+        assert_eq!(all[0].sha.len(), 40);
+        assert_eq!(all[0].author_name, "Test");
+        assert!(all[0].timestamp_ms > 0);
+
+        // Pagination: limit caps the page, skip offsets into the walk.
+        let page1 = git_log(dir.path(), 2, 0).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].summary, "third");
+        let page2 = git_log(dir.path(), 2, 2).unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page2[0].summary, "first");
+    }
+
+    #[test]
+    fn git_log_empty_repo_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        assert!(git_log(dir.path(), 10, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn commit_diff_shows_change_vs_first_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+        let second = commit_file(dir.path(), "a.txt", "two\n", "second");
+        let diff = commit_diff_text(dir.path(), &second.to_string()).unwrap();
+        assert!(diff.contains("-one"), "diff shows removed line: {diff}");
+        assert!(diff.contains("+two"), "diff shows added line: {diff}");
+    }
+
+    #[test]
+    fn commit_diff_root_commit_diffs_against_empty_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        let root = commit_file(dir.path(), "a.txt", "one\n", "first");
+        let diff = commit_diff_text(dir.path(), &root.to_string()).unwrap();
+        assert!(diff.contains("+one"), "root commit diffs vs empty tree: {diff}");
+    }
+
+    #[test]
+    fn commit_diff_bad_sha_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+        assert!(commit_diff_text(dir.path(), "not-a-sha").is_err());
     }
 
     #[test]

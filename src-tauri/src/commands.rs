@@ -3345,6 +3345,24 @@ pub async fn get_last_commit(workspace_path: String) -> AppResult<Option<LastCom
         .map(|(short_sha, subject, body)| LastCommit { short_sha, subject, body }))
 }
 
+// ─── G7 slice III: history ────────────────────────────────────────
+
+#[tauri::command]
+pub async fn git_log(
+    path: String,
+    limit: usize,
+    skip: usize,
+) -> AppResult<Vec<crate::git_ops::CommitInfo>> {
+    let path = expand_tilde(&path);
+    crate::git_ops::git_log(std::path::Path::new(&path), limit, skip)
+}
+
+#[tauri::command]
+pub async fn commit_diff(path: String, sha: String) -> AppResult<String> {
+    let path = expand_tilde(&path);
+    crate::git_ops::commit_diff_text(std::path::Path::new(&path), &sha)
+}
+
 #[tauri::command]
 pub async fn amend_commit(workspace_path: String, message: String) -> AppResult<String> {
     if message.trim().is_empty() {

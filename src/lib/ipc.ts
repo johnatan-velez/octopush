@@ -143,6 +143,16 @@ export interface ContinueOutcome { kind: ContinueKind; output: string }
 
 export interface LastCommit { shortSha: string; subject: string; body: string }
 
+/** One row of the commit history browser (G7 slice III). */
+export interface CommitInfo {
+  sha: string;
+  shaShort: string;
+  summary: string;
+  authorName: string;
+  /** Author time, ms since epoch — format relatively in the UI. */
+  timestampMs: number;
+}
+
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AdapterInfo,
@@ -439,6 +449,12 @@ export const ipc = {
     invoke<string>("amend_commit", { workspacePath, message }),
   getLastCommit: (workspacePath: string) =>
     invoke<LastCommit | null>("get_last_commit", { workspacePath }),
+  /** Newest-first commit page from HEAD; `skip` offsets for pagination. */
+  gitLog: (path: string, limit: number, skip: number) =>
+    invoke<CommitInfo[]>("git_log", { path, limit, skip }),
+  /** Unified diff of one commit vs its first parent (root: vs empty tree). */
+  commitDiff: (path: string, sha: string) =>
+    invoke<string>("commit_diff", { path, sha }),
   discardFile: (workspacePath: string, filePath: string) =>
     invoke<void>("discard_file", { workspacePath, filePath }),
 
