@@ -189,6 +189,25 @@ describe("ChangesPanel G7 conflicts", () => {
     );
   });
 
+  it("labels chips UPSTREAM/MINE during a rebase and MINE still takes 'theirs'", async () => {
+    ipcMock.getGitStatus.mockResolvedValue({ ...CONFLICT_STATUS, operation: "rebase" });
+    ipcMock.resolveConflictTake.mockResolvedValue(undefined);
+    render(<ChangesPanel projectPath="/repo" />);
+    await screen.findByText(/2 conflicts · rebase/i);
+    const upstream = screen.getAllByRole("button", { name: "UPSTREAM" });
+    const mine = screen.getAllByRole("button", { name: "MINE" });
+    expect(upstream).toHaveLength(2);
+    expect(mine).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "OURS" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "THEIRS" })).not.toBeInTheDocument();
+    expect(upstream[0].title).toMatch(/keep the upstream version/i);
+    expect(mine[0].title).toMatch(/keep your commit's version/i);
+    await userEvent.click(mine[0]);
+    await waitFor(() =>
+      expect(ipcMock.resolveConflictTake).toHaveBeenCalledWith("/repo", "src/a.ts", "theirs"),
+    );
+  });
+
   it("THEIRS chip calls resolveConflictTake with side 'theirs'", async () => {
     ipcMock.getGitStatus.mockResolvedValue(CONFLICT_STATUS);
     ipcMock.resolveConflictTake.mockResolvedValue(undefined);

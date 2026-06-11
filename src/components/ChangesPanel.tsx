@@ -117,6 +117,17 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
   const branchName = gitStatus?.branch ?? null;
   const operation = gitStatus?.operation ?? null;
   const conflictFiles = files.filter((f) => f.conflicted);
+  // During a rebase git swaps sides: --ours is the upstream/onto branch,
+  // --theirs is the commit being replayed (yours). Labels follow suit.
+  const isRebase = operation === "rebase";
+  const oursLabel = isRebase ? "UPSTREAM" : "OURS";
+  const oursTitle = isRebase
+    ? "Keep the upstream version — git checkout --ours"
+    : "Keep our version — git checkout --ours";
+  const theirsLabel = isRebase ? "MINE" : "THEIRS";
+  const theirsTitle = isRebase
+    ? "Keep your commit's version — git checkout --theirs"
+    : "Keep their version — git checkout --theirs";
 
   // +/− line totals derived from the diff.
   const addCount = diff
@@ -415,19 +426,19 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
                     type="button"
                     onClick={() => takeSide(f.path, "ours")}
                     disabled={resolvingPath === f.path}
-                    title="Keep our version — git checkout --ours"
+                    title={oursTitle}
                     className={CONFLICT_CHIP}
                   >
-                    OURS
+                    {oursLabel}
                   </button>
                   <button
                     type="button"
                     onClick={() => takeSide(f.path, "theirs")}
                     disabled={resolvingPath === f.path}
-                    title="Keep their version — git checkout --theirs"
+                    title={theirsTitle}
                     className={CONFLICT_CHIP}
                   >
-                    THEIRS
+                    {theirsLabel}
                   </button>
                   <button
                     type="button"
