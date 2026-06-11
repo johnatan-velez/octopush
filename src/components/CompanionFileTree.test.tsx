@@ -20,7 +20,7 @@ vi.mock("../lib/ipc", () => ({
 }));
 
 // Import after mock is set up.
-import { CompanionFileTree } from "./CompanionFileTree";
+import { CompanionFileTree, clearTreeStateCache } from "./CompanionFileTree";
 import { useReviewPrefs } from "../stores/reviewPrefsStore";
 
 const ROOT = "/repo";
@@ -39,6 +39,7 @@ const SRC_CHILDREN = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearTreeStateCache();
   useReviewPrefs.setState({ showIgnoredFiles: {} });
   // Default: root children resolve immediately.
   mockReadDirectory.mockImplementation((path: string) => {
@@ -496,6 +497,25 @@ describe("CompanionFileTree", () => {
     await waitFor(() => expect(screen.getByText("Main.java")).toBeInTheDocument());
     fireEvent.keyDown(srcRow, { key: "ArrowLeft" });
     await waitFor(() => expect(screen.queryByText("Main.java")).not.toBeInTheDocument());
+  });
+
+  it("restores expanded directories after unmount/remount with the same root (mode switch)", async () => {
+    const first = render(
+      <CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={CHANGED} />,
+    );
+    await waitFor(() => expect(screen.getByText("src")).toBeInTheDocument());
+    await userEvent.click(screen.getByText("src"));
+    await waitFor(() => expect(screen.getByText("Main.java")).toBeInTheDocument());
+
+    // Leave Review mode: the Companion unmounts the tree entirely.
+    first.unmount();
+    expect(screen.queryByText("Main.java")).not.toBeInTheDocument();
+
+    // Come back: src/ is still expanded and its children render immediately
+    // from the cache (a silent revalidate refetch is fine).
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={CHANGED} />);
+    expect(screen.getByText("Main.java")).toBeInTheDocument();
+    expect(screen.getByText("Helper.java")).toBeInTheDocument();
   });
 
   it("Shift+F10 opens the context menu for the focused row", async () => {

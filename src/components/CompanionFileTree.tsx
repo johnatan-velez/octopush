@@ -15,11 +15,38 @@ interface Props {
 
 type ChildState = DirectoryEntry[] | "loading" | "error";
 
+interface TreeStateCacheEntry {
+  expanded: Set<string>;
+  children: Record<string, ChildState>;
+  focusedPath: string;
+  /** The show-ignored value the cached children were fetched with. On
+   *  mismatch we reuse the expanded set but not the children (they would
+   *  show/hide the wrong entries until the revalidate fetch landed). */
+  showIgnored: boolean;
+}
+
+/** Survives the mode-switch remount: the Companion unmounts this panel when
+ *  the user leaves Review and remounts it on return — without this cache the
+ *  whole expansion state (and every fetched directory) is lost each time.
+ *  Keyed by rootPath so each workspace keeps its own snapshot. */
+const treeStateCache = new Map<string, TreeStateCacheEntry>();
+
+/** Test hook: existing suites assume a fresh tree per render. */
+export function clearTreeStateCache(): void {
+  treeStateCache.clear();
+}
+
 export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileClick }: Props) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set([rootPath]));
-  const [children, setChildren] = useState<Record<string, ChildState>>({});
   const showIgnored = useReviewPrefs((s) => !!s.showIgnoredFiles[rootPath]);
   const toggleShowIgnored = useReviewPrefs((s) => s.toggleShowIgnored);
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    const cached = treeStateCache.get(rootPath);
+    return cached ? new Set(cached.expanded) : new Set([rootPath]);
+  });
+  const [children, setChildren] = useState<Record<string, ChildState>>(() => {
+    const cached = treeStateCache.get(rootPath);
+    return cached && cached.showIgnored === showIgnored ? cached.children : {};
+  });
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -30,8 +57,25 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
   // Roving tabindex: exactly one row (the focused one) is tabbable; arrows
   // move within the tree. Invariant: focusedPath always points at a rendered
   // row — collapsing an ancestor or hiding ignored files resets it to root.
-  const [focusedPath, setFocusedPath] = useState(rootPath);
+  const [focusedPath, setFocusedPath] = useState(() => {
+    const cached = treeStateCache.get(rootPath);
+    // A cached focus target is only guaranteed to be rendered when the
+    // cached children were fetched under the same show-ignored setting.
+    return cached && cached.showIgnored === showIgnored ? cached.focusedPath : rootPath;
+  });
   const genRef = useRef(0);
+
+  // Write the snapshot back on every state change. Skipped for the render
+  // where rootPath just changed: that render's state still belongs to the
+  // previous root, and the reset effect below re-runs us with fresh state.
+  const cacheRootRef = useRef(rootPath);
+  useEffect(() => {
+    if (cacheRootRef.current !== rootPath) {
+      cacheRootRef.current = rootPath;
+      return;
+    }
+    treeStateCache.set(rootPath, { expanded, children, focusedPath, showIgnored });
+  }, [rootPath, expanded, children, focusedPath, showIgnored]);
 
   const fetchChildren = useCallback(
     async (path: string, opts?: { force?: boolean }) => {
@@ -56,6 +100,7 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
   );
 
   const prevRootRef = useRef(rootPath);
+  const didInitRef = useRef(false);
 
   // (Re)load on mount, on workspace switch, and when the show-ignored toggle
   // flips: bump the generation (discarding in-flight responses) and
@@ -64,6 +109,8 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
   // revalidates every expanded folder in place — old rows stay visible until
   // fresh entries land (no full-tree flash).
   useEffect(() => {
+    const firstRun = !didInitRef.current;
+    didInitRef.current = true;
     genRef.current += 1;
     const rootChanged = prevRootRef.current !== rootPath;
     prevRootRef.current = rootPath;
@@ -76,8 +123,9 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
       return;
     }
     // Toggling ignored files OFF may hide the focused row; reset the roving
-    // tabindex to the root so the tree stays Tab-reachable.
-    if (!showIgnored) setFocusedPath(rootPath);
+    // tabindex to the root so the tree stays Tab-reachable. (Skipped on the
+    // initial mount — a cache-restored focus target is still rendered.)
+    if (!firstRun && !showIgnored) setFocusedPath(rootPath);
     const toFetch = new Set(expanded);
     toFetch.add(rootPath);
     for (const p of toFetch) {
