@@ -8,6 +8,11 @@ import { FileTreeContextMenu } from "./FileTreeContextMenu";
 import { FileNameDialog } from "./FileNameDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { pushToast } from "./Toasts";
+import { useVirtualRows } from "../lib/useVirtualRows";
+
+/** Every row (node or placeholder) renders at exactly this height — the
+ *  fixed-row contract the windowing math depends on. */
+const ROW_HEIGHT = 24;
 
 interface Props {
   rootPath: string;
@@ -212,6 +217,15 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
   // A focus move requested before the target row was mounted/re-rendered;
   // applied (then cleared) by the layout effect below.
   const pendingFocusRef = useRef<string | null>(null);
+  // The focused row scrolled out of the window while it held DOM focus;
+  // re-apply focus when it scrolls back in (it is unmounted in between).
+  const lostFocusRef = useRef<string | null>(null);
+  const focusedPathRef = useRef(focusedPath);
+  focusedPathRef.current = focusedPath;
+  // Paths whose data has already been on screen (or inside the flat list) —
+  // rise-in is reserved for newly appearing DATA, not for rows that merely
+  // mount because the window scrolled over them.
+  const seenPathsRef = useRef(new Set<string>());
 
   // Write the snapshot back on every state change. Skipped for the render
   // where rootPath just changed: that render's state still belongs to the
@@ -346,6 +360,8 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
       setFileOp(null);
       setFilterOpen(false);
       setFilterQuery("");
+      seenPathsRef.current = new Set(); // the new root's rows get their entrance
+      lostFocusRef.current = null;
       setExpanded(cached ? new Set(cached.expanded) : new Set([rootPath]));
       setChildren(sameIgnored ? cached.children : {});
       setFocusedPath(sameIgnored ? cached.focusedPath : rootPath);
@@ -427,6 +443,24 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
     if (!nodeRows.some((r) => r.path === focusedPath)) setFocusedPath(rootPath);
   }, [nodeRows, focusedPath, rootPath]);
 
+  // ─── Windowing ──────────────────────────────────────────────────
+
+  const treeRef = useRef<HTMLDivElement>(null);
+  const { start, end, topPad, bottomPad, scrollToRow } = useVirtualRows(
+    treeRef,
+    flatRows.length,
+    ROW_HEIGHT,
+  );
+  const windowRows = useMemo(() => flatRows.slice(start, end), [flatRows, start, end]);
+
+  // Mark every path currently in the (full) flat list as seen — from the
+  // next commit on, mounting such a row is windowing, not new data.
+  useEffect(() => {
+    for (const r of flatRows) {
+      if (r.kind === "node") seenPathsRef.current.add(r.path);
+    }
+  }, [flatRows]);
+
   // Apply a deferred focus move once the target row exists in the DOM.
   useLayoutEffect(() => {
     const want = pendingFocusRef.current;
@@ -445,8 +479,9 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
       if (!target) return;
       pendingFocusRef.current = target.path;
       setFocusedPath(target.path);
-      // The layout effect only runs on re-render; if focus state is already
-      // on the target (e.g. re-focusing after a blur) apply immediately.
+      // Bring the target inside the window — it may not be mounted yet; the
+      // layout effect above applies the focus once it is.
+      scrollToRow(flatRows.indexOf(target));
       const el = rowEls.current.get(target.path);
       if (el) {
         pendingFocusRef.current = null;
@@ -454,7 +489,7 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
         el.scrollIntoView?.({ block: "nearest" });
       }
     },
-    [nodeRows],
+    [nodeRows, flatRows, scrollToRow],
   );
 
   /** Keyboard model over the flat list (visual order = array order). */
@@ -516,8 +551,30 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
   );
 
   const registerRowEl = useCallback((path: string, el: HTMLElement | null) => {
-    if (el) rowEls.current.set(path, el);
-    else rowEls.current.delete(path);
+    if (el) {
+      rowEls.current.set(path, el);
+      // The roving-focus row scrolled back into the window after being
+      // unmounted mid-focus: reclaim, but only if focus genuinely fell to
+      // the body (never steal from the filter input or another control).
+      if (
+        lostFocusRef.current === path &&
+        (document.activeElement === document.body || document.activeElement === null)
+      ) {
+        lostFocusRef.current = null;
+        el.focus({ preventScroll: true });
+      }
+    } else {
+      const prev = rowEls.current.get(path);
+      rowEls.current.delete(path);
+      // Unmounting the focused row drops DOM focus to the body; remember it
+      // so the attach branch above can re-apply when it scrolls back in.
+      if (
+        path === focusedPathRef.current &&
+        (document.activeElement === prev || document.activeElement === document.body)
+      ) {
+        lostFocusRef.current = path;
+      }
+    }
   }, []);
 
   const toggleFilter = useCallback(() => {
@@ -597,17 +654,20 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
       )}
 
       <div
+        ref={treeRef}
         role="tree"
         aria-label="Workspace files"
         className="min-h-0 flex-1 overflow-y-auto px-2 py-2"
       >
-        {flatRows.map((row) =>
+        {topPad > 0 && <div aria-hidden="true" style={{ height: `${topPad}px` }} />}
+        {windowRows.map((row) =>
           row.kind === "node" ? (
             <TreeRow
               key={row.path}
               row={row}
               isChanged={!row.isDir && changedPaths.has(row.path)}
               isFocused={row.path === focusedPath}
+              isNew={!seenPathsRef.current.has(row.path)}
               onActivate={() => {
                 if (row.isDir) toggleExpand(row.path);
                 else onFileClick?.(row.path);
@@ -621,6 +681,7 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
             <PlaceholderLine key={row.key} row={row} />
           ),
         )}
+        {bottomPad > 0 && <div aria-hidden="true" style={{ height: `${bottomPad}px` }} />}
       </div>
 
       {menu && (
@@ -683,6 +744,9 @@ interface TreeRowProps {
   row: NodeRow;
   isChanged: boolean;
   isFocused: boolean;
+  /** True only in the commit where this path's data first appears — gates
+   *  the rise-in entrance so scrolling never replays it. */
+  isNew: boolean;
   onActivate: () => void;
   onKeyDown: (e: React.KeyboardEvent, row: NodeRow) => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -694,6 +758,7 @@ function TreeRow({
   row,
   isChanged,
   isFocused,
+  isNew,
   onActivate,
   onKeyDown,
   onContextMenu,
@@ -702,6 +767,10 @@ function TreeRow({
 }: TreeRowProps) {
   const { path, label, isDir, isIgnored, depth, isRoot, isExpanded, match } = row;
   const Icon = !isDir ? fileIcon(label) : null;
+  // Freeze the entrance decision for the lifetime of this mounted instance:
+  // re-renders within the animation window must not strip the class
+  // mid-flight, and a remount via scrolling arrives with isNew=false.
+  const riseIn = useRef(isNew).current;
 
   return (
     <div
@@ -713,10 +782,11 @@ function TreeRow({
       ref={(el) => registerEl(path, el)}
       onFocus={() => onFocusRow(path)}
       title={isIgnored ? "Ignored by .gitignore" : undefined}
-      className={`octo-rise-in group relative flex cursor-pointer items-center gap-1 rounded-sm py-1 pr-1 transition duration-[220ms] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-octo-brass${
+      className={`${riseIn ? "octo-rise-in " : ""}group relative flex cursor-pointer items-center gap-1 rounded-sm pr-1 transition duration-[220ms] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-octo-brass${
         isIgnored ? " opacity-60" : ""
       }`}
       style={{
+        height: `${ROW_HEIGHT}px`,
         paddingLeft: `${depth * 14 + 4}px`,
         background: "transparent",
       }}
@@ -798,10 +868,10 @@ function PlaceholderLine({ row }: { row: PlaceholderRow }) {
   const text = row.state === "loading" ? "loading…" : row.state === "error" ? "error reading directory." : "empty.";
   return (
     <div
-      className={`py-[2px] font-serif text-[11px] ${
+      className={`flex items-center font-serif text-[11px] ${
         row.state === "error" ? "text-octo-rouge" : "text-octo-mute"
       }`}
-      style={{ paddingLeft: `${row.depth * 14 + 4}px` }}
+      style={{ height: `${ROW_HEIGHT}px`, paddingLeft: `${row.depth * 14 + 4}px` }}
     >
       {text}
     </div>

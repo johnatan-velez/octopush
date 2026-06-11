@@ -868,4 +868,84 @@ describe("CompanionFileTree", () => {
     expect(screen.getByText("docs")).toBeInTheDocument();
     expect(screen.getByText("1 match")).toBeInTheDocument();
   });
+
+  // ─── Windowed rendering for large directories (G6 slice III) ───
+
+  const HUGE = Array.from({ length: 1000 }, (_, i) => ({
+    name: `file${String(i).padStart(4, "0")}.txt`,
+    path: `/repo/file${String(i).padStart(4, "0")}.txt`,
+    isDir: false,
+    isIgnored: false,
+  }));
+
+  function mockHugeRoot() {
+    mockReadDirectory.mockImplementation((path: string) =>
+      Promise.resolve(path === ROOT ? HUGE : []),
+    );
+  }
+
+  it("with 1000 entries only a window of rows is mounted", async () => {
+    mockHugeRoot();
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={new Set()} />);
+    await waitFor(() => expect(screen.getByText("file0000.txt")).toBeInTheDocument());
+
+    const rows = screen.getAllByRole("treeitem");
+    expect(rows.length).toBeGreaterThan(20); // a real window, not a stub
+    expect(rows.length).toBeLessThan(100); // …but nowhere near 1001
+    expect(screen.queryByText("file0500.txt")).not.toBeInTheDocument();
+  });
+
+  it("scrolling mounts later rows and unmounts early ones", async () => {
+    mockHugeRoot();
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={new Set()} />);
+    await waitFor(() => expect(screen.getByText("file0000.txt")).toBeInTheDocument());
+
+    fireEvent.scroll(screen.getByRole("tree"), { target: { scrollTop: 12000 } });
+
+    await waitFor(() => expect(screen.getByText("file0500.txt")).toBeInTheDocument());
+    expect(screen.queryByText("file0000.txt")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("treeitem").length).toBeLessThan(100);
+  });
+
+  it("End jumps focus to the last row even when it is far outside the window", async () => {
+    mockHugeRoot();
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={new Set()} />);
+    await waitFor(() => expect(screen.getByText("file0000.txt")).toBeInTheDocument());
+
+    const rootRow = screen.getByText("my-project").closest('[role="treeitem"]') as HTMLElement;
+    rootRow.focus();
+    fireEvent.keyDown(rootRow, { key: "End" });
+
+    const last = await screen.findByTestId("file-row-/repo/file0999.txt");
+    expect(document.activeElement).toBe(last);
+    // The window followed the focus: early rows are gone.
+    expect(screen.queryByText("file0000.txt")).not.toBeInTheDocument();
+
+    // …and ArrowUp keeps walking from there, across the (new) window.
+    fireEvent.keyDown(last, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(screen.getByTestId("file-row-/repo/file0998.txt"));
+
+    // Home returns to the root row at the top.
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Home" });
+    expect(document.activeElement).toBe(
+      screen.getByText("my-project").closest('[role="treeitem"]') as HTMLElement,
+    );
+  });
+
+  it("rise-in plays for newly loaded rows but not for rows mounted by scrolling", async () => {
+    mockHugeRoot();
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={new Set()} />);
+    await waitFor(() => expect(screen.getByText("file0000.txt")).toBeInTheDocument());
+
+    // Newly loaded data animates in.
+    expect(screen.getByTestId("file-row-/repo/file0000.txt").className).toContain("octo-rise-in");
+
+    fireEvent.scroll(screen.getByRole("tree"), { target: { scrollTop: 12000 } });
+    await waitFor(() => expect(screen.getByText("file0500.txt")).toBeInTheDocument());
+
+    // Rows that appear merely because the window moved do NOT replay it.
+    expect(screen.getByTestId("file-row-/repo/file0500.txt").className).not.toContain(
+      "octo-rise-in",
+    );
+  });
 });
