@@ -3596,3 +3596,54 @@ mod g7_timeout_tests {
         assert_eq!(slow, None);
     }
 }
+
+#[cfg(test)]
+mod branch_listing_tests {
+    use crate::git_ops::{list_branches, resolve_base};
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    fn repo_with_branches() -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let d = tmp.path();
+        git(d, &["init", "-b", "main"]);
+        git(d, &["config", "user.email", "t@t"]);
+        git(d, &["config", "user.name", "t"]);
+        fs::write(d.join("a.txt"), "a").unwrap();
+        git(d, &["add", "."]);
+        git(d, &["commit", "-m", "init"]);
+        git(d, &["branch", "release/1.0"]);
+        git(d, &["branch", "feat-x"]);
+        tmp
+    }
+
+    #[test]
+    fn lists_local_branches_default_first_then_alpha() {
+        let tmp = repo_with_branches();
+        let branches = list_branches(tmp.path()).unwrap();
+        assert_eq!(branches, vec!["main", "feat-x", "release/1.0"]);
+    }
+
+    #[test]
+    fn detached_head_yields_plain_alphabetical_list_without_phantom_entry() {
+        let tmp = repo_with_branches();
+        git(tmp.path(), &["checkout", "--detach", "main"]);
+        let branches = list_branches(tmp.path()).unwrap();
+        assert_eq!(branches, vec!["feat-x", "main", "release/1.0"]);
+    }
+
+    #[test]
+    fn resolve_base_prefers_explicit_branch() {
+        assert_eq!(resolve_base("release/1.0", Some("main".into())).unwrap(), "release/1.0");
+        assert_eq!(resolve_base("  ", Some("main".into())).unwrap(), "main");
+        assert_eq!(resolve_base("", Some("main".into())).unwrap(), "main");
+        assert!(resolve_base("", None).is_err(), "no explicit base and no HEAD must error");
+        assert_eq!(resolve_base("dev", None).unwrap(), "dev");
+    }
+}
