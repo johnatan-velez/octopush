@@ -34,6 +34,14 @@ export interface SaveConflict {
 /** Async confirm injected by the UI so the store stays React-free. */
 export type OpenConfirm = (sizeBytes: number, path: string) => Promise<boolean>;
 
+/** A one-shot request to place the cursor on a line once the file is the
+ *  active editor buffer (e.g. diff `o` → first changed line of the hunk).
+ *  EditorPane consumes it via `clearPendingReveal`. */
+export interface PendingReveal {
+  path: string;
+  line: number; // 1-based new-file line
+}
+
 // Stable empty list — returning a new array per call would bust React memo
 // and cause an infinite re-render loop (same trap as terminalsStore/chatStore).
 const EMPTY_FILES: OpenFile[] = [];
@@ -45,14 +53,25 @@ interface EditorStore {
   activeByWs: Record<string, string | null>;
   /** Set when a save was blocked by an external change; a dialog resolves it. */
   saveConflict: SaveConflict | null;
+  /** One-shot open-at-line requests, keyed by workspace. */
+  pendingRevealByWs: Record<string, PendingReveal | null>;
 
   // Selectors
   getFiles: (workspaceId: string) => OpenFile[];
   getActivePath: (workspaceId: string) => string | null;
   isDirty: (workspaceId: string, path: string) => boolean;
+  getPendingReveal: (workspaceId: string) => PendingReveal | null;
 
   // Actions
-  openFile: (workspaceId: string, path: string, confirm?: OpenConfirm) => Promise<void>;
+  /** Open `path` as a tab and activate it. `line` (optional, 1-based)
+   *  additionally requests a one-shot cursor reveal at that line. */
+  openFile: (
+    workspaceId: string,
+    path: string,
+    confirm?: OpenConfirm,
+    line?: number,
+  ) => Promise<void>;
+  clearPendingReveal: (workspaceId: string) => void;
   closeFile: (workspaceId: string, path: string) => void;
   setActive: (workspaceId: string, path: string) => void;
   /** Move an open tab from one position to another (drag-reorder). */
@@ -101,6 +120,7 @@ export const useEditorStore = create<EditorStore>((set, get) => {
   filesByWs: {},
   activeByWs: {},
   saveConflict: null,
+  pendingRevealByWs: {},
 
   // ── Selectors ─────────────────────────────────────────────────
 
@@ -110,6 +130,9 @@ export const useEditorStore = create<EditorStore>((set, get) => {
     const byWs = get().activeByWs;
     return workspaceId in byWs ? byWs[workspaceId] : null;
   },
+
+  getPendingReveal: (workspaceId) =>
+    get().pendingRevealByWs[workspaceId] ?? null,
 
   isDirty: (workspaceId, path) => {
     const file = (get().filesByWs[workspaceId] ?? EMPTY_FILES).find(
@@ -121,12 +144,21 @@ export const useEditorStore = create<EditorStore>((set, get) => {
 
   // ── Actions ───────────────────────────────────────────────────
 
-  openFile: async (workspaceId, path, confirm) => {
+  openFile: async (workspaceId, path, confirm, line) => {
+    // Every open supersedes any previous reveal: a plain open clears a stale
+    // one, an open-at-line replaces it on success below.
+    const setReveal = (reveal: PendingReveal | null) =>
+      set((s) => ({
+        pendingRevealByWs: { ...s.pendingRevealByWs, [workspaceId]: reveal },
+      }));
+    setReveal(null);
+
     const existing = (get().filesByWs[workspaceId] ?? EMPTY_FILES).find(
       (f) => f.path === path,
     );
     if (existing) {
       set((s) => ({ activeByWs: { ...s.activeByWs, [workspaceId]: path } }));
+      if (line != null) setReveal({ path, line });
       return;
     }
 
@@ -169,9 +201,22 @@ export const useEditorStore = create<EditorStore>((set, get) => {
       return {
         filesByWs: { ...s.filesByWs, [workspaceId]: [...prev, newFile] },
         activeByWs: { ...s.activeByWs, [workspaceId]: path },
+        ...(line != null
+          ? {
+              pendingRevealByWs: {
+                ...s.pendingRevealByWs,
+                [workspaceId]: { path, line },
+              },
+            }
+          : {}),
       };
     });
   },
+
+  clearPendingReveal: (workspaceId) =>
+    set((s) => ({
+      pendingRevealByWs: { ...s.pendingRevealByWs, [workspaceId]: null },
+    })),
 
   closeFile: (workspaceId, path) => {
     set((s) => {
