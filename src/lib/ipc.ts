@@ -129,6 +129,12 @@ export type FileReadResult =
   | { kind: "unsupportedEncoding"; size: number; mtime: number }
   | { kind: "tooLarge"; size: number };
 
+/** Cheap stat for external-change detection. `null` = file no longer exists. */
+export interface FileMeta {
+  mtimeMs: number;
+  size: number;
+}
+
 export type PullKind = "ok" | "diverged" | "conflict" | "error";
 export interface PullOutcome { kind: PullKind; output: string }
 
@@ -349,6 +355,7 @@ export const ipc = {
     invoke<FileReadResult>("read_file_checked", { path, maxBytes }),
   writeFile: (path: string, content: string) =>
     invoke<{ mtime: number }>("write_file", { path, content }),
+  fileMeta: (path: string) => invoke<FileMeta | null>("file_meta", { path }),
 
   // ─── Directory listing ─────────────────────────────────────────
   readDirectory: (path: string, showIgnored?: boolean) =>

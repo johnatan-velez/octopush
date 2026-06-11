@@ -3498,6 +3498,30 @@ mod file_io_checked_tests {
         assert!(res.mtime > 0);
         assert_eq!(std::fs::read_to_string(f.path()).unwrap(), "saved");
     }
+
+    #[test]
+    fn file_meta_existing_file_matches_fs() {
+        let f = temp_with_bytes(b"hello");
+        let meta = crate::commands::file_meta_inner(f.path().to_str().unwrap())
+            .unwrap()
+            .expect("existing file should yield Some(meta)");
+        let fs_meta = std::fs::metadata(f.path()).unwrap();
+        assert_eq!(meta.size, fs_meta.len());
+        assert_eq!(meta.size, 5);
+        assert!(meta.mtime_ms > 0, "mtime_ms should be a positive epoch-millis value");
+        // Serializes camelCase for the frontend.
+        let v = serde_json::to_value(&meta).unwrap();
+        assert!(v.get("mtimeMs").is_some());
+        assert!(v.get("size").is_some());
+    }
+
+    #[test]
+    fn file_meta_missing_file_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist.txt");
+        let res = crate::commands::file_meta_inner(missing.to_str().unwrap()).unwrap();
+        assert!(res.is_none(), "missing file should yield Ok(None)");
+    }
 }
 
 #[cfg(test)]
