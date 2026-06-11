@@ -4461,3 +4461,17 @@ mod workspace_walker_tests {
         assert!(!paths.contains(&PathBuf::from("sub/nested.txt")));
     }
 }
+
+// ─── Shared HTTP client (G5 follow-up) ────────────────────────────────
+
+mod shared_http_client_tests {
+    /// Every call must hand back the SAME pooled client — `ai_complete`,
+    /// ChatEngine, and the orchestrator all share one connection pool
+    /// instead of paying a fresh TLS handshake per call.
+    #[test]
+    fn returns_the_same_instance_every_time() {
+        let a = crate::chat_engine::shared_http_client();
+        let b = crate::chat_engine::shared_http_client();
+        assert!(std::ptr::eq(a, b));
+    }
+}

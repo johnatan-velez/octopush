@@ -3235,8 +3235,8 @@ pub async fn ai_complete(
 ) -> AppResult<AiCompleteResult> {
     let (provider, api_base, api_key) = crate::chat_engine::resolve_provider(&model)?;
     let req = build_ai_request(&model, system, prompt, max_tokens.unwrap_or(8192));
-    let client = reqwest::Client::new();
-    let resp = provider.complete(&api_base, api_key.as_deref(), &req, &client).await?;
+    let client = crate::chat_engine::shared_http_client();
+    let resp = provider.complete(&api_base, api_key.as_deref(), &req, client).await?;
     ensure_not_truncated(&resp.stop_reason)?;
     let cost = crate::token_engine::compute_cost(&model, resp.input_tokens, resp.output_tokens, 0, 0);
     Ok(AiCompleteResult {
