@@ -4388,3 +4388,76 @@ mod g6_fileops_tests {
         assert!(fs_delete_inner(&ws, "no-such-file.txt").is_err());
     }
 }
+
+#[cfg(test)]
+mod workspace_walker_tests {
+    use crate::commands::workspace_walker;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    /// Collect yielded paths relative to `base`, skipping the root entry
+    /// (depth 0) the way every caller does.
+    fn walk(base: &std::path::Path, max_depth: Option<usize>, filters: bool) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = workspace_walker(base, max_depth, filters)
+            .filter_map(|r| r.ok())
+            .filter(|e| e.depth() > 0)
+            .map(|e| e.path().strip_prefix(base).unwrap().to_path_buf())
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn fixture() -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".git").join("HEAD"), "ref: refs/heads/main").unwrap();
+        fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
+        fs::write(root.join("kept.txt"), "k").unwrap();
+        fs::write(root.join("ignored.txt"), "i").unwrap();
+        fs::create_dir(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("nested.txt"), "n").unwrap();
+        // A nested `.git` (e.g. a vendored repo) must be pruned too.
+        fs::create_dir(root.join("sub").join(".git")).unwrap();
+        fs::write(root.join("sub").join(".git").join("config"), "x").unwrap();
+        tmp
+    }
+
+    #[test]
+    fn excludes_git_dirs_at_every_depth() {
+        let tmp = fixture();
+        let paths = walk(tmp.path(), None, true);
+        assert!(
+            paths.iter().all(|p| p.components().all(|c| c.as_os_str() != ".git")),
+            "no yielded path may touch .git: {paths:?}"
+        );
+        assert!(paths.contains(&PathBuf::from("sub/nested.txt")));
+    }
+
+    #[test]
+    fn honors_gitignore_when_filters_are_on_even_outside_a_repo_checkout() {
+        let tmp = fixture();
+        let paths = walk(tmp.path(), None, true);
+        assert!(paths.contains(&PathBuf::from("kept.txt")));
+        assert!(!paths.contains(&PathBuf::from("ignored.txt")));
+        // Dot-files themselves are visible (hidden(false)).
+        assert!(paths.contains(&PathBuf::from(".gitignore")));
+    }
+
+    #[test]
+    fn yields_ignored_entries_when_filters_are_off_but_still_prunes_git() {
+        let tmp = fixture();
+        let paths = walk(tmp.path(), None, false);
+        assert!(paths.contains(&PathBuf::from("ignored.txt")));
+        assert!(paths.iter().all(|p| p.components().all(|c| c.as_os_str() != ".git")));
+    }
+
+    #[test]
+    fn respects_max_depth_one() {
+        let tmp = fixture();
+        let paths = walk(tmp.path(), Some(1), true);
+        assert!(paths.contains(&PathBuf::from("sub")));
+        assert!(!paths.contains(&PathBuf::from("sub/nested.txt")));
+    }
+}

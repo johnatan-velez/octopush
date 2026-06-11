@@ -1991,31 +1991,40 @@ pub struct DirectoryEntry {
     pub is_ignored: bool,
 }
 
+/// The one workspace walker. Shared by `walk_one_level` (read_directory),
+/// `list_workspace_files` and `search_workspace_text`:
+///  - `apply_ignore_filters = true` turns the standard ignore sources on
+///    (`.gitignore`, `.ignore`, global excludes); `false` disables them all
+///    so gitignored entries appear too,
+///  - `.gitignore` rules apply even outside a git checkout (`require_git(false)`),
+///  - dot-files like `.gitignore` itself are included (`hidden(false)`),
+///  - `.git` directories are pruned at every depth — the single place this
+///    exclusion is implemented.
+/// Callers keep their own depth-0 skip and file-type filtering.
+pub(crate) fn workspace_walker(
+    base: &std::path::Path,
+    max_depth: Option<usize>,
+    apply_ignore_filters: bool,
+) -> ignore::Walk {
+    let mut builder = ignore::WalkBuilder::new(base);
+    builder
+        .max_depth(max_depth)
+        .standard_filters(apply_ignore_filters)
+        .require_git(false)
+        .hidden(false)
+        .filter_entry(|entry| entry.file_name() != ".git");
+    builder.build()
+}
+
 /// One level of `base`: entry paths only (root itself and `.git` excluded).
 /// `apply_ignore_filters = true` is today's behavior (gitignore rules on);
 /// `false` disables every ignore source so gitignored entries appear too.
 fn walk_one_level(base: &std::path::Path, apply_ignore_filters: bool) -> Vec<std::path::PathBuf> {
-    let mut builder = ignore::WalkBuilder::new(base);
-    builder
-        .max_depth(Some(1))
-        .standard_filters(apply_ignore_filters)
-        .require_git(false) // apply .gitignore rules even outside a git repo
-        .hidden(false); // include dot-files like .gitignore itself (both modes)
-    let mut out = Vec::new();
-    for result in builder.build() {
-        let entry = match result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        if entry.depth() == 0 {
-            continue;
-        }
-        if entry.path().file_name().map(|n| n == ".git").unwrap_or(false) {
-            continue;
-        }
-        out.push(entry.path().to_path_buf());
-    }
-    out
+    workspace_walker(base, Some(1), apply_ignore_filters)
+        .filter_map(|result| result.ok())
+        .filter(|entry| entry.depth() > 0)
+        .map(|entry| entry.path().to_path_buf())
+        .collect()
 }
 
 /// Build a gitignore matcher for `base`, honoring every `.gitignore` from the
@@ -3011,22 +3020,15 @@ pub async fn list_workspace_files(workspace_path: String) -> AppResult<Vec<Strin
     // blocking task so we don't park the tokio runtime.
     let result = tokio::task::spawn_blocking(move || {
         let mut files = Vec::with_capacity(1024);
-        let walker = ignore::WalkBuilder::new(&base)
-            .standard_filters(true)
-            .require_git(false)
-            .hidden(false)
-            .build();
-        for entry in walker {
+        // workspace_walker prunes `.git` at every depth.
+        for entry in workspace_walker(&base, None, true) {
             let Ok(entry) = entry else { continue };
             if entry.depth() == 0 {
                 continue;
             }
-            // Skip directories and any path that crosses through `.git`.
+            // Skip directories — only real files are listed.
             let path = entry.path();
             if entry.file_type().map(|t| !t.is_file()).unwrap_or(true) {
-                continue;
-            }
-            if path.components().any(|c| c.as_os_str() == ".git") {
                 continue;
             }
             if let Ok(rel) = path.strip_prefix(&base) {
@@ -3072,13 +3074,8 @@ pub async fn search_workspace_text(
 
     let hits = tokio::task::spawn_blocking(move || {
         let mut hits: Vec<SearchHit> = Vec::new();
-        let walker = ignore::WalkBuilder::new(&base)
-            .standard_filters(true)
-            .require_git(false)
-            .hidden(false)
-            .build();
-
-        for entry in walker {
+        // workspace_walker prunes `.git` at every depth.
+        for entry in workspace_walker(&base, None, true) {
             if hits.len() >= SEARCH_RESULT_CAP {
                 break;
             }
@@ -3088,9 +3085,6 @@ pub async fn search_workspace_text(
             }
             let path = entry.path();
             if entry.file_type().map(|t| !t.is_file()).unwrap_or(true) {
-                continue;
-            }
-            if path.components().any(|c| c.as_os_str() == ".git") {
                 continue;
             }
             // Skip oversized files outright.
