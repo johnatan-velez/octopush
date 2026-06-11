@@ -2,6 +2,7 @@ import { Copy, ExternalLink, FilePlus, FolderOpen, FolderPlus, Pencil, SquareTer
 import { MenuSurface } from "./MenuSurface";
 import { MENU_DANGER, MENU_HEADER, MENU_ITEM, MENU_SEP } from "../lib/menuStyles";
 import { ipc } from "../lib/ipc";
+import { copyToClipboard } from "../lib/clipboard";
 import { pushToast } from "./Toasts";
 
 interface Props {
@@ -62,10 +63,7 @@ export function FileTreeContextMenu({
   };
 
   const copy = (text: string) => {
-    void navigator.clipboard?.writeText(text).then(
-      () => pushToast({ level: "success", title: "Path copied" }),
-      (e) => pushToast({ level: "error", title: "Copy failed", body: String(e) }),
-    );
+    void copyToClipboard(text, "Path copied");
   };
 
   return (

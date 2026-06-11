@@ -6,6 +6,7 @@ import { FadeSwap } from "./primitives/FadeSwap";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useCompanionPrefs } from "../stores/companionPrefsStore";
 import { ipc } from "../lib/ipc";
+import { copyToClipboard } from "../lib/clipboard";
 
 interface Props {
   projectId: string;
@@ -285,7 +286,7 @@ export function WorkspaceCreator({ projectId, projectPath, onCreated, onCancel, 
                 <button
                   type="button"
                   onClick={() => {
-                    navigator.clipboard.writeText(error).catch(() => {});
+                    void copyToClipboard(error, "Error copied");
                   }}
                   className="ml-2 inline-flex items-center font-mono text-[10px] uppercase tracking-[0.18em] text-octo-rouge/70 transition-colors hover:text-octo-rouge"
                   title="Copy error to clipboard"

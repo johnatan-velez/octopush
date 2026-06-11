@@ -57,6 +57,7 @@ import type { SettingsTab } from "./lib/settingsTabs";
 import { resolveMonogram } from "./lib/monogram";
 import { type WorkspaceMode } from "./lib/modes";
 import { ipc } from "./lib/ipc";
+import { copyToClipboard } from "./lib/clipboard";
 import type { GitStatus, Pr, TintName, Issue, ProjectInfo } from "./lib/types";
 import { useIssuesStore } from "./stores/issuesStore";
 import { detectIssueKey, detectIssueKeyForProject } from "./lib/detectIssueKey";
@@ -1767,12 +1768,7 @@ function App() {
         const projPath = proj.path;
         const copyPath = async () => {
           setProjectContextMenu(null);
-          try {
-            await navigator.clipboard.writeText(projPath);
-            pushToast({ level: "success", title: "Path copied" });
-          } catch (err) {
-            pushToast({ level: "error", title: "Copy failed", body: String(err) });
-          }
+          await copyToClipboard(projPath, "Path copied");
         };
         return (
           <ProjectContextMenu
@@ -1936,12 +1932,7 @@ function App() {
         const isMain = !workspace.worktreePath || (!!proj && workspace.worktreePath === proj.path);
         const copy = async (text: string, label: string) => {
           setContextMenu(null);
-          try {
-            await navigator.clipboard.writeText(text);
-            pushToast({ level: "success", title: label });
-          } catch (err) {
-            pushToast({ level: "error", title: "Copy failed", body: String(err) });
-          }
+          await copyToClipboard(text, label);
         };
         return (
           <WorkspaceContextMenu
