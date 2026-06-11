@@ -1504,6 +1504,42 @@ mod read_directory_tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn children_of_ignored_dir_are_flagged() {
+        let tmp = TempDir::new().unwrap();
+        // Simulate a repo root: .git dir + .gitignore with target/
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        fs::write(tmp.path().join(".gitignore"), "target/\n").unwrap();
+        fs::create_dir(tmp.path().join("target")).unwrap();
+        fs::write(tmp.path().join("target").join("app.war"), "x").unwrap();
+        fs::create_dir(tmp.path().join("target").join("classes")).unwrap();
+
+        // Listing INSIDE the ignored dir: everything must be flagged.
+        let inside = tmp.path().join("target").to_string_lossy().to_string();
+        let entries = read_directory(inside, Some(true)).await.unwrap();
+        let war = entries.iter().find(|e| e.name == "app.war").expect("war visible");
+        assert!(war.is_ignored, "file inside gitignored dir must be flagged");
+        let classes = entries.iter().find(|e| e.name == "classes").expect("classes visible");
+        assert!(classes.is_ignored, "dir inside gitignored dir must be flagged");
+    }
+
+    #[tokio::test]
+    async fn nested_gitignore_rules_apply() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub").join(".gitignore"), "gen.txt\n").unwrap();
+        fs::write(tmp.path().join("sub").join("gen.txt"), "g").unwrap();
+        fs::write(tmp.path().join("sub").join("src.txt"), "s").unwrap();
+
+        let sub = tmp.path().join("sub").to_string_lossy().to_string();
+        let entries = read_directory(sub, Some(true)).await.unwrap();
+        let gen = entries.iter().find(|e| e.name == "gen.txt").unwrap();
+        assert!(gen.is_ignored, "nested .gitignore rule must flag gen.txt");
+        let src = entries.iter().find(|e| e.name == "src.txt").unwrap();
+        assert!(!src.is_ignored);
+    }
 }
 
 #[cfg(test)]
