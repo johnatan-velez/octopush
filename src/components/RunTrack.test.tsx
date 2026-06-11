@@ -15,7 +15,7 @@ function stage(over: Record<string, unknown>) {
   } as any;
 }
 const run = { id: "r1", workspaceId: "w1", pipelineId: "p1", task: "t", status: "running",
-  costUsd: 0, baselineUsd: 0, referenceModel: null, linkedIssueKey: null, createdAt: "t", finishedAt: null } as any;
+  costUsd: 0, baselineUsd: 0, referenceModel: null, linkedIssueKey: null, createdAt: "t", finishedAt: null, budgetUsd: null } as any;
 
 describe("RunTrack liveness", () => {
   beforeEach(() => { useRunsStore.setState({ liveByStage: {} }); vi.useRealTimers(); });

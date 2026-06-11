@@ -59,6 +59,9 @@ export interface Run {
   linkedIssueKey: string | null;
   createdAt: string;
   finishedAt: string | null;
+  /** Optional spend cap — the run pauses before any stage that would start
+   *  at/over it. Null = no budget. */
+  budgetUsd: number | null;
 }
 export interface RunStage {
   id: string;
@@ -574,8 +577,8 @@ export const ipc = {
       stageOverrides: stageOverrides ?? null,
     }),
 
-  startRun: (runId: string) =>
-    invoke<void>("start_run", { runId }),
+  startRun: (runId: string, budgetUsd?: number | null) =>
+    invoke<void>("start_run", { runId, budgetUsd: budgetUsd ?? null }),
 
   getRun: (runId: string) =>
     invoke<RunDetail>("get_run", { runId }),

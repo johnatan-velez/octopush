@@ -84,8 +84,8 @@ export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey,
     body = (
       <PipelineSetup
         defaultTask={defaultTask}
-        onBegin={(pipelineId, task, stageOverrides) =>
-          void begin(workspaceId, pipelineId, task, stageOverrides, linkedIssueKey ?? undefined)
+        onBegin={(pipelineId, task, stageOverrides, budgetUsd) =>
+          void begin(workspaceId, pipelineId, task, stageOverrides, linkedIssueKey ?? undefined, budgetUsd)
         }
         executingRun={executingRun}
         onEditPipeline={(id) => setBuilder(id)}

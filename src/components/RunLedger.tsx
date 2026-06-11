@@ -54,6 +54,15 @@ export function RunLedger({ run, stages }: Props) {
         )}
         <span className="ml-auto text-octo-mute">spent</span>
         <span className="octo-tabular text-octo-brass">${run.costUsd.toFixed(2)}</span>
+        {run.budgetUsd != null && (
+          <span
+            className={`octo-tabular ${
+              run.costUsd >= run.budgetUsd ? "text-octo-rouge" : "text-octo-mute"
+            }`}
+          >
+            · budget ${run.budgetUsd.toFixed(2)}
+          </span>
+        )}
         <span className="font-mono text-[9px] text-octo-mute">{expanded ? "▾" : "▸"}</span>
       </button>
       <div className="mx-4 h-0.5 overflow-hidden rounded-sm bg-octo-onyx">
