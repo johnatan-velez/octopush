@@ -760,4 +760,112 @@ describe("CompanionFileTree", () => {
       ),
     );
   });
+
+  // ─── Tree filter (G6 slice III) ─────────────────────────────────
+
+  /** Renders the tree, expands src/, opens the filter input, and types `query`. */
+  async function setUpFilter(query: string) {
+    render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={CHANGED} />);
+    await waitFor(() => expect(screen.getByText("src")).toBeInTheDocument());
+    await userEvent.click(screen.getByText("src"));
+    await waitFor(() => expect(screen.getByText("Main.java")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /filter files/i }));
+    const input = screen.getByRole("textbox", { name: /filter files/i });
+    await userEvent.type(input, query);
+    return input;
+  }
+
+  it("filter shows matching files plus their ancestors; non-matches are hidden", async () => {
+    await setUpFilter("main");
+
+    // Match + ancestors stay.
+    await waitFor(() =>
+      expect(screen.getByTestId("file-row-/repo/src/Main.java")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("src")).toBeInTheDocument();
+    expect(screen.getByText("my-project")).toBeInTheDocument();
+
+    // Non-matching siblings collapse away.
+    expect(screen.queryByText("Helper.java")).not.toBeInTheDocument();
+    expect(screen.queryByText("pom.xml")).not.toBeInTheDocument();
+    expect(screen.queryByText("docs")).not.toBeInTheDocument();
+  });
+
+  it("filter is case-insensitive and highlights the matched substring in brass", async () => {
+    await setUpFilter("MAIN");
+
+    const row = await screen.findByTestId("file-row-/repo/src/Main.java");
+    const brass = row.querySelector("span.text-octo-brass");
+    expect(brass).not.toBeNull();
+    expect(brass!.textContent).toBe("Main");
+  });
+
+  it("filter shows a mute match count line", async () => {
+    await setUpFilter("java");
+    // Main.java + Helper.java
+    expect(await screen.findByText("2 matches")).toBeInTheDocument();
+    expect(screen.getByText("2 matches").className).toContain("text-octo-mute");
+
+    const input = screen.getByRole("textbox", { name: /filter files/i });
+    await userEvent.clear(input);
+    await userEvent.type(input, "helper");
+    expect(await screen.findByText("1 match")).toBeInTheDocument();
+
+    await userEvent.clear(input);
+    await userEvent.type(input, "zzz-nothing");
+    expect(await screen.findByText("0 matches")).toBeInTheDocument();
+  });
+
+  it("the filter input advertises that it searches loaded folders", async () => {
+    const input = await setUpFilter("x");
+    expect(input).toHaveAttribute("title", "Searches loaded folders");
+  });
+
+  it("Escape clears the filter, closes the input, and does not reach other handlers", async () => {
+    const input = await setUpFilter("main");
+    await waitFor(() => expect(screen.queryByText("pom.xml")).not.toBeInTheDocument());
+
+    const bubbleSpy = vi.fn();
+    window.addEventListener("keydown", bubbleSpy);
+    fireEvent.keyDown(input, { key: "Escape" });
+    window.removeEventListener("keydown", bubbleSpy);
+
+    // Swallowed before it bubbles to window-level Escape handlers.
+    expect(bubbleSpy).not.toHaveBeenCalled();
+    // Input closed; full tree restored.
+    expect(screen.queryByRole("textbox", { name: /filter files/i })).not.toBeInTheDocument();
+    expect(screen.getByText("pom.xml")).toBeInTheDocument();
+  });
+
+  it("clearing the filter restores the prior expansion (src stays expanded)", async () => {
+    const input = await setUpFilter("pom");
+
+    // src has no matching descendants → collapsed away while filtering.
+    await waitFor(() => expect(screen.queryByText("Main.java")).not.toBeInTheDocument());
+    // (The match's label is split by the highlight span — query by testid.)
+    expect(screen.getByTestId("file-row-/repo/pom.xml")).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    // Expansion was never destroyed: src's children are back without a click.
+    expect(screen.getByText("Main.java")).toBeInTheDocument();
+    expect(screen.getByText("Helper.java")).toBeInTheDocument();
+  });
+
+  it("toggling the filter button off clears the query too", async () => {
+    await setUpFilter("main");
+    await waitFor(() => expect(screen.queryByText("pom.xml")).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /filter files/i }));
+    expect(screen.queryByRole("textbox", { name: /filter files/i })).not.toBeInTheDocument();
+    expect(screen.getByText("pom.xml")).toBeInTheDocument();
+  });
+
+  it("a matching directory name stays visible even without matching children", async () => {
+    await setUpFilter("docs");
+    await waitFor(() => expect(screen.queryByText("pom.xml")).not.toBeInTheDocument());
+    expect(screen.getByText("docs")).toBeInTheDocument();
+    expect(screen.getByText("1 match")).toBeInTheDocument();
+  });
 });
