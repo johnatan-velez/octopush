@@ -91,6 +91,13 @@ States: `not started` → `brainstorming` → `spec'd` → `planned` → `in pro
 - **Slice III — Scale & navigate:** filter/search in the tree; virtualization for huge trees. (Arrow-key nav + roving tabindex + Shift+F10 already shipped in slice 1's review round.)
 - **Review debt (cross-cutting, from the PR #29 review):** consolidate the 3 menu positioning idioms — `useMenuChrome` should own portal+fixed+z so Project/Workspace/FileTree menus stop diverging (ITEM/SEP strings now have 3 copies too; extract to a shared module or `<MenuItem>`); shared `copyToClipboard(text, title)` util (4th copy shipped, semantics already diverged on no-clipboard contexts); 3 extension tables in `src/lib` (fileIcons / languageDetection / editorLang) need one `getExtension()` + reconciled lists; `walk_one_level`'s walker config is the 3rd copy in commands.rs (list_workspace_files / search_workspace_text — extract a shared builder); per-workspace persisted prefs use 3 key schemes across stores (only workspaceStore prunes — `showIgnoredFiles` keys by rootPath, deletes on toggle-off but recycled paths can inherit an ON pref).
 
+**Workspace creation follow-ups (2026-06-11, from the base-branch mini-feature):**
+- **Editable branch name** in the creator — today the branch is the task slug, not editable; a collision silently reuses the existing branch (`create_branch` is idempotent), which can surprise. Editable name + a "branch already exists" inline warning.
+- **Create from a remote branch / PR** — base picker currently lists local branches only; tracking `origin/x` (fetch + `checkout -b x origin/x`) and "workspace from PR #N" are natural extensions.
+- **Branch picker search** — for repos with many branches the `useMenuChrome` menu needs a filter input (and possibly virtualization).
+- **Per-project default setup script** — the setup script is retyped per workspace; persist a project-level template prefilled in step II.
+- **Show the base branch on the workspace** — surface "feat-x · from release/1.0" in the ContextHeader / rail tooltip; requires persisting `from_branch` in the workspaces table (today it's not stored).
+
 ## Independence model (read first)
 
 Each stream **owns** a disjoint set of frontend files. Four substrates are *shared

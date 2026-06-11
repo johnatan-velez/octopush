@@ -321,6 +321,8 @@ export const ipc = {
 
   // ─── Git ────────────────────────────────────────────────────────
   getGitStatus: (path: string) => invoke<GitStatus>("get_git_status", { path }),
+  /** Local branch names — the repo's default branch first, then alphabetical. */
+  listBranches: (path: string) => invoke<string[]>("list_branches", { path }),
   getGitDiff: (path: string, ignoreWhitespace?: boolean) =>
     invoke<string>("get_git_diff", { path, ignoreWhitespace }),
 

@@ -85,6 +85,39 @@ pub fn default_branch(path: &Path) -> AppResult<Option<String>> {
     Ok(result)
 }
 
+/// Local branch names: the repo's default (HEAD) branch first, the rest
+/// alphabetical (case-insensitive). Used by the workspace creator's base picker.
+pub fn list_branches(path: &Path) -> AppResult<Vec<String>> {
+    let repo = open_repo(path)?;
+    let default = default_branch(path)?;
+    let mut names: Vec<String> = repo
+        .branches(Some(git2::BranchType::Local))
+        .map_err(|e| AppError::Other(format!("list branches: {e}")))?
+        .filter_map(|b| b.ok())
+        .filter_map(|(b, _)| b.name().ok().flatten().map(String::from))
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    // Promote the default branch only if it's a real local branch — a detached
+    // HEAD reports "HEAD" as the default, which must not become a phantom entry.
+    if let Some(def) = default {
+        if names.iter().any(|n| n == &def) {
+            names.retain(|n| n != &def);
+            names.insert(0, def);
+        }
+    }
+    Ok(names)
+}
+
+/// Resolve the base branch for a new workspace: an explicit non-blank choice
+/// wins; otherwise the repo's default branch; empty repos with no choice error.
+pub fn resolve_base(from_branch: &str, default: Option<String>) -> AppResult<String> {
+    let explicit = from_branch.trim();
+    if !explicit.is_empty() {
+        return Ok(explicit.to_string());
+    }
+    default.ok_or_else(|| AppError::Other("repository has no branches yet".into()))
+}
+
 /// Ensure the repo has at least one commit AND that commit captures whatever
 /// files live in the working tree. Handles three scenarios:
 ///   (a) No HEAD yet → stage everything, create the initial commit.
