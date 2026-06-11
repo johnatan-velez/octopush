@@ -7,9 +7,20 @@ import { savingsVsBaseline } from "../lib/runStatus";
 
 interface Props {
   defaultTask: string;
-  onBegin: (pipelineId: string, task: string, stageOverrides: [number, string][]) => void;
+  onBegin: (
+    pipelineId: string,
+    task: string,
+    stageOverrides: [number, string][],
+    budgetUsd: number | null,
+  ) => void;
   executingRun: boolean;
   onEditPipeline: (pipelineId: string | null) => void;
+}
+
+/** A budget is a positive finite dollar amount; anything else means "no budget". */
+function parseBudget(text: string): number | null {
+  const v = Number.parseFloat(text);
+  return Number.isFinite(v) && v > 0 ? v : null;
 }
 
 export function PipelineSetup({ defaultTask, onBegin, executingRun, onEditPipeline }: Props) {
@@ -21,6 +32,7 @@ export function PipelineSetup({ defaultTask, onBegin, executingRun, onEditPipeli
   const [task, setTask] = useState(defaultTask);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Record<number, string>>({});
+  const [budgetText, setBudgetText] = useState("");
   const [estimate, setEstimate] = useState<{ estimateUsd: number; baselineUsd: number } | null>(null);
 
   useEffect(() => { if (!loaded) void load(); }, [loaded, load]);
@@ -159,11 +171,31 @@ export function PipelineSetup({ defaultTask, onBegin, executingRun, onEditPipeli
                 <div className="h-12 font-mono text-xs text-octo-mute">estimating…</div>
               )}
             </div>
+            <div className="shrink-0">
+              <label
+                htmlFor="run-budget"
+                className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute"
+              >
+                budget
+              </label>
+              <div className="flex h-8 items-center gap-1 rounded-md border border-octo-hairline bg-octo-onyx px-2 transition-colors duration-[180ms] focus-within:border-[var(--brass-dim)]">
+                <span className="font-mono text-xs text-octo-mute">$</span>
+                <input
+                  id="run-budget"
+                  type="text"
+                  inputMode="decimal"
+                  value={budgetText}
+                  onChange={(e) => setBudgetText(e.target.value)}
+                  placeholder="no budget"
+                  className="octo-tabular w-20 bg-transparent font-mono text-xs text-octo-ivory outline-none placeholder:font-serif placeholder:text-octo-mute"
+                />
+              </div>
+            </div>
             <div className="ml-auto flex flex-col items-end gap-1.5">
               <button
                 type="button"
                 disabled={!task.trim() || executingRun}
-                onClick={() => onBegin(selected.pipeline.id, task.trim(), overrideTuples())}
+                onClick={() => onBegin(selected.pipeline.id, task.trim(), overrideTuples(), parseBudget(budgetText))}
                 className="rounded-lg bg-octo-brass px-5 py-2.5 font-serif text-base text-octo-onyx transition-colors duration-[180ms] hover:bg-octo-brass-hi disabled:opacity-40"
               >
                 Begin the run ⟶

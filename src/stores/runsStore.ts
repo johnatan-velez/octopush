@@ -55,6 +55,7 @@ interface RunsState {
     task: string,
     stageOverrides: [number, string][],
     linkedIssueKey?: string,
+    budgetUsd?: number | null,
   ) => Promise<void>;
   resolve: (
     runId: string,
@@ -167,13 +168,13 @@ export const useRunsStore = create<RunsState>((set, get) => ({
     }
   },
 
-  begin: async (workspaceId, pipelineId, task, stageOverrides, linkedIssueKey) => {
+  begin: async (workspaceId, pipelineId, task, stageOverrides, linkedIssueKey, budgetUsd) => {
     if (beginningWs.has(workspaceId)) return; // guard against double-click double-start
     beginningWs.add(workspaceId);
     try {
       const runId = await ipc.createRun(workspaceId, pipelineId, task, undefined, linkedIssueKey, stageOverrides);
       try {
-        await ipc.startRun(runId);
+        await ipc.startRun(runId, budgetUsd ?? null);
       } catch (e) {
         // start was refused (e.g. another run is in progress) — drop the orphaned draft.
         await ipc.abortRun(runId).catch(() => {});

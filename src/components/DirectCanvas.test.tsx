@@ -20,7 +20,7 @@ const { DirectCanvas } = await import("./DirectCanvas");
 const { useRunsStore } = await import("../stores/runsStore");
 
 const run: Run = { id: "r1", workspaceId: "w1", pipelineId: "p", task: "t", status: "running",
-  costUsd: 0, baselineUsd: 0, referenceModel: null, linkedIssueKey: null, createdAt: "t", finishedAt: null };
+  costUsd: 0, baselineUsd: 0, referenceModel: null, linkedIssueKey: null, createdAt: "t", finishedAt: null, budgetUsd: null };
 
 const mkStage = (id: string, position: number, status: string) => ({
   id, runId: "r1", position, role: "implement", agentModel: "haiku",

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 const PIPE = { pipeline: { id: "p1", name: "Feature Factory", description: "d", isBuiltin: true, createdAt: "t" },
   stages: [
@@ -57,6 +57,40 @@ describe("PipelineSetup begin gate", () => {
     render(<PipelineSetup defaultTask="build it" onBegin={vi.fn()} executingRun={false} onEditPipeline={vi.fn()} />);
     expect(screen.getByRole("button", { name: /Begin the run/i })).not.toBeDisabled();
     expect(screen.queryByText(/A run is in progress/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("PipelineSetup budget field", () => {
+  it("renders the optional budget input with its quiet eyebrow", () => {
+    render(<PipelineSetup defaultTask="t" onBegin={vi.fn()} executingRun={false} onEditPipeline={vi.fn()} />);
+    const input = screen.getByPlaceholderText("no budget");
+    expect(input).toBeInTheDocument();
+    expect(screen.getByText("budget")).toBeInTheDocument(); // eyebrow label
+  });
+
+  it("passes the parsed budget to onBegin", () => {
+    const onBegin = vi.fn();
+    render(<PipelineSetup defaultTask="build it" onBegin={onBegin} executingRun={false} onEditPipeline={vi.fn()} />);
+    fireEvent.change(screen.getByPlaceholderText("no budget"), { target: { value: "2.50" } });
+    fireEvent.click(screen.getByRole("button", { name: /Begin the run/i }));
+    expect(onBegin).toHaveBeenCalledWith("p1", "build it", [], 2.5);
+  });
+
+  it("passes null when the budget is empty or invalid", () => {
+    const onBegin = vi.fn();
+    render(<PipelineSetup defaultTask="build it" onBegin={onBegin} executingRun={false} onEditPipeline={vi.fn()} />);
+    const begin = screen.getByRole("button", { name: /Begin the run/i });
+    fireEvent.click(begin); // empty
+    expect(onBegin).toHaveBeenLastCalledWith("p1", "build it", [], null);
+    fireEvent.change(screen.getByPlaceholderText("no budget"), { target: { value: "free" } });
+    fireEvent.click(begin); // unparseable
+    expect(onBegin).toHaveBeenLastCalledWith("p1", "build it", [], null);
+    fireEvent.change(screen.getByPlaceholderText("no budget"), { target: { value: "-3" } });
+    fireEvent.click(begin); // non-positive
+    expect(onBegin).toHaveBeenLastCalledWith("p1", "build it", [], null);
+    fireEvent.change(screen.getByPlaceholderText("no budget"), { target: { value: "0" } });
+    fireEvent.click(begin); // zero is no budget
+    expect(onBegin).toHaveBeenLastCalledWith("p1", "build it", [], null);
   });
 });
 
