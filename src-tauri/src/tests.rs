@@ -2343,6 +2343,38 @@ mod orchestrator_tests {
         }
     }
 
+    /// A runner whose artifact refs the worktree (an implement-style stage).
+    /// `fail` flips the outcome to Failed with usage burned, mirroring an
+    /// iteration-capped agentic loop.
+    struct WorktreeRunner {
+        fail: bool,
+    }
+    #[async_trait::async_trait]
+    impl AgentRunner for WorktreeRunner {
+        async fn run(
+            &self,
+            stage: &StageSpec,
+            _input: &StageArtifact,
+            _ctx: &StageContext,
+        ) -> crate::error::AppResult<StageOutcome> {
+            Ok(StageOutcome {
+                artifact: StageArtifact {
+                    kind: ArtifactKind::Diff,
+                    text: format!("did {}", stage.role),
+                    payload: None,
+                    refs_worktree: true,
+                },
+                input_tokens: 10,
+                output_tokens: 2,
+                cost_usd: 0.01,
+                status: if self.fail { StageStatus::Failed } else { StageStatus::Done },
+                tool_calls: vec![],
+                error: if self.fail { Some("ran out of iterations".into()) } else { None },
+                verdict: None,
+            })
+        }
+    }
+
     fn db_with_workspace() -> (Arc<Mutex<Db>>, String) {
         let tmp = NamedTempFile::new().unwrap();
         let db = Db::open(tmp.path()).unwrap();
@@ -2355,6 +2387,108 @@ mod orchestrator_tests {
              VALUES ('w1','p1','W','main','/tmp',?1,?1)", [&now]).unwrap();
         db.seed_builtin_pipelines().unwrap();
         (Arc::new(Mutex::new(db)), "w1".to_string())
+    }
+
+    /// Workspace whose worktree is a real temp git repo. `dirty` seeds an
+    /// uncommitted file so the worktree diff is non-empty.
+    fn db_with_git_workspace(dirty: bool) -> (Arc<Mutex<Db>>, String, tempfile::TempDir) {
+        let tmp = NamedTempFile::new().unwrap();
+        let db = Db::open(tmp.path()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        crate::git_ops::init_repo(dir.path()).unwrap();
+        if dirty {
+            std::fs::write(dir.path().join("change.txt"), "an agent edit\n").unwrap();
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        db.conn_ref().execute(
+            "INSERT INTO projects (id,name,path,created_at,last_opened) VALUES ('p1','P','/tmp/p',?1,?1)",
+            [&now]).unwrap();
+        db.conn_ref().execute(
+            "INSERT INTO workspaces (id,project_id,name,branch,worktree_path,created_at,last_active)
+             VALUES ('w1','p1','W','main',?1,?2,?2)",
+            rusqlite::params![dir.path().to_string_lossy(), now]).unwrap();
+        (Arc::new(Mutex::new(db)), "w1".to_string(), dir)
+    }
+
+    /// Single implement stage on `ws`, driven by `runner`. Returns the run id.
+    async fn drive_one_implement_stage(
+        db: &Arc<Mutex<Db>>,
+        ws: &str,
+        runner: Box<dyn AgentRunner>,
+    ) -> String {
+        let pid = db.lock().insert_pipeline("Snap", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "implement", "m", "api", false, None, 0, None).unwrap();
+        let run_id = db.lock().create_run(ws, &pid, "t", None, None, &[]).unwrap();
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+        let orch = Orchestrator::new_with_runner(Arc::clone(db), sink, runner);
+        orch.run_to_pause(&run_id).await.unwrap();
+        run_id
+    }
+
+    #[tokio::test]
+    async fn done_worktree_stage_captures_diff_snapshot() {
+        let (db, ws, _dir) = db_with_git_workspace(true);
+        let run_id = drive_one_implement_stage(&db, &ws, Box::new(WorktreeRunner { fail: false })).await;
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[0].status, "done");
+        let snap = stages[0].diff_snapshot.as_deref().expect("snapshot captured on done");
+        assert!(snap.contains("change.txt"), "snapshot should carry the dirty file: {snap}");
+    }
+
+    #[tokio::test]
+    async fn failed_worktree_stage_captures_diff_snapshot() {
+        let (db, ws, _dir) = db_with_git_workspace(true);
+        let run_id = drive_one_implement_stage(&db, &ws, Box::new(WorktreeRunner { fail: true })).await;
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[0].status, "failed");
+        let snap = stages[0].diff_snapshot.as_deref().expect("snapshot captured on failure");
+        assert!(snap.contains("change.txt"));
+    }
+
+    #[tokio::test]
+    async fn clean_worktree_skips_the_empty_snapshot() {
+        let (db, ws, _dir) = db_with_git_workspace(false);
+        let run_id = drive_one_implement_stage(&db, &ws, Box::new(WorktreeRunner { fail: false })).await;
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[0].status, "done");
+        assert_eq!(stages[0].diff_snapshot, None, "empty diff must not be persisted");
+    }
+
+    #[tokio::test]
+    async fn non_worktree_artifact_takes_no_snapshot() {
+        let (db, ws, _dir) = db_with_git_workspace(true);
+        let run_id = drive_one_implement_stage(&db, &ws, Box::new(MockRunner)).await;
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[0].status, "done");
+        assert_eq!(stages[0].diff_snapshot, None);
+    }
+
+    #[tokio::test]
+    async fn failed_capture_does_not_fail_the_stage() {
+        // db_with_workspace points the worktree at /tmp — not a git repo, so the
+        // diff helper errors. The stage must still complete; only the snapshot is lost.
+        let (db, ws) = db_with_workspace();
+        let run_id = drive_one_implement_stage(&db, &ws, Box::new(WorktreeRunner { fail: false })).await;
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[0].status, "done");
+        assert_eq!(stages[0].diff_snapshot, None);
+    }
+
+    #[test]
+    fn cap_diff_passes_small_text_through() {
+        let text = "diff --git a/x b/x\n+small";
+        assert_eq!(crate::orchestrator::cap_diff(text), text);
+    }
+
+    #[test]
+    fn cap_diff_truncates_on_a_char_boundary_with_marker() {
+        // 4-byte chars guarantee the cap lands mid-char.
+        let big = "🐙".repeat(crate::orchestrator::DIFF_SNAPSHOT_CAP_BYTES / 4 + 64);
+        let capped = crate::orchestrator::cap_diff(&big);
+        assert!(capped.ends_with("\n… (diff truncated)"));
+        assert!(capped.len() <= crate::orchestrator::DIFF_SNAPSHOT_CAP_BYTES + "\n… (diff truncated)".len());
+        // No panic = boundary respected; also make sure we kept real content.
+        assert!(capped.starts_with("🐙"));
     }
 
     #[tokio::test]
