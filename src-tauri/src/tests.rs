@@ -3674,6 +3674,11 @@ mod live_tests {
         assert_eq!(out.input_tokens, 2);
         assert_eq!(out.output_tokens, 2);
         assert_eq!(out.tool_calls.len(), 2);
+        // F1: the journal must END with a notice explaining why the stage stopped.
+        let events = rec.events.lock();
+        let last = &events.last().expect("exhaustion must emit entries").1["entry"];
+        assert_eq!(last["kind"], "notice", "last journal entry is a notice: {last}");
+        assert_eq!(last["text"], "iteration cap reached — 2 of 2 tool turns used");
     }
 
     struct Recorder { events: Mutex<Vec<(String, Value)>> }
