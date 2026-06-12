@@ -254,7 +254,7 @@ export function PipelineBuilder({ pipeline, onClose }: Props) {
               <TogglePill on={s.checkpoint} onChange={(v) => patch(s.key, { checkpoint: v })} label="⟜ gate" ariaLabel="Approval gate" />
               <label className="flex shrink-0 items-center gap-2 font-mono text-[10px] uppercase tracking-[0.1em] text-octo-mute">
                 max turns
-                <Stepper value={s.maxIterations} min={5} max={100} onChange={(v) => patch(s.key, { maxIterations: v })} ariaLabel="Max turns" />
+                <Stepper value={s.maxIterations} min={1} max={100} onChange={(v) => patch(s.key, { maxIterations: v })} ariaLabel="Max turns" />
               </label>
               <div className="ml-auto flex items-center gap-1">
                 <IconButton label="Move up" disabled={i === 0} onClick={() => move(i, -1)}><ChevronUp size={12} /></IconButton>
