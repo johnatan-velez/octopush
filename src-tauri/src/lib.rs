@@ -304,6 +304,13 @@ pub fn run() {
                 if let Err(e) = st.db.lock().seed_builtin_pipelines() {
                     tracing::error!(error = %e, "failed to seed builtin pipelines");
                 }
+                // Stages stuck "running" from a previous process (crash, quit,
+                // update) land in the normal halt-recovery flow with Resume.
+                match st.db.lock().recover_interrupted_runs() {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(count = n, "recovered interrupted run stages"),
+                    Err(e) => tracing::error!(error = %e, "failed to recover interrupted runs"),
+                }
                 let sink = std::sync::Arc::new(orchestrator::events::TauriEventSink {
                     app: app.handle().clone(),
                 });

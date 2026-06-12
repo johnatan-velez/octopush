@@ -4,7 +4,9 @@ use crate::chat_engine::resolve_provider;
 use crate::error::AppResult;
 use crate::orchestrator::agentic::run_agentic_loop;
 use crate::orchestrator::events::EventSink;
-use crate::orchestrator::types::{ArtifactKind, StageArtifact, StageOutcome, StageSpec, StageStatus};
+use crate::orchestrator::types::{
+    ArtifactKind, StageArtifact, StageInput, StageOutcome, StageSpec, StageStatus,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -41,17 +43,24 @@ pub trait AgentRunner: Send + Sync {
     async fn run(
         &self,
         stage: &StageSpec,
-        input: &StageArtifact,
+        input: &StageInput,
         ctx: &StageContext,
     ) -> AppResult<StageOutcome>;
 }
 
 /// Map a stage role to the kind of artifact it produces.
+///
+/// The kind drives two things downstream: the section label later stages see
+/// ("The plan to follow" vs "Review findings"…) and which dossier slot the
+/// artifact occupies — so a role mapped to the wrong kind both mislabels its
+/// output AND evicts an unrelated artifact from the context. `refine` produces
+/// a refined PLAN (its prompt: "refine and finalize the plan"), and `repro`
+/// produces FINDINGS (a root-cause description) — neither is a code diff.
 pub fn artifact_kind_for(role: &str) -> ArtifactKind {
     match role {
-        "plan" => ArtifactKind::Plan,
-        "plan_review" | "code_review" | "critique" | "verify" => ArtifactKind::Review,
-        "implement" | "fix" | "repro" | "refine" => ArtifactKind::Diff,
+        "plan" | "refine" => ArtifactKind::Plan,
+        "plan_review" | "code_review" | "critique" | "verify" | "repro" => ArtifactKind::Review,
+        "implement" | "fix" => ArtifactKind::Diff,
         "test" => ArtifactKind::Tests,
         _ => ArtifactKind::Note,
     }
@@ -90,25 +99,77 @@ pub fn system_prompt_for(role: &str) -> String {
     format!("{PIPELINE_PREAMBLE}\n\n{role_body}")
 }
 
-/// Build the user message that seeds a stage from the task + the prior artifact.
+/// Cap (chars) on a single dossier section fed to a stage. Generous enough for
+/// a full plan or review (~4k tokens), tight enough that a runaway artifact
+/// can't blow up every later stage's prompt. Truncation keeps head + tail —
+/// intent and conclusions survive; boilerplate middles are what get dropped.
+const SECTION_CAP_CHARS: usize = 16_000;
+
+/// Middle-truncate `s` to [`SECTION_CAP_CHARS`] on char boundaries.
+pub(crate) fn cap_section(s: &str) -> String {
+    if s.len() <= SECTION_CAP_CHARS {
+        return s.to_string();
+    }
+    let head_budget = SECTION_CAP_CHARS * 3 / 4;
+    let tail_budget = SECTION_CAP_CHARS - head_budget;
+    let mut head_end = head_budget.min(s.len());
+    while !s.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = s.len() - tail_budget;
+    while !s.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    format!(
+        "{}\n… [section truncated for length — the beginning and end are preserved] …\n{}",
+        &s[..head_end],
+        &s[tail_start..],
+    )
+}
+
+/// Human-readable role for prompt attribution ("plan_review" → "plan review").
+fn role_words(role: &str) -> String {
+    role.replace('_', " ")
+}
+
+/// The dossier label for a section of the given kind.
+fn section_label(kind: &ArtifactKind) -> &'static str {
+    match kind {
+        ArtifactKind::Plan => "The plan to follow",
+        ArtifactKind::Review => "Review findings",
+        ArtifactKind::Tests => "Tests from an earlier stage",
+        ArtifactKind::Diff => "Summary of code changes so far",
+        ArtifactKind::Note => "Context",
+    }
+}
+
+/// Build the user message that seeds a stage: the task, a one-line pipeline
+/// map, then the freshest artifact of each kind from earlier stages — each
+/// attributed to its producing stage and capped — and finally any reviewer
+/// feedback for a re-run. This is the stage's full working context; nothing
+/// the pipeline has refined gets shadowed by whatever ran last.
 pub fn user_input_for(
     role: &str,
     task: &str,
-    prior: &StageArtifact,
+    input: &StageInput,
     feedback: Option<&str>,
 ) -> String {
     let mut s = format!("Task: {task}\n\n");
-    if !prior.text.trim().is_empty() {
-        let label = match prior.kind {
-            ArtifactKind::Plan => "Plan from the previous stage",
-            ArtifactKind::Review => "Review findings from the previous stage",
-            ArtifactKind::Tests => "Tests from the previous stage",
-            ArtifactKind::Diff => "Summary of changes from the previous stage",
-            ArtifactKind::Note => "Context",
-        };
-        s.push_str(&format!("{label}:\n{}\n\n", prior.text));
+    if !input.breadcrumb.trim().is_empty() {
+        s.push_str(&format!("Pipeline: {}\n\n", input.breadcrumb));
     }
-    if prior.refs_worktree {
+    for sec in &input.sections {
+        if sec.text.trim().is_empty() {
+            continue;
+        }
+        s.push_str(&format!(
+            "{} (from the {} stage):\n{}\n\n",
+            section_label(&sec.kind),
+            role_words(&sec.role),
+            cap_section(&sec.text),
+        ));
+    }
+    if input.refs_worktree {
         s.push_str("The current code changes are present in the workspace; inspect them with your tools.\n\n");
     }
     if let Some(fb) = feedback {
@@ -167,7 +228,7 @@ impl AgentRunner for ApiRunner {
     async fn run(
         &self,
         stage: &StageSpec,
-        input: &StageArtifact,
+        input: &StageInput,
         ctx: &StageContext,
     ) -> AppResult<StageOutcome> {
         let (provider, api_base, api_key) = resolve_provider(&stage.agent_model)?;

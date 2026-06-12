@@ -1957,7 +1957,22 @@ mod cost_tests {
 #[cfg(test)]
 mod runner_helpers_tests {
     use crate::orchestrator::runner::{artifact_kind_for, system_prompt_for, user_input_for};
-    use crate::orchestrator::types::{ArtifactKind, StageArtifact};
+    use crate::orchestrator::types::{ArtifactKind, InputSection, StageInput};
+
+    /// Dossier with one Plan section, for the single-section tests.
+    fn plan_input(text: &str) -> StageInput {
+        StageInput {
+            breadcrumb: String::new(),
+            sections: vec![InputSection {
+                kind: ArtifactKind::Plan,
+                role: "plan".into(),
+                position: 0,
+                text: text.into(),
+                refs_worktree: false,
+            }],
+            refs_worktree: false,
+        }
+    }
 
     #[test]
     fn role_maps_to_artifact_kind() {
@@ -1967,6 +1982,12 @@ mod runner_helpers_tests {
         assert_eq!(artifact_kind_for("implement"), ArtifactKind::Diff);
         assert_eq!(artifact_kind_for("test"), ArtifactKind::Tests);
         assert_eq!(artifact_kind_for("anything-else"), ArtifactKind::Note);
+        // refine outputs a refined PLAN; repro outputs FINDINGS — neither is a
+        // diff. The kind picks both the dossier slot and the section label, so
+        // a wrong mapping evicts an unrelated artifact AND mislabels this one.
+        assert_eq!(artifact_kind_for("refine"), ArtifactKind::Plan);
+        assert_eq!(artifact_kind_for("repro"), ArtifactKind::Review);
+        assert_eq!(artifact_kind_for("fix"), ArtifactKind::Diff);
     }
 
     #[test]
@@ -2013,12 +2034,7 @@ mod runner_helpers_tests {
 
     #[test]
     fn user_input_includes_task_and_prior_artifact() {
-        let prior = StageArtifact {
-            kind: ArtifactKind::Plan,
-            text: "Step 1: do X".into(),
-            payload: None,
-            refs_worktree: false,
-        };
+        let prior = plan_input("Step 1: do X");
         let input = user_input_for("implement", "Build feature Y", &prior, None);
         assert!(input.contains("Build feature Y"));
         assert!(input.contains("Step 1: do X"));
@@ -2029,12 +2045,7 @@ mod runner_helpers_tests {
 
     #[test]
     fn feedback_reruns_say_revise_dont_restart() {
-        let prior = StageArtifact {
-            kind: ArtifactKind::Plan,
-            text: "Step 1".into(),
-            payload: None,
-            refs_worktree: false,
-        };
+        let prior = plan_input("Step 1");
         // With feedback: the prompt warns the previous attempt may still be in
         // the workspace and asks for a revision, not a restart.
         let with_fb = user_input_for("implement", "Build Y", &prior, Some("fix it"));
@@ -2042,6 +2053,82 @@ mod runner_helpers_tests {
         // Without feedback: no such line.
         let without = user_input_for("implement", "Build Y", &prior, None);
         assert!(!without.contains("revise them rather than starting over"));
+    }
+
+    #[test]
+    fn dossier_renders_every_section_with_attribution_and_breadcrumb() {
+        // The whole point of the dossier: Implement sees BOTH the refined plan
+        // and the review's findings — the review no longer shadows the plan.
+        let input = StageInput {
+            breadcrumb: "plan (done) → plan review (done) → implement (← current stage)".into(),
+            sections: vec![
+                InputSection {
+                    kind: ArtifactKind::Plan,
+                    role: "plan".into(),
+                    position: 0,
+                    text: "Refined plan: add the toggle to Settings".into(),
+                    refs_worktree: false,
+                },
+                InputSection {
+                    kind: ArtifactKind::Review,
+                    role: "plan_review".into(),
+                    position: 1,
+                    text: "Looks solid. VERDICT: PASS".into(),
+                    refs_worktree: false,
+                },
+            ],
+            refs_worktree: false,
+        };
+        let s = user_input_for("implement", "Add a dark-mode toggle", &input, None);
+        assert!(s.contains("The plan to follow (from the plan stage):"), "{s}");
+        assert!(s.contains("Refined plan: add the toggle to Settings"));
+        assert!(s.contains("Review findings (from the plan review stage):"), "{s}");
+        assert!(s.contains("VERDICT: PASS"));
+        assert!(s.contains("Pipeline: plan (done)"), "breadcrumb missing: {s}");
+        // Plan precedes review — pipeline order, not map order.
+        let plan_at = s.find("The plan to follow").unwrap();
+        let review_at = s.find("Review findings").unwrap();
+        assert!(plan_at < review_at);
+    }
+
+    #[test]
+    fn dossier_worktree_flag_adds_the_workspace_hint() {
+        let mut input = plan_input("plan text");
+        let none = user_input_for("code_review", "T", &input, None);
+        assert!(!none.contains("present in the workspace"));
+        input.refs_worktree = true;
+        let some = user_input_for("code_review", "T", &input, None);
+        assert!(some.contains("The current code changes are present in the workspace"));
+    }
+
+    #[test]
+    fn oversized_sections_are_capped_head_and_tail() {
+        let mut text = String::from("INTENT-AT-THE-TOP\n");
+        text.push_str(&"x".repeat(40_000));
+        text.push_str("\nCONCLUSION-AT-THE-END");
+        let input = plan_input(&text);
+        let s = user_input_for("implement", "T", &input, None);
+        assert!(s.len() < 25_000, "section must be capped, got {}", s.len());
+        assert!(s.contains("INTENT-AT-THE-TOP"), "head must survive");
+        assert!(s.contains("CONCLUSION-AT-THE-END"), "tail must survive");
+        assert!(s.contains("section truncated for length"));
+    }
+
+    #[test]
+    fn empty_sections_are_skipped() {
+        let input = StageInput {
+            breadcrumb: String::new(),
+            sections: vec![InputSection {
+                kind: ArtifactKind::Note,
+                role: "implement".into(),
+                position: 0,
+                text: "   ".into(),
+                refs_worktree: false,
+            }],
+            refs_worktree: false,
+        };
+        let s = user_input_for("code_review", "T", &input, None);
+        assert!(!s.contains("Context (from"));
     }
 }
 
@@ -2500,7 +2587,7 @@ mod orchestrator_tests {
         async fn run(
             &self,
             stage: &StageSpec,
-            _input: &StageArtifact,
+            _input: &StageInput,
             _ctx: &StageContext,
         ) -> crate::error::AppResult<StageOutcome> {
             Ok(StageOutcome {
@@ -2532,7 +2619,7 @@ mod orchestrator_tests {
         async fn run(
             &self,
             stage: &StageSpec,
-            _input: &StageArtifact,
+            _input: &StageInput,
             _ctx: &StageContext,
         ) -> crate::error::AppResult<StageOutcome> {
             Ok(StageOutcome {
@@ -2564,7 +2651,7 @@ mod orchestrator_tests {
         async fn run(
             &self,
             _stage: &StageSpec,
-            _input: &StageArtifact,
+            _input: &StageInput,
             ctx: &StageContext,
         ) -> crate::error::AppResult<StageOutcome> {
             *self.captured.lock() = Some(Arc::clone(&ctx.cancel));
@@ -2867,13 +2954,212 @@ mod orchestrator_tests {
     }
 
     /// A runner that always returns a hard Err (simulates CliRunnerUnavailable / unresolved model).
+    /// Records each stage's assembled input dossier and produces a
+    /// role-appropriate artifact (kind from `artifact_kind_for`).
+    struct RecordingRunner {
+        seen: Arc<Mutex<Vec<(String, StageInput)>>>,
+    }
+    #[async_trait::async_trait]
+    impl AgentRunner for RecordingRunner {
+        async fn run(
+            &self,
+            stage: &StageSpec,
+            input: &StageInput,
+            _ctx: &StageContext,
+        ) -> crate::error::AppResult<StageOutcome> {
+            self.seen.lock().push((stage.role.clone(), input.clone()));
+            let kind = crate::orchestrator::runner::artifact_kind_for(&stage.role);
+            let refs_worktree = matches!(kind, ArtifactKind::Diff | ArtifactKind::Tests);
+            Ok(StageOutcome {
+                artifact: StageArtifact {
+                    kind,
+                    text: format!("{} output", stage.role),
+                    payload: None,
+                    refs_worktree,
+                },
+                input_tokens: 1,
+                output_tokens: 1,
+                cost_usd: 0.0,
+                status: StageStatus::Done,
+                tool_calls: vec![],
+                error: None,
+                verdict: None,
+            })
+        }
+    }
+
+    /// THE context-passing contract: with Plan → Plan review → Implement, the
+    /// implementer receives BOTH the plan and the review — the review's
+    /// findings must never shadow the plan they reviewed (the old one-hop bug).
+    #[tokio::test]
+    async fn implement_receives_both_plan_and_review_sections() {
+        let (db, ws) = db_with_workspace();
+        let pid = db.lock().insert_pipeline("P", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "plan", "m", "api", false, None, 0, None, 25).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 1, "plan_review", "m", "api", false, None, 0, None, 25).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 2, "implement", "m", "api", false, None, 0, None, 25).unwrap();
+        let run_id = db.lock().create_run(&ws, &pid, "task", None, None, &[]).unwrap();
+        let seen = Arc::new(Mutex::new(vec![]));
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+        let orch = Orchestrator::new_with_runner(
+            Arc::clone(&db),
+            sink,
+            Box::new(RecordingRunner { seen: Arc::clone(&seen) }),
+        );
+        assert_eq!(orch.run_to_pause(&run_id).await.unwrap(), RunStatus::Completed);
+
+        let seen = seen.lock();
+        // Stage 1 (plan): empty dossier — the task rides separately.
+        assert!(seen[0].1.sections.is_empty());
+        assert!(seen[0].1.breadcrumb.contains("current stage"));
+        // Stage 2 (plan_review): exactly the plan.
+        assert_eq!(seen[1].1.sections.len(), 1);
+        assert_eq!(seen[1].1.sections[0].kind, ArtifactKind::Plan);
+        // Stage 3 (implement): plan AND review, in pipeline order.
+        let (role, input) = &seen[2];
+        assert_eq!(role, "implement");
+        let kinds: Vec<_> = input.sections.iter().map(|s| s.kind.clone()).collect();
+        assert_eq!(kinds, vec![ArtifactKind::Plan, ArtifactKind::Review]);
+        assert!(input.sections[0].text.contains("plan output"));
+        assert!(input.sections[1].text.contains("plan_review output"));
+    }
+
+    /// Two producers of the same kind: the fresher one supersedes (refine's
+    /// refined plan replaces the original plan in the dossier — never both).
+    #[tokio::test]
+    async fn fresher_artifact_of_same_kind_supersedes_older() {
+        let (db, ws) = db_with_workspace();
+        let pid = db.lock().insert_pipeline("P2", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "plan", "m", "api", false, None, 0, None, 25).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 1, "refine", "m", "api", false, None, 0, None, 25).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 2, "implement", "m", "api", false, None, 0, None, 25).unwrap();
+        let run_id = db.lock().create_run(&ws, &pid, "task", None, None, &[]).unwrap();
+        let seen = Arc::new(Mutex::new(vec![]));
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+        let orch = Orchestrator::new_with_runner(
+            Arc::clone(&db),
+            sink,
+            Box::new(RecordingRunner { seen: Arc::clone(&seen) }),
+        );
+        assert_eq!(orch.run_to_pause(&run_id).await.unwrap(), RunStatus::Completed);
+
+        let seen = seen.lock();
+        let (_, input) = &seen[2];
+        let plans: Vec<_> = input
+            .sections
+            .iter()
+            .filter(|s| s.kind == ArtifactKind::Plan)
+            .collect();
+        assert_eq!(plans.len(), 1, "exactly one Plan section");
+        assert_eq!(plans[0].role, "refine", "the refined plan supersedes the original");
+        assert!(plans[0].text.contains("refine output"));
+    }
+
+    /// Startup recovery: a stage orphaned in `running` by a dead process must
+    /// land in the halt-recovery flow (failed + paused), never stay stranded.
+    #[tokio::test]
+    async fn startup_recovery_fails_orphaned_running_stages() {
+        let (db, ws) = db_with_workspace();
+        let pid = db.lock().insert_pipeline("P3", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "plan", "m", "api", false, None, 0, None, 25).unwrap();
+        let run_id = db.lock().create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        let stage_id = db.lock().list_run_stages(&run_id).unwrap()[0].id.clone();
+        // Simulate the dead process: stage in flight, run running.
+        db.lock().set_run_stage_status(&stage_id, "running").unwrap();
+        db.lock().set_run_status(&run_id, "running", false).unwrap();
+
+        let n = db.lock().recover_interrupted_runs().unwrap();
+        assert_eq!(n, 1);
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[0].status, "failed");
+        assert!(
+            stages[0].error.as_deref().unwrap().starts_with("interrupted"),
+            "error must lead with 'interrupted' for the Resume affordance"
+        );
+        let run = db.lock().get_run(&run_id).unwrap().unwrap();
+        assert_eq!(run.status, "paused");
+        // Idempotent: a clean second boot recovers nothing.
+        assert_eq!(db.lock().recover_interrupted_runs().unwrap(), 0);
+    }
+
+    /// Death BETWEEN stages (run `running`, no stage `running`): the paused run
+    /// must always end up with a blocked stage the checkpoint UI can act on —
+    /// a paused run with no blocked stage has no affordance and permanently
+    /// blocks its workspace.
+    #[tokio::test]
+    async fn startup_recovery_settles_runs_that_died_between_stages() {
+        let (db, ws) = db_with_workspace();
+        let pid = db.lock().insert_pipeline("P5", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "plan", "m", "api", false, None, 0, None, 25).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 1, "implement", "m", "api", false, None, 0, None, 25).unwrap();
+        let run_id = db.lock().create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        // Simulate: stage 1 finished, process died before stage 2 went running.
+        db.lock().set_run_stage_status(&stages[0].id, "done").unwrap();
+        db.lock().set_run_status(&run_id, "running", false).unwrap();
+
+        assert_eq!(db.lock().recover_interrupted_runs().unwrap(), 1);
+        let after = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(after[0].status, "done", "finished work is untouched");
+        assert_eq!(after[1].status, "failed", "the next stage carries the interruption");
+        assert!(after[1].error.as_deref().unwrap().starts_with("interrupted"));
+        assert_eq!(db.lock().get_run(&run_id).unwrap().unwrap().status, "paused");
+    }
+
+    /// Death after the last stage finished but before the run was stamped:
+    /// the run IS complete — recovery must mark it so, not park it paused.
+    #[tokio::test]
+    async fn startup_recovery_completes_runs_whose_stages_all_finished() {
+        let (db, ws) = db_with_workspace();
+        let pid = db.lock().insert_pipeline("P6", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "plan", "m", "api", false, None, 0, None, 25).unwrap();
+        let run_id = db.lock().create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        let stage_id = db.lock().list_run_stages(&run_id).unwrap()[0].id.clone();
+        db.lock().set_run_stage_status(&stage_id, "done").unwrap();
+        db.lock().set_run_status(&run_id, "running", false).unwrap();
+
+        assert_eq!(db.lock().recover_interrupted_runs().unwrap(), 0);
+        assert_eq!(db.lock().get_run(&run_id).unwrap().unwrap().status, "completed");
+    }
+
+    /// Accept & continue on a halted stage salvages the journal narration into
+    /// the synthesized artifact — the next stage inherits the partial work,
+    /// not an empty stub. Only the CURRENT attempt (after the last reset).
+    #[tokio::test]
+    async fn approve_after_halt_salvages_journal_narration() {
+        let (db, ws) = db_with_workspace();
+        let pid = db.lock().insert_pipeline("P4", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "plan", "m", "api", false, None, 0, None, 25).unwrap();
+        let run_id = db.lock().create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+        let orch = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(FailingRunner));
+        assert_eq!(orch.run_to_pause(&run_id).await.unwrap(), RunStatus::Paused);
+        let stage_id = db.lock().list_run_stages(&run_id).unwrap()[0].id.clone();
+
+        // A first attempt's narration, a reset (re-run), then the halted attempt's.
+        db.lock().append_stage_log(&run_id, &stage_id, r#"{"kind":"text","text":"stale first attempt"}"#).unwrap();
+        db.lock().append_stage_log_marker(&run_id, &stage_id).unwrap();
+        db.lock().append_stage_log(&run_id, &stage_id, r#"{"kind":"text","text":"partial plan: add the toggle"}"#).unwrap();
+        db.lock().append_stage_log(&run_id, &stage_id, r#"{"kind":"tool","tool":"read_file","hint":"x"}"#).unwrap();
+
+        assert_eq!(
+            orch.resolve_checkpoint(&run_id, CheckpointAction::Approve).await.unwrap(),
+            RunStatus::Completed
+        );
+        let stage = db.lock().list_run_stages(&run_id).unwrap()[0].clone();
+        let artifact = stage.artifact.expect("approve synthesizes an artifact");
+        assert!(artifact.contains("accepted by the director"));
+        assert!(artifact.contains("partial plan: add the toggle"), "{artifact}");
+        assert!(!artifact.contains("stale first attempt"), "pre-reset narration must not leak");
+    }
+
     struct FailingRunner;
     #[async_trait::async_trait]
     impl AgentRunner for FailingRunner {
         async fn run(
             &self,
             _stage: &StageSpec,
-            _input: &StageArtifact,
+            _input: &StageInput,
             _ctx: &StageContext,
         ) -> crate::error::AppResult<StageOutcome> {
             Err(crate::error::AppError::Other("boom".into()))
@@ -3207,7 +3493,7 @@ mod orchestrator_tests {
     struct VerdictRunner { verdict: &'static str } // "PASS" | "CHANGES_REQUESTED" | "" (none)
     #[async_trait::async_trait]
     impl AgentRunner for VerdictRunner {
-        async fn run(&self, stage: &StageSpec, _i: &StageArtifact, _c: &StageContext)
+        async fn run(&self, stage: &StageSpec, _i: &StageInput, _c: &StageContext)
             -> crate::error::AppResult<StageOutcome> {
             let is_review = matches!(stage.role.as_str(), "code_review" | "verify");
             let text = if is_review && !self.verdict.is_empty() { format!("findings\nVERDICT: {}", self.verdict) } else { "did it".into() };
@@ -3306,7 +3592,7 @@ mod orchestrator_tests {
         async fn run(
             &self,
             stage: &StageSpec,
-            _input: &StageArtifact,
+            _input: &StageInput,
             _ctx: &StageContext,
         ) -> crate::error::AppResult<StageOutcome> {
             Ok(StageOutcome {

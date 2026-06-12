@@ -1838,6 +1838,63 @@ impl Db {
         Ok(())
     }
 
+    /// Error message stamped on stages found stuck in `running` at startup.
+    /// `isTransientHalt` on the frontend keys off the leading "interrupted"
+    /// to offer the amber Resume affordance instead of the rouge hard-failure.
+    pub const INTERRUPTED_STAGE_ERROR: &'static str =
+        "interrupted — Octopush closed while this stage was in flight; the work on disk is preserved, resume the stage to continue";
+
+    /// Startup recovery: no stage can legitimately be `running` when the app
+    /// boots, so any such row is an orphan from a previous process (crash,
+    /// force-quit, update). Without this, the run sits "paused" with a stage
+    /// stuck on "running" — a state the checkpoint UI has NO affordance for,
+    /// stranding the pipeline forever. Orphans land in the normal
+    /// halt-recovery flow (failed + paused → Resume).
+    ///
+    /// A process can also die BETWEEN stages (run `running`, no stage
+    /// `running`). Each such run is settled by what its stages say: every
+    /// stage done → the run actually finished, mark it `completed`; otherwise
+    /// stamp the first unfinished stage as interrupted so the paused run
+    /// always has a blocked stage the checkpoint UI can act on — a paused run
+    /// with NO blocked stage has no affordance at all and permanently blocks
+    /// its workspace. Returns the count of stages stamped.
+    pub fn recover_interrupted_runs(&self) -> AppResult<usize> {
+        let now = Utc::now().to_rfc3339();
+        let mut n = self.conn.execute(
+            "UPDATE run_stages SET status = 'failed', error = ?1, finished_at = ?2
+             WHERE status = 'running'",
+            params![Self::INTERRUPTED_STAGE_ERROR, now],
+        )?;
+
+        let run_ids: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM runs WHERE status = 'running'")?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for run_id in run_ids {
+            let stages = self.list_run_stages(&run_id)?;
+            if !stages.is_empty() && stages.iter().all(|s| s.status == "done") {
+                // Died after the last stage finished but before the run was
+                // stamped — it IS complete.
+                self.set_run_status(&run_id, "completed", true)?;
+                continue;
+            }
+            let blocked = stages
+                .iter()
+                .any(|s| s.status == "failed" || s.status == "awaiting_checkpoint");
+            if !blocked {
+                if let Some(next) = stages.iter().find(|s| s.status != "done") {
+                    self.fail_run_stage(&next.id, Self::INTERRUPTED_STAGE_ERROR)?;
+                    n += 1;
+                }
+            }
+            self.set_run_status(&run_id, "paused", false)?;
+        }
+        Ok(n)
+    }
+
     pub fn set_run_stage_status(&self, stage_id: &str, status: &str) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         // Stamp started_at the first time it goes running.
