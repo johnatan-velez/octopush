@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 
 const { RunTrack } = await import("./RunTrack");
 const { useRunsStore } = await import("../stores/runsStore");
@@ -57,7 +57,7 @@ describe("RunTrack liveness", () => {
 
   it("reserves the elapsed slot in every status (S1)", () => {
     render(<RunTrack run={run} stages={[stage({})]} selectedStageId={null} onSelectStage={() => {}} />);
-    const card = screen.getByRole("button");
+    const card = screen.getAllByRole("button").find((b) => b.className.includes("h-[96px]"))!;
     const slot = card.querySelector("span.octo-tabular");
     expect(slot).not.toBeNull();
     expect(slot!.className).toContain("w-[5ch]");
@@ -82,6 +82,106 @@ describe("RunTrack liveness", () => {
       />,
     );
     expect(screen.getByText(/§ Bash npm test/)).toBeInTheDocument();
+  });
+
+  it("renders the brief eyebrow + truncated task in the header (R1)", () => {
+    const longTask = "Build the auth flow\nwith refresh tokens and a full audit trail";
+    render(
+      <RunTrack
+        run={{ ...run, task: longTask }}
+        stages={[stage({})]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+      />,
+    );
+    expect(screen.getByText("the brief")).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: /the full brief/i });
+    expect(toggle.title).toBe(longTask);
+    const line = [...toggle.querySelectorAll("span")].find((s) => s.className.includes("truncate"));
+    expect(line).toBeDefined();
+    expect(line!.className).toContain("font-serif");
+  });
+
+  it("expands the full brief on click and collapses again (R1)", () => {
+    const longTask = "Build the auth flow\nwith refresh tokens";
+    render(
+      <RunTrack
+        run={{ ...run, task: longTask }}
+        stages={[stage({})]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+      />,
+    );
+    // Collapsed: the Reveal region is aria-hidden.
+    const full = screen.getByTestId("brief-full");
+    expect(full.closest("[aria-hidden]")!.getAttribute("aria-hidden")).toBe("true");
+    expect(full.className).toContain("whitespace-pre-wrap");
+    fireEvent.click(screen.getByRole("button", { name: /the full brief/i }));
+    expect(full.closest("[aria-hidden]")!.getAttribute("aria-hidden")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: /the full brief/i }));
+    expect(full.closest("[aria-hidden]")!.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("offers Stop the stage + Abort only while the run is running (R2)", () => {
+    const onStopStage = vi.fn();
+    const onAbort = vi.fn();
+    const { unmount } = render(
+      <RunTrack
+        run={run}
+        stages={[stage({ status: "running", startedAt: "2026-06-09T00:00:00Z" })]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+        onStopStage={onStopStage}
+        onAbort={onAbort}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop the stage" }));
+    expect(onStopStage).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Abort" }));
+    expect(onAbort).toHaveBeenCalledTimes(1);
+    unmount();
+
+    render(
+      <RunTrack
+        run={{ ...run, status: "paused" }}
+        stages={[stage({ status: "failed" })]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+        onStopStage={onStopStage}
+        onAbort={onAbort}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Stop the stage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Abort" })).not.toBeInTheDocument();
+  });
+
+  it("offers Run it again only once the run is terminal (R3)", () => {
+    const onRunAgain = vi.fn();
+    const { unmount } = render(
+      <RunTrack
+        run={{ ...run, status: "completed" }}
+        stages={[stage({ status: "done" })]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+        onRunAgain={onRunAgain}
+      />,
+    );
+    const again = screen.getByRole("button", { name: /Run it again/ });
+    expect(again.textContent).toContain("⟶");
+    fireEvent.click(again);
+    expect(onRunAgain).toHaveBeenCalledTimes(1);
+    unmount();
+
+    render(
+      <RunTrack
+        run={run} // running
+        stages={[stage({ status: "running", startedAt: "2026-06-09T00:00:00Z" })]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+        onRunAgain={onRunAgain}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /Run it again/ })).not.toBeInTheDocument();
   });
 
   it("dims connectors after pending stages and brightens them after done stages", () => {

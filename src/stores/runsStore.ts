@@ -16,6 +16,14 @@ const MAX_LOG_LINES = 200;
 
 const TERMINAL = new Set(["completed", "aborted", "failed"]);
 
+/** Seed for the launcher when re-running a finished pipeline (R3). */
+export interface LauncherPrefill {
+  task: string;
+  pipelineId: string;
+  /** [stage position, agent model] for every stage of the source run. */
+  overrides: [number, string][];
+}
+
 const inflightDetail = new Set<string>();
 const dirtyDetail = new Set<string>();
 
@@ -32,6 +40,9 @@ interface RunsState {
   selectedRunIdByWs: Record<string, string | null>;
   /** Structured live activity entries per stage id, streamed from both substrates. */
   liveByStage: Record<string, LiveEntry[]>;
+  /** One-shot launcher seed set by "Run it again"; consumed (and cleared) by
+   *  PipelineSetup on its next mount. */
+  launcherPrefill: LauncherPrefill | null;
 
   getRuns: (workspaceId: string) => Run[];
   getActiveRunId: (workspaceId: string) => string | null;
@@ -64,8 +75,13 @@ interface RunsState {
     modelOverride?: string,
   ) => Promise<void>;
   abort: (runId: string) => Promise<void>;
+  /** Stop the in-flight stage (fire-and-forget — run:// events carry the fallout). */
+  stopStage: (runId: string) => Promise<void>;
   /** null clears a manual pin — the canvas falls back to the active stage. */
   selectStage: (runId: string, stageId: string | null) => void;
+  setLauncherPrefill: (prefill: LauncherPrefill | null) => void;
+  /** Returns the pending prefill and clears it — consumed exactly once. */
+  consumeLauncherPrefill: () => LauncherPrefill | null;
 
   applyStageUpdate: (runId: string, run: Run) => void;
   applyCost: (runId: string, costUsd: number, baselineUsd: number) => void;
@@ -87,6 +103,7 @@ export const useRunsStore = create<RunsState>((set, get) => ({
   selectedStageByRun: {},
   selectedRunIdByWs: {},
   liveByStage: {},
+  launcherPrefill: null,
 
   getRuns: (workspaceId) => get().runsByWs[workspaceId] ?? EMPTY_RUNS,
   getActiveRunId: (workspaceId) => get().activeRunIdByWs[workspaceId] ?? null,
@@ -198,8 +215,20 @@ export const useRunsStore = create<RunsState>((set, get) => ({
     await get().refreshDetail(runId);
   },
 
+  stopStage: async (runId) => {
+    await ipc.stopStage(runId);
+  },
+
   selectStage: (runId, stageId) =>
     set((s) => ({ selectedStageByRun: { ...s.selectedStageByRun, [runId]: stageId } })),
+
+  setLauncherPrefill: (prefill) => set({ launcherPrefill: prefill }),
+
+  consumeLauncherPrefill: () => {
+    const prefill = get().launcherPrefill;
+    if (prefill) set({ launcherPrefill: null });
+    return prefill;
+  },
 
   applyStageUpdate: (runId, run) => {
     set((s) => {

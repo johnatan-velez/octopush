@@ -1,7 +1,9 @@
+import { useState } from "react";
 import type { LiveEntry, Run, RunStage } from "../lib/ipc";
 import { stageStatusGlyph, stageStatusWord } from "../lib/runStatus";
 import { useRunsStore } from "../stores/runsStore";
 import { useElapsed } from "../hooks/useElapsed";
+import { Reveal } from "./primitives/Reveal";
 
 export const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"];
 
@@ -10,7 +12,15 @@ interface Props {
   stages: RunStage[];
   selectedStageId: string | null;
   onSelectStage: (stageId: string) => void;
+  /** Stop the in-flight stage (shown only while the run is `running`). */
+  onStopStage?: () => void;
+  /** Abort the whole run (shown only while the run is `running`). */
+  onAbort?: () => void;
+  /** Re-run this pipeline: seed the launcher from this run (terminal runs only). */
+  onRunAgain?: () => void;
 }
+
+const TERMINAL_RUN_STATUSES = new Set(["completed", "aborted", "failed"]);
 
 const EMPTY_ENTRIES: LiveEntry[] = [];
 
@@ -30,17 +40,73 @@ function lastNotice(entries: LiveEntry[]): string {
   return "";
 }
 
-export function RunTrack({ run: _run, stages, selectedStageId, onSelectStage }: Props) {
+export function RunTrack({ run, stages, selectedStageId, onSelectStage, onStopStage, onAbort, onRunAgain }: Props) {
   const doneCount = stages.filter((s) => s.status === "done").length;
+  const [briefOpen, setBriefOpen] = useState(false);
 
   return (
     <div className="border-b border-octo-hairline bg-octo-panel px-4 py-3">
-      <div className="octo-fade-in mb-3">
-        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">stage</div>
-        <div className="octo-tabular font-mono text-sm text-octo-ivory">
-          {Math.min(doneCount + 1, stages.length)} / {stages.length}
+      <div className="octo-fade-in mb-3 flex items-start gap-6">
+        <div className="shrink-0">
+          <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">stage</div>
+          <div className="octo-tabular font-mono text-sm text-octo-ivory">
+            {Math.min(doneCount + 1, stages.length)} / {stages.length}
+          </div>
+        </div>
+        <button
+          type="button"
+          aria-label="Toggle the full brief"
+          aria-expanded={briefOpen}
+          title={run.task}
+          onClick={() => setBriefOpen((v) => !v)}
+          className="min-w-0 flex-1 text-left"
+        >
+          <span className="block font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">the brief</span>
+          <span className="block min-w-0 truncate font-serif text-[13px] leading-5 text-octo-ivory">
+            {run.task}
+          </span>
+        </button>
+        {/* S1: the control slot is always reserved so buttons appearing or
+            leaving never shift the header geometry. */}
+        <div className="flex h-9 w-[190px] shrink-0 items-center justify-end gap-2 self-center">
+          {run.status === "running" && (
+            <span key="running-controls" className="octo-fade-in flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onStopStage}
+                className="rounded-md border border-octo-hairline px-2.5 py-1 font-mono text-xs text-octo-sage transition-colors duration-[180ms] hover:text-octo-ivory"
+              >
+                Stop the stage
+              </button>
+              <button
+                type="button"
+                onClick={onAbort}
+                className="rounded-md border border-transparent px-2.5 py-1 font-mono text-xs text-octo-mute transition-colors duration-[180ms] hover:text-octo-rouge"
+              >
+                Abort
+              </button>
+            </span>
+          )}
+          {TERMINAL_RUN_STATUSES.has(run.status) && onRunAgain && (
+            <button
+              key="run-again"
+              type="button"
+              onClick={onRunAgain}
+              className="octo-fade-in font-serif text-[13px] text-octo-brass transition-colors duration-[180ms] hover:text-octo-ivory"
+            >
+              ⟶ Run it again
+            </button>
+          )}
         </div>
       </div>
+      <Reveal open={briefOpen}>
+        <p
+          data-testid="brief-full"
+          className="m-0 mb-3 select-text whitespace-pre-wrap font-serif text-[13px] leading-relaxed text-octo-sage"
+        >
+          {run.task}
+        </p>
+      </Reveal>
       <div className="flex items-stretch overflow-x-auto pb-1">
         {stages.map((s, i) => (
           <div key={s.id} className="flex min-w-0 items-stretch">
