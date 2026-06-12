@@ -8,7 +8,7 @@
 
 use crate::error::{AppError, AppResult};
 use crate::orchestrator::runner::{artifact_kind_for, parse_verdict, system_prompt_with_loop, user_input_for, AgentRunner, StageContext};
-use crate::orchestrator::types::{ArtifactKind, StageArtifact, StageOutcome, StageSpec, StageStatus};
+use crate::orchestrator::types::{ArtifactKind, StageArtifact, StageInput, StageOutcome, StageSpec, StageStatus};
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -244,7 +244,7 @@ impl AgentRunner for CliRunner {
     async fn run(
         &self,
         stage: &StageSpec,
-        input: &StageArtifact,
+        input: &StageInput,
         ctx: &StageContext,
     ) -> AppResult<StageOutcome> {
         let system = system_prompt_with_loop(&stage.role, stage.loop_mode.clone());

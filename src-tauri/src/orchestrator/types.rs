@@ -154,6 +154,38 @@ impl RunStatus {
     }
 }
 
+/// One labeled section of a stage's input dossier: an earlier stage's
+/// artifact, tagged with where it came from so the prompt can attribute it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputSection {
+    pub kind: ArtifactKind,
+    /// Role of the stage that produced this artifact (e.g. "plan").
+    pub role: String,
+    /// Pipeline position of the producing stage (0-based).
+    pub position: i64,
+    pub text: String,
+    /// True when the producing artifact's real output lives in the worktree.
+    pub refs_worktree: bool,
+}
+
+/// The assembled input for a stage. Instead of only the immediately-previous
+/// artifact (which let a review's findings SHADOW the plan it reviewed), a
+/// stage receives the freshest artifact of EACH kind produced before it —
+/// so Implement sees both the refined plan and the review's verdict, and
+/// Code review can check the changes against the plan. Token cost stays
+/// bounded: at most one section per artifact kind, each capped, and
+/// superseded artifacts (older attempts, looped-over stages) never ride along.
+#[derive(Clone, Debug, Default)]
+pub struct StageInput {
+    /// One-line map of the whole pipeline with statuses — cheap orientation
+    /// so the agent knows where it stands and what comes after it.
+    pub breadcrumb: String,
+    /// Freshest artifact per kind, in pipeline (position) order.
+    pub sections: Vec<InputSection>,
+    /// True when any included artifact's real output is the worktree diff.
+    pub refs_worktree: bool,
+}
+
 /// The runtime spec a runner needs to execute one stage.
 #[derive(Clone, Debug)]
 pub struct StageSpec {

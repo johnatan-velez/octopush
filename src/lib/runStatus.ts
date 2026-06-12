@@ -59,6 +59,9 @@ export function isTransientHalt(error: string | null): boolean {
   if (!error) return false;
   const e = error.toLowerCase();
   return (
+    // Startup recovery stamps "interrupted — Octopush closed while…" on stages
+    // orphaned by a crash/quit: the work isn't wrong, Resume is the affordance.
+    e.startsWith("interrupted") ||
     /\brate[\s_-]?limit/.test(e) ||
     /\boverloaded\b/.test(e) ||
     // HTTP status codes, but ONLY inside our providers' "… API error <code> …"

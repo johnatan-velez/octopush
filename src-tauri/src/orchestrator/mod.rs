@@ -169,6 +169,36 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Salvage the model's narration from a halted stage's CURRENT journal
+    /// segment (text entries after the last reset marker). A halted plan/review
+    /// stage never persisted an artifact, but its journal usually carries the
+    /// partial work — without this, "Accept & continue" would hand the next
+    /// stage an empty stub and the pipeline would lose everything the stage
+    /// said before the halt. Best-effort: `None` when nothing useful exists.
+    fn salvage_journal_text(&self, stage_id: &str) -> Option<String> {
+        let raw = self.db.lock().list_stage_log(stage_id).ok()?;
+        let mut texts: Vec<String> = Vec::new();
+        for entry in &raw {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(entry) else { continue };
+            match v.get("kind").and_then(|k| k.as_str()) {
+                // A reset marks the start of a fresh attempt — drop older narration.
+                Some("reset") => texts.clear(),
+                Some("text") => {
+                    if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                        if !t.trim().is_empty() {
+                            texts.push(t.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if texts.is_empty() {
+            return None;
+        }
+        Some(crate::orchestrator::runner::cap_section(&texts.join("\n")))
+    }
+
     fn workspace_path(&self, run: &crate::db::RunRow) -> AppResult<PathBuf> {
         let path: Option<String> = self.db.lock().conn_ref_path(&run.workspace_id)?;
         path.map(PathBuf::from)
@@ -224,8 +254,8 @@ impl Orchestrator {
             max_iterations: stage.max_iterations,
         };
 
-        // Input artifact = the previous done stage's artifact, or a seed Note from the task.
-        let input = self.previous_artifact(&run.id, stage.position, &run.task)?;
+        // Input dossier = the freshest artifact of each kind from earlier stages.
+        let input = self.assemble_stage_input(&run.id, stage.position)?;
 
         self.db.lock().set_run_stage_status(&stage.id, "running")?;
         // Reset any prior live log for this stage (re-runs reuse the same id).
@@ -284,6 +314,9 @@ impl Orchestrator {
                     outcome.cost_usd,
                     Some(&artifact_json),
                 )?;
+                // Snapshot only code-bearing artifacts: snapshotting every
+                // stage would duplicate the cumulative diff (up to 512KB) onto
+                // plan/review rows that produced no code.
                 if outcome.artifact.refs_worktree {
                     self.capture_stage_diff_snapshot(run, &stage.id);
                 }
@@ -307,44 +340,83 @@ impl Orchestrator {
                     self.recompute_run_cost(&run.id)?;
                 }
                 self.db.lock().fail_run_stage(&stage.id, &err)?;
-                // A failed code/test stage may still have touched the worktree —
-                // keep the evidence. The failed artifact isn't persisted, so fall
-                // back to the role's artifact kind when it doesn't ref the worktree.
-                let kind = crate::orchestrator::runner::artifact_kind_for(&stage.role);
-                if outcome.artifact.refs_worktree
-                    || matches!(kind, ArtifactKind::Diff | ArtifactKind::Tests)
-                {
-                    self.capture_stage_diff_snapshot(run, &stage.id);
-                }
+                // A failed stage may still have touched the worktree — keep the
+                // evidence (best-effort; empty diffs are skipped internally).
+                self.capture_stage_diff_snapshot(run, &stage.id);
                 Ok((StageStatus::Failed, None))
             }
         }
     }
 
-    fn previous_artifact(
-        &self,
-        run_id: &str,
-        position: i64,
-        task: &str,
-    ) -> AppResult<StageArtifact> {
+    /// Assemble a stage's input dossier: for each artifact kind, the FRESHEST
+    /// artifact produced by an earlier stage (later positions supersede earlier
+    /// ones of the same kind), in pipeline order — plus a one-line breadcrumb of
+    /// the whole run. This is what fixes the one-hop shadowing problem: with
+    /// Plan → Plan review → Implement, the implementer now receives BOTH the
+    /// refined plan (kind Plan) and the review's verdict (kind Review), instead
+    /// of only whatever ran immediately before it. Token cost stays bounded:
+    /// one section per kind at most, each capped at render time, and superseded
+    /// or looped-over attempts (artifact = NULL after a reset) never ride along.
+    fn assemble_stage_input(&self, run_id: &str, position: i64) -> AppResult<StageInput> {
         let stages = self.db.lock().list_run_stages(run_id)?;
-        let prev = stages
-            .iter()
-            .filter(|s| s.position < position && s.artifact.is_some())
-            .max_by_key(|s| s.position);
-        if let Some(p) = prev {
-            if let Some(json) = &p.artifact {
-                if let Ok(a) = serde_json::from_str::<StageArtifact>(json) {
-                    return Ok(a);
-                }
+
+        // Freshest artifact per kind among stages strictly before `position`.
+        // `stages` is position-ordered, so a plain overwrite keeps the latest.
+        // The worktree flag is OR'd across ALL artifacts, not just retained
+        // sections — an empty-text code artifact still means "changes on disk".
+        let mut latest: std::collections::HashMap<&'static str, InputSection> =
+            std::collections::HashMap::new();
+        let mut refs_worktree = false;
+        for s in stages.iter().filter(|s| s.position < position) {
+            let Some(json) = &s.artifact else { continue };
+            let Ok(a) = serde_json::from_str::<StageArtifact>(json) else { continue };
+            refs_worktree |= a.refs_worktree;
+            // An empty-text artifact must never EVICT an older, non-empty
+            // section of the same kind (e.g. a fix stage whose final message
+            // was empty would otherwise erase implement's summary).
+            if a.text.trim().is_empty() {
+                continue;
             }
+            let key = match a.kind {
+                ArtifactKind::Plan => "plan",
+                ArtifactKind::Review => "review",
+                ArtifactKind::Tests => "tests",
+                ArtifactKind::Diff => "diff",
+                ArtifactKind::Note => "note",
+            };
+            latest.insert(
+                key,
+                InputSection {
+                    kind: a.kind,
+                    role: s.role.clone(),
+                    position: s.position,
+                    text: a.text,
+                    refs_worktree: a.refs_worktree,
+                },
+            );
         }
-        Ok(StageArtifact {
-            kind: ArtifactKind::Note,
-            text: task.to_string(),
-            payload: None,
-            refs_worktree: false,
-        })
+        let mut sections: Vec<InputSection> = latest.into_values().collect();
+        sections.sort_by_key(|s| s.position);
+
+        // One-line orientation: the full pipeline with statuses, current marked.
+        let breadcrumb = stages
+            .iter()
+            .map(|s| {
+                let glyph = if s.position == position {
+                    "← current stage"
+                } else {
+                    match s.status.as_str() {
+                        "done" => "done",
+                        "failed" => "halted",
+                        _ => "ahead",
+                    }
+                };
+                format!("{} ({})", s.role.replace('_', " "), glyph)
+            })
+            .collect::<Vec<_>>()
+            .join(" → ");
+
+        Ok(StageInput { breadcrumb, sections, refs_worktree })
     }
 
     /// Sum stage costs; recompute the baseline by re-pricing each stage's tokens
@@ -609,9 +681,17 @@ impl Orchestrator {
                             .map(str::trim)
                             .filter(|l| !l.is_empty())
                             .unwrap_or("stage halted");
+                        // Salvage the halted attempt's narration so the next
+                        // stage inherits the partial work, not an empty stub.
+                        let text = match self.salvage_journal_text(&s.id) {
+                            Some(salvaged) => format!(
+                                "(accepted by the director after a halt: {reason})\n\nWhat the stage had produced before the halt:\n{salvaged}"
+                            ),
+                            None => format!("(accepted by the director after a halt: {reason})"),
+                        };
                         let artifact = StageArtifact {
                             kind,
-                            text: format!("(accepted by the director after a halt: {reason})"),
+                            text,
                             payload: None,
                             refs_worktree,
                         };

@@ -12,6 +12,8 @@ describe("isTransientHalt", () => {
       "Anthropic request failed: connection reset by peer",
       "request timed out after 60s",
       "dns error: failed to lookup host",
+      // Startup recovery stamp for stages orphaned by a crash/quit.
+      "interrupted — Octopush closed while this stage was in flight; the work on disk is preserved, resume the stage to continue",
     ];
     for (const e of transient) {
       expect(isTransientHalt(e), e).toBe(true);
