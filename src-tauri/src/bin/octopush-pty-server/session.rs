@@ -184,6 +184,11 @@ impl Session {
     }
 
     /// Mark the PTY as exited and notify attached client.
+    ///
+    /// Deliberately does NOT close the disk log: `cmd_kill` calls this right
+    /// after signalling, while the shell may still be flushing output that
+    /// must reach the log. The reader thread closes the log via
+    /// [`Self::close_log`] once the PTY actually EOFs.
     pub fn mark_exit(&mut self, code: Option<i32>) {
         self.running = false;
         if let Some(ref tx) = self.attached {
@@ -194,6 +199,14 @@ impl Session {
             let _ = tx.send(event.to_line());
         }
         self.attached = None;
+    }
+
+    /// Close the disk-log handle. An exited session only serves scrollback
+    /// replays, which read the log from disk by path — keeping the fd open
+    /// would leak it for the daemon's lifetime (sessions outlive their shells
+    /// so reattach keeps working across app restarts).
+    pub fn close_log(&mut self) {
+        self.log_file = None;
     }
 
     /// Attach a client.  Returns the backlog of (seq, bytes) tuples with
@@ -216,9 +229,21 @@ impl Session {
         self.attached = None;
     }
 
-    /// Returns whether there is an attached client.
+    /// Returns whether there is a LIVE attached client. A sender whose
+    /// receiving end is gone (its connection's writer thread exited without
+    /// the per-connection cleanup running, e.g. on a panic) counts as
+    /// detached — otherwise a quiet session would hold a dead attachment
+    /// forever and pin the daemon's idle auto-exit.
     pub fn has_client(&self) -> bool {
-        self.attached.is_some()
+        self.attached.as_ref().is_some_and(|tx| !tx.is_closed())
+    }
+
+    /// Returns whether the attached client (if any) sends through the same
+    /// channel as `tx` — i.e. whether `tx`'s connection owns the attachment.
+    pub fn is_attached_to(&self, tx: &ClientSender) -> bool {
+        self.attached
+            .as_ref()
+            .is_some_and(|a| a.same_channel(tx))
     }
 
     /// Returns the current highest seq (0 if nothing received yet).

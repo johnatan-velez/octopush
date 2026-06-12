@@ -1,11 +1,11 @@
 //! Unix socket accept loop and request dispatcher.
 
 use crate::protocol::{
-    AttachParams, DetachParams, KillParams, Request, RequestPayload, ResizeParams, Response,
-    ResponsePayload, SpawnParams, TerminalInfo, WriteParams,
+    AttachParams, DetachParams, KillParams, RemoveParams, Request, RequestPayload, ResizeParams,
+    Response, ResponsePayload, SpawnParams, TerminalInfo, WriteParams,
 };
 use crate::session::{ClientSender, PtyHandles, Session, TerminalId};
-use crate::storage::read_pty_log;
+use crate::storage::{delete_pty_log, read_pty_log};
 use anyhow::Result;
 use base64::Engine as _;
 use chrono::Utc;
@@ -147,8 +147,11 @@ pub fn run_accept_loop(
                     })?;
             }
             Err(e) => {
-                // Non-fatal — log and continue.
+                // Non-fatal — log and continue, with a short pause so an
+                // accept() that fails instantly (e.g. EMFILE at the fd
+                // limit) doesn't busy-spin the loop at 100% CPU.
                 warn!("accept error: {e}");
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
     }
@@ -224,15 +227,14 @@ fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
         }
     }
 
-    // Clean up any sessions this client was attached to.
+    // Clean up any sessions THIS client was attached to. Sessions attached
+    // by other connections must keep streaming — detaching everything here
+    // would silently freeze every terminal whenever any transient client
+    // (version probe, script, stray connection) disconnects.
     {
         let mut st = state.lock();
         for sess in st.sessions.values_mut() {
-            // The ClientSender clone we gave sessions is the same `tx`;
-            // once the connection loop exits, `tx` is dropped (all clones
-            // including ones given to sessions via attach will be invalid).
-            // Force-detach any session that references a now-dead sender.
-            if sess.has_client() {
+            if sess.is_attached_to(&tx) {
                 sess.detach();
             }
         }
@@ -258,6 +260,7 @@ fn dispatch(
         RequestPayload::Write(p) => cmd_write(p, state),
         RequestPayload::Resize(p) => cmd_resize(p, state),
         RequestPayload::Kill(p) => cmd_kill(p, state),
+        RequestPayload::Remove(p) => cmd_remove(p, state),
         RequestPayload::Shutdown => cmd_shutdown(state),
         RequestPayload::Version => ResponsePayload::Version {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -293,13 +296,28 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
         cols,
     } = params;
 
-    // Refuse duplicate id.
+    // Refuse duplicate id while the shell is alive. An EXITED session with
+    // this id is replaced in place so a terminal can be restarted. The old
+    // disk log is deleted along with the stale entry: the fresh Session's
+    // seq numbers restart at 0, so replaying the previous incarnation's log
+    // would interleave dead output with the live shell's on later attaches.
     {
-        let st = state.lock();
-        if st.sessions.contains_key(&id) {
-            return ResponsePayload::Error {
-                message: format!("terminal {id} already exists"),
-            };
+        let mut st = state.lock();
+        match st.sessions.get(&id) {
+            Some(s) if s.running => {
+                return ResponsePayload::Error {
+                    message: format!("terminal {id} already exists"),
+                };
+            }
+            Some(_) => {
+                st.sessions.remove(&id);
+                st.handles.remove(&id);
+                drop(st);
+                if let Err(e) = delete_pty_log(&id) {
+                    warn!(id = %id, error = %e, "failed to delete stale pty log on respawn");
+                }
+            }
+            None => {}
         }
     }
 
@@ -312,9 +330,10 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
     }) {
         Ok(p) => p,
         Err(e) => {
+            warn!(id = %id, error = %e, "spawn failed at openpty");
             return ResponsePayload::Error {
                 message: format!("openpty: {e}"),
-            }
+            };
         }
     };
 
@@ -342,9 +361,10 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
     let child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,
         Err(e) => {
+            warn!(id = %id, shell = %shell, error = %e, "spawn failed at spawn_command");
             return ResponsePayload::Error {
                 message: format!("spawn: {e}"),
-            }
+            };
         }
     };
     drop(pair.slave);
@@ -354,17 +374,19 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
     let mut reader = match pair.master.try_clone_reader() {
         Ok(r) => r,
         Err(e) => {
+            warn!(id = %id, error = %e, "spawn failed at clone_reader");
             return ResponsePayload::Error {
                 message: format!("clone_reader: {e}"),
-            }
+            };
         }
     };
     let writer = match pair.master.take_writer() {
         Ok(w) => w,
         Err(e) => {
+            warn!(id = %id, error = %e, "spawn failed at take_writer");
             return ResponsePayload::Error {
                 message: format!("take_writer: {e}"),
-            }
+            };
         }
     };
 
@@ -390,19 +412,35 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
     }
 
     // Reader thread: blocks on PTY reads, pushes output to session.
+    //
+    // The thread keeps its own Arc to the handles it was spawned with and
+    // compares it (by pointer) against the map before touching shared state:
+    // the id can be re-bound to a NEW incarnation while this thread is still
+    // draining the old shell (kill → respawn-in-place, or remove → recreate).
+    // Without the identity check, a stale reader would feed the old shell's
+    // output into the new session and, on EOF, yank the new session's
+    // handles and mark it exited.
     let reader_id = id.clone();
     let reader_state = Arc::clone(state);
+    let reader_handles = Arc::clone(&handles);
     std::thread::Builder::new()
         .name(format!("pty-reader-{id}"))
         .spawn(move || {
+            let is_current = |st: &ServerState| {
+                st.handles
+                    .get(&reader_id)
+                    .is_some_and(|h| Arc::ptr_eq(h, &reader_handles))
+            };
             let mut buf = [0u8; 4096];
             loop {
                 match std::io::Read::read(&mut reader, &mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
                         let mut st = reader_state.lock();
-                        if let Some(sess) = st.sessions.get_mut(&reader_id) {
-                            sess.push_output(&buf[..n]);
+                        if is_current(&st) {
+                            if let Some(sess) = st.sessions.get_mut(&reader_id) {
+                                sess.push_output(&buf[..n]);
+                            }
                         }
                         st.touch();
                     }
@@ -412,20 +450,26 @@ fn cmd_spawn(params: SpawnParams, state: &SharedState, _tx: ClientSender) -> Res
                     }
                 }
             }
-            // PTY EOF — determine exit code.
+            // PTY EOF — reap OUR child (never the map's: it may belong to a
+            // newer incarnation) outside the global lock, then release the
+            // handles if this incarnation still owns the id. Removing them
+            // drops the master fd and writer dup; an exited session only
+            // needs its ring + disk log for replay, so holding the fds would
+            // leak them for the daemon's lifetime.
             let code = {
-                let mut st = reader_state.lock();
-                let code = if let Some(h) = st.handles.get(&reader_id) {
-                    let mut hg = h.lock();
-                    hg.child.wait().ok().map(|s| s.exit_code() as i32)
-                } else {
-                    None
-                };
-                if let Some(sess) = st.sessions.get_mut(&reader_id) {
-                    sess.mark_exit(code);
-                }
-                code
+                let mut hg = reader_handles.lock();
+                hg.child.wait().ok().map(|s| s.exit_code() as i32)
             };
+            {
+                let mut st = reader_state.lock();
+                if is_current(&st) {
+                    st.handles.remove(&reader_id);
+                    if let Some(sess) = st.sessions.get_mut(&reader_id) {
+                        sess.mark_exit(code);
+                        sess.close_log();
+                    }
+                }
+            }
             info!(id = %reader_id, code = ?code, "pty exited");
         })
         .ok();
@@ -634,6 +678,52 @@ fn cmd_kill(params: KillParams, state: &SharedState) -> ResponsePayload {
             ResponsePayload::Ok {}
         }
     }
+}
+
+fn cmd_remove(params: RemoveParams, state: &SharedState) -> ResponsePayload {
+    let mut st = state.lock();
+    st.touch();
+
+    let sess = st.sessions.remove(&params.id);
+    let handles = st.handles.remove(&params.id);
+    drop(st); // release the global lock before signalling / touching disk
+
+    if sess.is_none() && handles.is_none() {
+        return ResponsePayload::Error {
+            message: format!("terminal {} not found", params.id),
+        };
+    }
+
+    // Remove is the destructive path (the user deleted the terminal), so the
+    // shell's process group gets SIGKILL: the session is already gone from
+    // the registry, leaving no id to retry a kill against, and a merely
+    // TERM-signalled process that ignores it would keep the PTY slave open
+    // forever — pinning the reader thread's master dup, the exact fd leak
+    // this daemon is being fixed for. The shell is a session leader
+    // (portable_pty calls setsid in pre_exec), so -pid addresses its group.
+    // Graceful termination remains available via `kill` before deleting.
+    if let Some(h) = handles {
+        let pid = h.lock().child.process_id();
+        if let Some(pid) = pid {
+            #[cfg(unix)]
+            // SAFETY: kill(-pid, SIGKILL) signals the process group we
+            // created for the shell; pid comes from portable_pty's handle.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = h.lock().child.kill();
+            }
+        }
+    }
+
+    if let Err(e) = delete_pty_log(&params.id) {
+        warn!(id = %params.id, error = %e, "failed to delete pty log on remove");
+    }
+
+    info!(id = %params.id, "removed terminal session");
+    ResponsePayload::Ok {}
 }
 
 fn cmd_shutdown(state: &SharedState) -> ResponsePayload {

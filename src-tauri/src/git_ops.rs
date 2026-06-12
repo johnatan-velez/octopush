@@ -902,6 +902,9 @@ pub fn reset_head(path: &Path, mode: &str, target: Option<&str>) -> AppResult<St
 pub fn clean_untracked(path: &Path) -> AppResult<Vec<String>> {
     let output = std::process::Command::new("git")
         .args(["clean", "-fd"])
+        // The "Removing <path>" lines parsed below are localized; force C so
+        // the parse works regardless of the user's git locale.
+        .env("LC_ALL", "C")
         .current_dir(path)
         .output()
         .map_err(|e| AppError::Other(format!("failed to run git clean: {e}")))?;

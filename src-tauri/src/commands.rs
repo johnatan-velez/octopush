@@ -1383,9 +1383,14 @@ pub async fn delete_terminal(
     state: State<'_, AppState>,
     id: String,
 ) -> AppResult<()> {
-    // Kill the live PTY if one exists; ignore "not found".
-    let _ = state.pty.lock().kill(&id);
-    state.db.lock().delete_terminal(&id)
+    // DB delete first: it is the only step that can fail meaningfully, and
+    // if it does the terminal must stay fully intact (shell + scrollback) so
+    // the user can retry. The daemon-side removal (kill shell, release fds,
+    // delete scrollback log) is destructive, so it goes last; "not found"
+    // and daemon errors are ignored.
+    state.db.lock().delete_terminal(&id)?;
+    let _ = state.pty.lock().remove(&id);
+    Ok(())
 }
 
 // ─── Clone command ────────────────────────────────────────────────
