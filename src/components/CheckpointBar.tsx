@@ -79,7 +79,14 @@ export function CheckpointBar({ blockedStage, onApprove, onReject, onAbort, loop
                 <>Review <b className="text-octo-ivory">{labelForRole(blockedStage.role)}</b> and choose how to proceed.</>
               )}
             </span>
-            {!failed && (
+            {failed ? (
+              // Accept the partial work and let the pipeline's next review
+              // catch the gaps. Outlined — the bar keeps at most one solid brass.
+              <button type="button" onClick={onApprove}
+                className="rounded-md border border-octo-brass px-3 py-1.5 font-serif text-sm text-octo-brass transition-colors duration-[180ms] hover:bg-[var(--brass-ghost)]">
+                Accept &amp; continue ⟶
+              </button>
+            ) : (
               <button type="button" onClick={onApprove}
                 className="rounded-md bg-octo-brass px-3 py-1.5 font-serif text-sm text-octo-onyx transition-colors duration-[180ms] hover:bg-octo-brass-hi">
                 Approve &amp; continue

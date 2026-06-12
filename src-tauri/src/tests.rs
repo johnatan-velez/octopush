@@ -2835,6 +2835,46 @@ mod orchestrator_tests {
     }
 
     #[tokio::test]
+    async fn approving_a_failed_stage_accepts_the_partial_work_and_continues() {
+        // F3: implement halts (iteration cap), the director accepts the partial
+        // work — the stage flips to done with a synthesized artifact (cost and
+        // tokens preserved) and the drive continues into the next stage.
+        let (db, ws) = db_with_workspace();
+        let pid = db.lock().insert_pipeline("Halt", "d", false).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 0, "implement", "m", "api", false, None, 0, None).unwrap();
+        db.lock().insert_pipeline_stage(&pid, 1, "test", "m", "api", false, None, 0, None).unwrap();
+        let run_id = db.lock().create_run(&ws, &pid, "t", None, None, &[]).unwrap();
+        let sink = Arc::new(CollectingSink { events: Mutex::new(vec![]) });
+
+        let orch_fail = Orchestrator::new_with_runner(
+            Arc::clone(&db), sink.clone(), Box::new(WorktreeRunner { fail: true }));
+        assert_eq!(orch_fail.run_to_pause(&run_id).await.unwrap(), RunStatus::Paused);
+        let stages = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(stages[0].status, "failed");
+        let burned_cost = stages[0].cost_usd;
+        assert!(burned_cost > 0.0, "the failed attempt's usage was persisted");
+
+        let orch_ok = Orchestrator::new_with_runner(Arc::clone(&db), sink, Box::new(MockRunner));
+        let status = orch_ok.resolve_checkpoint(&run_id, CheckpointAction::Approve).await.unwrap();
+        assert_eq!(status, RunStatus::Completed);
+
+        let after = db.lock().list_run_stages(&run_id).unwrap();
+        assert_eq!(after[0].status, "done");
+        let art: Value = serde_json::from_str(after[0].artifact.as_deref().expect("synthesized artifact")).unwrap();
+        assert_eq!(art["kind"], "diff"); // role-shaped kind for implement
+        let text = art["text"].as_str().unwrap();
+        assert!(text.contains("accepted by the director after a halt"), "got: {text}");
+        assert!(text.contains("ran out of iterations"), "carries the error's first line: {text}");
+        assert_eq!(art["refsWorktree"], true); // the next stage reads the worktree
+        // The failed attempt's spend is preserved, not zeroed.
+        assert!((after[0].cost_usd - burned_cost).abs() < 1e-9);
+        assert_eq!(after[0].input_tokens, 10);
+        assert_eq!(after[0].output_tokens, 2);
+        // The next stage actually ran.
+        assert_eq!(after[1].status, "done");
+    }
+
+    #[tokio::test]
     async fn send_back_on_failed_review_is_noop() {
         let (orch, run_id, db) = looped_run(2);
         orch.run_to_pause(&run_id).await.unwrap();

@@ -198,6 +198,30 @@ describe("CheckpointBar", () => {
     expect(screen.getByTitle(/second line detail/)).toBeInTheDocument();
   });
 
+  it("failed mode offers Accept & continue (brass-outlined) wired to onApprove (F3)", () => {
+    const onApprove = vi.fn();
+    render(
+      <CheckpointBar
+        blockedStage={makeStage({ status: "failed", role: "implement", error: "halted" })}
+        onApprove={onApprove}
+        onReject={vi.fn()}
+        onAbort={vi.fn()}
+        loopTargetRole={null}
+        loopState={null}
+        onSendBack={vi.fn()}
+      />,
+    );
+    const accept = screen.getByRole("button", { name: /Accept & continue/ });
+    // Outlined, not the solid brass CTA (the bar keeps at most one solid brass).
+    expect(accept.className).toContain("border-octo-brass");
+    expect(accept.className).not.toContain("bg-octo-brass");
+    fireEvent.click(accept);
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    // Re-run and Abort remain.
+    expect(screen.getByText(/^Re-run$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Abort$/)).toBeInTheDocument();
+  });
+
   it("resets the feedback editor when a new checkpoint arrives (bar stays mounted in the Reveal dock)", () => {
     vi.useFakeTimers();
     const props = {
