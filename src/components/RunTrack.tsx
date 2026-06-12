@@ -1,7 +1,9 @@
+import { useState } from "react";
 import type { LiveEntry, Run, RunStage } from "../lib/ipc";
 import { stageStatusGlyph, stageStatusWord } from "../lib/runStatus";
 import { useRunsStore } from "../stores/runsStore";
 import { useElapsed } from "../hooks/useElapsed";
+import { Reveal } from "./primitives/Reveal";
 
 export const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"];
 
@@ -30,17 +32,41 @@ function lastNotice(entries: LiveEntry[]): string {
   return "";
 }
 
-export function RunTrack({ run: _run, stages, selectedStageId, onSelectStage }: Props) {
+export function RunTrack({ run, stages, selectedStageId, onSelectStage }: Props) {
   const doneCount = stages.filter((s) => s.status === "done").length;
+  const [briefOpen, setBriefOpen] = useState(false);
 
   return (
     <div className="border-b border-octo-hairline bg-octo-panel px-4 py-3">
-      <div className="octo-fade-in mb-3">
-        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">stage</div>
-        <div className="octo-tabular font-mono text-sm text-octo-ivory">
-          {Math.min(doneCount + 1, stages.length)} / {stages.length}
+      <div className="octo-fade-in mb-3 flex items-start gap-6">
+        <div className="shrink-0">
+          <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">stage</div>
+          <div className="octo-tabular font-mono text-sm text-octo-ivory">
+            {Math.min(doneCount + 1, stages.length)} / {stages.length}
+          </div>
         </div>
+        <button
+          type="button"
+          aria-label="Toggle the full brief"
+          aria-expanded={briefOpen}
+          title={run.task}
+          onClick={() => setBriefOpen((v) => !v)}
+          className="min-w-0 flex-1 text-left"
+        >
+          <span className="block font-mono text-[10px] uppercase tracking-[0.25em] text-octo-mute">the brief</span>
+          <span className="block min-w-0 truncate font-serif text-[13px] leading-5 text-octo-ivory">
+            {run.task}
+          </span>
+        </button>
       </div>
+      <Reveal open={briefOpen}>
+        <p
+          data-testid="brief-full"
+          className="m-0 mb-3 select-text whitespace-pre-wrap font-serif text-[13px] leading-relaxed text-octo-sage"
+        >
+          {run.task}
+        </p>
+      </Reveal>
       <div className="flex items-stretch overflow-x-auto pb-1">
         {stages.map((s, i) => (
           <div key={s.id} className="flex min-w-0 items-stretch">

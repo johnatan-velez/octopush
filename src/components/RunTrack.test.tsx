@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 
 const { RunTrack } = await import("./RunTrack");
 const { useRunsStore } = await import("../stores/runsStore");
@@ -57,7 +57,7 @@ describe("RunTrack liveness", () => {
 
   it("reserves the elapsed slot in every status (S1)", () => {
     render(<RunTrack run={run} stages={[stage({})]} selectedStageId={null} onSelectStage={() => {}} />);
-    const card = screen.getByRole("button");
+    const card = screen.getAllByRole("button").find((b) => b.className.includes("h-[96px]"))!;
     const slot = card.querySelector("span.octo-tabular");
     expect(slot).not.toBeNull();
     expect(slot!.className).toContain("w-[5ch]");
@@ -82,6 +82,44 @@ describe("RunTrack liveness", () => {
       />,
     );
     expect(screen.getByText(/§ Bash npm test/)).toBeInTheDocument();
+  });
+
+  it("renders the brief eyebrow + truncated task in the header (R1)", () => {
+    const longTask = "Build the auth flow\nwith refresh tokens and a full audit trail";
+    render(
+      <RunTrack
+        run={{ ...run, task: longTask }}
+        stages={[stage({})]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+      />,
+    );
+    expect(screen.getByText("the brief")).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: /the full brief/i });
+    expect(toggle.title).toBe(longTask);
+    const line = [...toggle.querySelectorAll("span")].find((s) => s.className.includes("truncate"));
+    expect(line).toBeDefined();
+    expect(line!.className).toContain("font-serif");
+  });
+
+  it("expands the full brief on click and collapses again (R1)", () => {
+    const longTask = "Build the auth flow\nwith refresh tokens";
+    render(
+      <RunTrack
+        run={{ ...run, task: longTask }}
+        stages={[stage({})]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+      />,
+    );
+    // Collapsed: the Reveal region is aria-hidden.
+    const full = screen.getByTestId("brief-full");
+    expect(full.closest("[aria-hidden]")!.getAttribute("aria-hidden")).toBe("true");
+    expect(full.className).toContain("whitespace-pre-wrap");
+    fireEvent.click(screen.getByRole("button", { name: /the full brief/i }));
+    expect(full.closest("[aria-hidden]")!.getAttribute("aria-hidden")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: /the full brief/i }));
+    expect(full.closest("[aria-hidden]")!.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("dims connectors after pending stages and brightens them after done stages", () => {
