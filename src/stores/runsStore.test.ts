@@ -215,6 +215,15 @@ describe("runsStore", () => {
     expect(ipc.startRun).toHaveBeenCalledWith("rNew", null);
   });
 
+  it("launcherPrefill is consumed exactly once (R3)", () => {
+    const prefill = { task: "again", pipelineId: "p1", overrides: [[0, "m"]] as [number, string][] };
+    useRunsStore.getState().setLauncherPrefill(prefill);
+    expect(useRunsStore.getState().launcherPrefill).toEqual(prefill);
+    expect(useRunsStore.getState().consumeLauncherPrefill()).toEqual(prefill);
+    expect(useRunsStore.getState().launcherPrefill).toBeNull();
+    expect(useRunsStore.getState().consumeLauncherPrefill()).toBeNull();
+  });
+
   it("stopStage fires the stop_stage IPC for the run (R2)", async () => {
     (ipc.stopStage as any).mockResolvedValue(undefined);
     await useRunsStore.getState().stopStage("r1");

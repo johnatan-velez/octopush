@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ipc, type PipelineWithStages } from "../lib/ipc";
 import { usePipelineStore } from "../stores/pipelineStore";
+import { useRunsStore } from "../stores/runsStore";
 import { labelForRole, ROMAN } from "./RunTrack";
 import { ModelPicker } from "./ModelPicker";
 import { savingsVsBaseline } from "../lib/runStatus";
@@ -40,6 +41,21 @@ export function PipelineSetup({ defaultTask, onBegin, executingRun, onEditPipeli
     const exists = selectedId && pipelines.some((p) => p.pipeline.id === selectedId);
     if (!exists && pipelines.length > 0) setSelectedId(pipelines[0].pipeline.id);
   }, [pipelines, selectedId]);
+  // "Run it again" (R3): consume the one-shot launcher prefill once the
+  // pipeline list is in, so the existence check below is meaningful. The task
+  // always applies; pipeline + crew only when that pipeline still exists.
+  const consumeLauncherPrefill = useRunsStore((s) => s.consumeLauncherPrefill);
+  useEffect(() => {
+    if (!loaded) return;
+    const prefill = consumeLauncherPrefill();
+    if (!prefill) return;
+    setTask(prefill.task);
+    if (pipelines.some((p) => p.pipeline.id === prefill.pipelineId)) {
+      setSelectedId(prefill.pipelineId);
+      setOverrides(Object.fromEntries(prefill.overrides));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- consume exactly once, when loaded
+  }, [loaded]);
   useEffect(() => {
     if (!selectedId) return;
     const tuples: [number, string][] = Object.entries(overrides)

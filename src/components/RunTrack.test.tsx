@@ -155,6 +155,35 @@ describe("RunTrack liveness", () => {
     expect(screen.queryByRole("button", { name: "Abort" })).not.toBeInTheDocument();
   });
 
+  it("offers Run it again only once the run is terminal (R3)", () => {
+    const onRunAgain = vi.fn();
+    const { unmount } = render(
+      <RunTrack
+        run={{ ...run, status: "completed" }}
+        stages={[stage({ status: "done" })]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+        onRunAgain={onRunAgain}
+      />,
+    );
+    const again = screen.getByRole("button", { name: /Run it again/ });
+    expect(again.textContent).toContain("⟶");
+    fireEvent.click(again);
+    expect(onRunAgain).toHaveBeenCalledTimes(1);
+    unmount();
+
+    render(
+      <RunTrack
+        run={run} // running
+        stages={[stage({ status: "running", startedAt: "2026-06-09T00:00:00Z" })]}
+        selectedStageId={null}
+        onSelectStage={() => {}}
+        onRunAgain={onRunAgain}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /Run it again/ })).not.toBeInTheDocument();
+  });
+
   it("dims connectors after pending stages and brightens them after done stages", () => {
     const second = stage({ id: "st2", position: 1, role: "implement" });
     const { unmount } = render(

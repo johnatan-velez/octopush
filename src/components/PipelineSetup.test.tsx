@@ -29,6 +29,7 @@ vi.mock("../lib/ipc", async (importOriginal) => {
 });
 
 const { PipelineSetup } = await import("./PipelineSetup");
+const { useRunsStore } = await import("../stores/runsStore");
 
 // Fix A: dangling-selectedId recovery — the store mock returns the same shared
 // slice, so we cannot cheaply simulate "store reloads without the previously-selected id" in a
@@ -43,6 +44,7 @@ beforeEach(() => {
   storeState.error = null;
   estimateMock.mockReset();
   estimateMock.mockResolvedValue({ estimateUsd: 0.05, baselineUsd: 0.4 });
+  useRunsStore.setState({ launcherPrefill: null });
 });
 
 describe("PipelineSetup begin gate", () => {
@@ -132,5 +134,42 @@ describe("PipelineSetup ceremony & designed states", () => {
     // savings (verdigris serif) leads; the spent figure follows it
     expect(saves.compareDocumentPosition(spent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(saves.className).toContain("text-octo-verdigris");
+  });
+});
+
+describe("PipelineSetup launcher prefill (R3)", () => {
+  const PIPE2 = { pipeline: { id: "p2", name: "Second", description: "d", isBuiltin: false, createdAt: "t" },
+    stages: [
+      { id: "t0", pipelineId: "p2", position: 0, role: "plan", agentModel: "m", substrate: "api", checkpoint: false,
+        loopTargetPosition: null, loopMaxIterations: 0, loopMode: null, maxIterations: 25 },
+      { id: "t1", pipelineId: "p2", position: 1, role: "implement", agentModel: "m", substrate: "api", checkpoint: false,
+        loopTargetPosition: null, loopMaxIterations: 0, loopMode: null, maxIterations: 25 },
+    ] };
+
+  it("applies task + pipeline + overrides from the prefill, then clears it", () => {
+    storeState.pipelines = [PIPE, PIPE2];
+    useRunsStore.getState().setLauncherPrefill({
+      task: "run it back", pipelineId: "p2", overrides: [[0, "m2"], [1, "m"]],
+    });
+    const onBegin = vi.fn();
+    render(<PipelineSetup defaultTask="" onBegin={onBegin} executingRun={false} onEditPipeline={vi.fn()} />);
+    expect(screen.getByDisplayValue("run it back")).toBeInTheDocument();
+    expect(useRunsStore.getState().launcherPrefill).toBeNull(); // consumed once
+    fireEvent.click(screen.getByRole("button", { name: /Begin the run/i }));
+    // the override equal to the pipeline default ("m" at position 1) is filtered out
+    expect(onBegin).toHaveBeenCalledWith("p2", "run it back", [[0, "m2"]], null);
+  });
+
+  it("falls back to task-only when the pipeline no longer exists", () => {
+    useRunsStore.getState().setLauncherPrefill({
+      task: "ghost pipeline run", pipelineId: "ghost", overrides: [[0, "m2"]],
+    });
+    const onBegin = vi.fn();
+    render(<PipelineSetup defaultTask="" onBegin={onBegin} executingRun={false} onEditPipeline={vi.fn()} />);
+    expect(screen.getByDisplayValue("ghost pipeline run")).toBeInTheDocument();
+    expect(useRunsStore.getState().launcherPrefill).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Begin the run/i }));
+    // default pipeline, no stale overrides
+    expect(onBegin).toHaveBeenCalledWith("p1", "ghost pipeline run", [], null);
   });
 });

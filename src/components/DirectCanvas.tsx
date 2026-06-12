@@ -31,6 +31,8 @@ export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey,
   const resolve = useRunsStore((s) => s.resolve);
   const abort = useRunsStore((s) => s.abort);
   const stopStage = useRunsStore((s) => s.stopStage);
+  const selectRun = useRunsStore((s) => s.selectRun);
+  const setLauncherPrefill = useRunsStore((s) => s.setLauncherPrefill);
 
   // Builder: undefined = closed; null = compose new; a pipelineId = edit that one.
   const [builder, setBuilder] = useState<undefined | null | string>(undefined);
@@ -127,6 +129,16 @@ export function DirectCanvas({ active, workspaceId, defaultTask, linkedIssueKey,
           onSelectStage={(id) => selectStage(run.id, id)}
           onStopStage={() => void stopStage(run.id)}
           onAbort={() => void abort(run.id)}
+          onRunAgain={() => {
+            // Seed the launcher with this run's brief, pipeline, and crew —
+            // PipelineSetup consumes the prefill once on mount.
+            setLauncherPrefill({
+              task: run.task,
+              pipelineId: run.pipelineId,
+              overrides: stages.map((s) => [s.position, s.agentModel] as [number, string]),
+            });
+            selectRun(workspaceId, null);
+          }}
         />
         <StageFocus stage={shownStage} workspacePath={workspacePath} />
         <RunLedger run={run} stages={stages} />

@@ -11,7 +11,15 @@ vi.mock("./PipelineSetup", () => ({
   ),
 }));
 vi.mock("./PipelineBuilder", () => ({ PipelineBuilder: () => <div>BUILDER</div> }));
-vi.mock("./RunTrack", () => ({ RunTrack: () => <div>RUNVIEW</div>, labelForRole: (r: string) => r }));
+vi.mock("./RunTrack", () => ({
+  RunTrack: ({ onRunAgain }: any) => (
+    <div>
+      RUNVIEW
+      {onRunAgain && <button onClick={onRunAgain}>again</button>}
+    </div>
+  ),
+  labelForRole: (r: string) => r,
+}));
 vi.mock("./StageFocus", () => ({ StageFocus: () => <div /> }));
 vi.mock("./CheckpointBar", () => ({ CheckpointBar: () => <div>CHECKPOINT</div> }));
 vi.mock("./RunLedger", () => ({ RunLedger: () => <div /> }));
@@ -107,6 +115,24 @@ describe("DirectCanvas viewed-run routing", () => {
       });
     });
     expect(useRunsStore.getState().getSelectedStageId("r1")).toBe("s1");
+  });
+
+  it("Run it again sets the launcher prefill from the run and navigates to the launcher (R3)", () => {
+    const done: Run = { ...run, status: "completed" };
+    const s1 = { ...mkStage("s1", 0, "done"), role: "plan", agentModel: "haiku" };
+    const s2 = { ...mkStage("s2", 1, "done"), role: "implement", agentModel: "opus" };
+    useRunsStore.setState({ detailByRun: { r1: { run: done, stages: [s1, s2] } } });
+    useRunsStore.getState().selectRun("w1", "r1");
+    render(<DirectCanvas active workspaceId="w1" defaultTask="" linkedIssueKey={null} workspacePath="/tmp" />);
+
+    fireEvent.click(screen.getByText("again"));
+    expect(useRunsStore.getState().launcherPrefill).toEqual({
+      task: "t",
+      pipelineId: "p",
+      overrides: [[0, "haiku"], [1, "opus"]],
+    });
+    // navigates to the launcher
+    expect(useRunsStore.getState().selectedRunIdByWs.w1).toBeNull();
   });
 
   it("keeps the checkpoint strip mounted in a Reveal and folds it away on resume", () => {

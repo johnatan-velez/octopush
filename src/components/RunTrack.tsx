@@ -16,7 +16,11 @@ interface Props {
   onStopStage?: () => void;
   /** Abort the whole run (shown only while the run is `running`). */
   onAbort?: () => void;
+  /** Re-run this pipeline: seed the launcher from this run (terminal runs only). */
+  onRunAgain?: () => void;
 }
+
+const TERMINAL_RUN_STATUSES = new Set(["completed", "aborted", "failed"]);
 
 const EMPTY_ENTRIES: LiveEntry[] = [];
 
@@ -36,7 +40,7 @@ function lastNotice(entries: LiveEntry[]): string {
   return "";
 }
 
-export function RunTrack({ run, stages, selectedStageId, onSelectStage, onStopStage, onAbort }: Props) {
+export function RunTrack({ run, stages, selectedStageId, onSelectStage, onStopStage, onAbort, onRunAgain }: Props) {
   const doneCount = stages.filter((s) => s.status === "done").length;
   const [briefOpen, setBriefOpen] = useState(false);
 
@@ -82,6 +86,16 @@ export function RunTrack({ run, stages, selectedStageId, onSelectStage, onStopSt
                 Abort
               </button>
             </span>
+          )}
+          {TERMINAL_RUN_STATUSES.has(run.status) && onRunAgain && (
+            <button
+              key="run-again"
+              type="button"
+              onClick={onRunAgain}
+              className="octo-fade-in font-serif text-[13px] text-octo-brass transition-colors duration-[180ms] hover:text-octo-ivory"
+            >
+              ⟶ Run it again
+            </button>
           )}
         </div>
       </div>
