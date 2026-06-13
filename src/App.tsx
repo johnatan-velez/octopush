@@ -25,7 +25,7 @@ import { ProjectPickerModal } from "./components/ProjectPickerModal";
 import { ExistingWorkspaceAlertModal } from "./components/ExistingWorkspaceAlertModal";
 import { EmptyProjectState } from "./components/EmptyProjectState";
 import { ChatView } from "./components/ChatView";
-import { ChangesPanel } from "./components/ChangesPanel";
+import { ReviewSidebar } from "./components/ReviewSidebar";
 import { EditorPane } from "./components/EditorPane";
 import { EditorTabs } from "./components/EditorTabs";
 import { ReviewCanvas, type ReviewViewMode } from "./components/ReviewCanvas";
@@ -61,7 +61,7 @@ import { copyToClipboard } from "./lib/clipboard";
 import type { GitStatus, Pr, TintName, Issue, ProjectInfo } from "./lib/types";
 import { useIssuesStore } from "./stores/issuesStore";
 import { detectIssueKey, detectIssueKeyForProject } from "./lib/detectIssueKey";
-import { findDiffRowByNewLine } from "./lib/diffJump";
+import { revealDiffTarget, stripDiffPrefix } from "./lib/diffJump";
 
 interface ChatRef {
   id: string;
@@ -162,6 +162,23 @@ function App() {
   const COMPANION_DEFAULT_WIDTH = 312;
   const COMPANION_MIN_WIDTH = 280;
   const COMPANION_MAX_WIDTH = 600;
+  // Collapsed, the companion shrinks to a slim strip (like the rail) that
+  // still carries the mode switcher — trading panel content for canvas room.
+  const COMPANION_COLLAPSED_WIDTH = 56;
+  const [isCompanionCollapsed, setIsCompanionCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("companionCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("companionCollapsed", isCompanionCollapsed ? "1" : "0");
+    } catch {
+      /* storage unavailable — keep the in-memory value */
+    }
+  }, [isCompanionCollapsed]);
   const [companionWidth, setCompanionWidth] = useState<number>(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("companionWidth") : null;
     const parsed = stored ? parseInt(stored, 10) : NaN;
@@ -994,10 +1011,13 @@ function App() {
     (path: string, view: ReviewViewMode = "editor", line?: number | null) => {
       if (!activeWorkspace) return;
       const rootPath = activeWorkspace.worktreePath || project!.path;
-      const absolute = path.startsWith("/") ? path : `${rootPath}/${path}`;
+      // AI findings (and other callers) may pass a git `a/`/`b/`-prefixed path;
+      // strip it before resolving so both the editor and diff branches agree.
+      const cleaned = stripDiffPrefix(path);
+      const absolute = cleaned.startsWith("/") ? cleaned : `${rootPath}/${cleaned}`;
       const relative = absolute.startsWith(rootPath + "/")
         ? absolute.slice(rootPath.length + 1)
-        : path;
+        : cleaned;
 
       setMode("review");
       setReviewViewMode(view);
@@ -1014,17 +1034,7 @@ function App() {
         // Diff view — scroll to the anchor for that file. Defer one frame so
         // the canvas has switched modes before we try to find the anchor.
         requestAnimationFrame(() => {
-          // AI reviews sometimes echo git's `a/`/`b/` path prefixes — try the
-          // raw path first, then the normalized one.
-          const candidates = [relative, relative.replace(/^[ab]\//, "")];
-          let el: HTMLElement | null = null;
-          for (const candidate of candidates) {
-            el = document.getElementById(
-              `review-file-${encodeURIComponent(candidate)}`,
-            );
-            if (el) break;
-          }
-          if (!el) {
+          if (!revealDiffTarget(relative, line ?? null)) {
             // File isn't in the current diff (committed, reverted, or the
             // model hallucinated a path) — say so instead of doing nothing.
             pushToast({
@@ -1032,13 +1042,6 @@ function App() {
               title: "Not in the current diff",
               body: path,
             });
-            return;
-          }
-          const row = line != null ? findDiffRowByNewLine(el, line) : null;
-          if (row) {
-            row.scrollIntoView({ behavior: "smooth", block: "center" });
-          } else {
-            el.scrollIntoView({ behavior: "smooth", block: "start" });
           }
         });
       }
@@ -1266,11 +1269,6 @@ function App() {
   const handleBacklogTicketContextMenu = useCallback(
     (issue: Issue, x: number, y: number) => setBacklogTicketMenu({ issue, x, y }),
     [],
-  );
-
-  const handleJumpToFile = useCallback(
-    (file: string, line: number | null) => navigateToFile(file, "diff", line),
-    [navigateToFile],
   );
 
   // ── Backlog ticket → create workspace orchestration ──
@@ -1505,30 +1503,34 @@ function App() {
               <ModeOverlay active={!!activeWorkspace && activeMode === "review"}>
                 {activeWorkspace && (
                   <div className="flex h-full min-h-0">
-                    {/* Left: slim Changes outline (file index + commit) */}
-                    <div className="w-[260px] shrink-0 border-r border-octo-hairline">
-                      <ChangesPanel
-                        projectPath={activeWorkspace.worktreePath || project.path}
-                        workspaceId={activeWorkspaceId!}
-                        diff={gitDiff}
-                        onFileClick={(filePath) => navigateToFile(filePath, "diff")}
-                        registerFocusCommit={registerFocusCommit}
-                        onChange={() => {
-                          // Refetch diff + status after commit / push so the
-                          // canvas catches up immediately.
-                          const path = activeWorkspace.worktreePath || project.path;
-                          Promise.all([
-                            ipc.getGitStatus(path),
-                            ipc.getGitDiff(path, ignoreWs).catch(() => ""),
-                          ])
-                            .then(([s, d]) => {
-                              setGitStatus(s);
-                              setGitDiff(d);
-                            })
-                            .catch(() => {});
-                        }}
-                      />
-                    </div>
+                    {/* Left: unified, collapsible Changes + Files navigator */}
+                    <ReviewSidebar
+                      changedCount={gitStatus?.changedFiles.length ?? 0}
+                      projectPath={activeWorkspace.worktreePath || project.path}
+                      workspaceId={activeWorkspaceId!}
+                      diff={gitDiff}
+                      onChangesFileClick={(filePath) => navigateToFile(filePath, "diff")}
+                      registerFocusCommit={registerFocusCommit}
+                      fileTree={fileTreeProps ?? {
+                        rootPath: activeWorkspace.worktreePath || project.path,
+                        rootLabel: activeWorkspace.name,
+                        changedPaths: new Set(),
+                      }}
+                      onChangesChange={() => {
+                        // Refetch diff + status after commit / push so the
+                        // canvas catches up immediately.
+                        const path = activeWorkspace.worktreePath || project.path;
+                        Promise.all([
+                          ipc.getGitStatus(path),
+                          ipc.getGitDiff(path, ignoreWs).catch(() => ""),
+                        ])
+                          .then(([s, d]) => {
+                            setGitStatus(s);
+                            setGitDiff(d);
+                          })
+                          .catch(() => {});
+                      }}
+                    />
 
                     {/* Centre: ReviewCanvas with Diff/Editor toggle */}
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -1636,33 +1638,37 @@ function App() {
             band above. Resizable via the 4px handle on the left edge:
             drag to widen/narrow, double-click to reset to default. */}
         <div
-          className="relative flex shrink-0 flex-col p-4 pt-0"
-          style={{ width: companionWidth }}
+          className={`relative flex shrink-0 flex-col pt-0 transition-all duration-[220ms] ${
+            isCompanionCollapsed ? "px-2 pb-4" : "p-4"
+          }`}
+          style={{ width: isCompanionCollapsed ? COMPANION_COLLAPSED_WIDTH : companionWidth }}
         >
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize Companion"
-            title="Drag to resize · Double-click to reset"
-            onMouseDown={startCompanionResize}
-            onDoubleClick={resetCompanionWidth}
-            className={`absolute left-0 top-0 bottom-0 z-10 w-[4px] cursor-col-resize transition-colors hover:bg-octo-brass ${
-              companionResizing ? "bg-octo-brass" : "bg-transparent"
-            }`}
-          />
+          {/* The resize handle only makes sense when expanded. */}
+          {!isCompanionCollapsed && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize Companion"
+              title="Drag to resize · Double-click to reset"
+              onMouseDown={startCompanionResize}
+              onDoubleClick={resetCompanionWidth}
+              className={`absolute left-0 top-0 bottom-0 z-10 w-[4px] cursor-col-resize transition-colors hover:bg-octo-brass ${
+                companionResizing ? "bg-octo-brass" : "bg-transparent"
+              }`}
+            />
+          )}
           <Companion
             mode={activeMode}
             workspaceId={activeWorkspaceId}
             contextProps={companionContextProps}
             historyProps={companionHistoryProps}
-            fileTree={fileTreeProps}
             workspace={activeWorkspace ?? null}
             project={activeProject ?? null}
             issueTrackerConfigured={issueTrackerConfigured}
             onBacklogTicketContextMenu={handleBacklogTicketContextMenu}
             onModeChange={setMode}
-            reviewGitDiff={gitDiff}
-            onJumpToFile={handleJumpToFile}
+            collapsed={isCompanionCollapsed}
+            onToggleCollapsed={() => setIsCompanionCollapsed((v) => !v)}
           />
         </div>
         </div>

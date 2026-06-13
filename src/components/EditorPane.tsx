@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   EditorView, lineNumbers, highlightActiveLineGutter, drawSelection, keymap,
   highlightActiveLine, rectangularSelection, crosshairCursor,
@@ -6,7 +6,7 @@ import {
 import { EditorState, Compartment } from "@codemirror/state";
 import { defaultKeymap, indentWithTab, history, historyKeymap } from "@codemirror/commands";
 import { indentOnInput, bracketMatching, foldGutter, indentUnit } from "@codemirror/language";
-import { search, searchKeymap } from "@codemirror/search";
+import { search, searchKeymap, setSearchQuery, SearchQuery } from "@codemirror/search";
 import { javascript } from "@codemirror/lang-javascript";
 import { rust } from "@codemirror/lang-rust";
 import { python } from "@codemirror/lang-python";
@@ -17,7 +17,8 @@ import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
 import { xml } from "@codemirror/lang-xml";
 import { yaml } from "@codemirror/lang-yaml";
-import { atelierTheme } from "./editor/atelierTheme";
+import { buildEditorTheme } from "./editor/atelierTheme";
+import { EditorSearch } from "./editor/EditorSearch";
 import { blameGutter } from "./editor/blameGutter";
 import { diffGutter } from "./editor/diffGutter";
 import { selectAllOccurrences } from "./editor/multiCursor";
@@ -57,6 +58,7 @@ const lineNumComp = new Compartment();
 const tabComp = new Compartment();
 const fontComp = new Compartment();
 const blameComp = new Compartment();
+const themeComp = new Compartment();
 
 interface Prefs { wrap: boolean; fontSize: number; tabWidth: number; lineNumbers: boolean; }
 
@@ -69,10 +71,10 @@ const fontValue = (p: Prefs) =>
 
 function buildState(opts: {
   doc: string; lang: string; markers: ReturnType<typeof parseDiffForFile>;
-  prefs: Prefs; onSave: () => void;
+  prefs: Prefs; onSave: () => void; onOpenSearch: () => void;
   onUpdate: (u: { docChanged: boolean; doc: string; line: number; col: number; selections: number }) => void;
 }) {
-  const { doc, lang, markers, prefs, onSave, onUpdate } = opts;
+  const { doc, lang, markers, prefs, onSave, onOpenSearch, onUpdate } = opts;
   return EditorState.create({
     doc,
     extensions: [
@@ -88,9 +90,15 @@ function buildState(opts: {
       tabComp.of(tabValue(prefs)),
       wrapComp.of(wrapValue(prefs)),
       fontComp.of(fontValue(prefs)),
+      // The search extension powers match highlighting + the query state.
       search({ top: true }),
       keymap.of([
         { key: "Mod-s", run: () => { onSave(); return true; } },
+        // Our Octopush-native find overlay owns ⌘F. Listed BEFORE searchKeymap
+        // so this binding wins and CodeMirror's docked panel never opens — while
+        // searchKeymap still provides find-next/prev, go-to-line and
+        // select-next-occurrence (⌘G/F3, ⌘⌥G, ⌘D).
+        { key: "Mod-f", run: () => { onOpenSearch(); return true; } },
         { key: "Mod-Shift-l", run: selectAllOccurrences },
         { key: "Alt-z", run: () => { useEditorPrefs.getState().toggleWrap(); return true; } },
         { key: "Mod-=", run: () => { useEditorPrefs.getState().bumpFontSize(1); return true; } },
@@ -101,7 +109,7 @@ function buildState(opts: {
         ...historyKeymap,
       ]),
       langExtension(lang),
-      atelierTheme,
+      themeComp.of(buildEditorTheme()),
       diffGutter(markers),
       EditorView.updateListener.of((update) => {
         const head = update.state.selection.main.head;
@@ -160,6 +168,15 @@ export function EditorPane({ workspaceId, workspacePath, diffText }: Props) {
 
   const [pos, setPos] = useState({ line: 1, col: 1, selections: 1 });
 
+  // Find/replace overlay. searchNonce is bumped on every ⌘F so an already-open
+  // overlay refocuses and selects its query instead of silently no-op'ing.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchNonce, setSearchNonce] = useState(0);
+  const openSearch = useCallback(() => {
+    setSearchOpen(true);
+    setSearchNonce((n) => n + 1);
+  }, []);
+
   const freshState = (file: { path: string; content: string; lang: string }) => {
     const relPath = file.path.startsWith(workspacePath + "/")
       ? file.path.slice(workspacePath.length + 1) : file.path;
@@ -167,6 +184,7 @@ export function EditorPane({ workspaceId, workspacePath, diffText }: Props) {
     return buildState({
       doc: file.content, lang: file.lang, markers, prefs: prefsRef.current,
       onSave: () => saveActive(workspaceId).catch(console.error),
+      onOpenSearch: openSearch,
       onUpdate: (u) => {
         if (u.docChanged) setContent(workspaceId, file.path, u.doc);
         setPos({ line: u.line, col: u.col, selections: u.selections });
@@ -187,9 +205,12 @@ export function EditorPane({ workspaceId, workspacePath, diffText }: Props) {
     const view = viewRef.current;
     if (!view) return;
 
-    // Cache the outgoing text tab's live state before any switch.
+    // Cache the outgoing text tab's live state before any switch. Strip any
+    // active find query first so its match highlights don't linger in the
+    // cached snapshot and reappear (with no overlay to drive them) on return.
     const prevPath = lastPathRef.current;
     if (prevPath && prevPath !== activeFile?.path) {
+      view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: "" })) });
       stateCache.current.set(prevPath, view.state);
     }
 
@@ -208,6 +229,9 @@ export function EditorPane({ workspaceId, workspacePath, diffText }: Props) {
       lineNumComp.reconfigure(lineNumValue(prefsRef.current)),
       tabComp.reconfigure(tabValue(prefsRef.current)),
       fontComp.reconfigure(fontValue(prefsRef.current)),
+      // Restored cached states carry the theme they were built with; re-apply
+      // the current one so a theme switch while another tab was active lands.
+      themeComp.reconfigure(buildEditorTheme()),
     ]});
     lastPathRef.current = activeFile.path;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -284,6 +308,26 @@ export function EditorPane({ workspaceId, workspacePath, diffText }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wrap, fontSize, tabWidth, lineNumbersPref]);
 
+  // Follow Octopush theme switches: themeStore.applyThemeToDom fires `octo:theme`
+  // after writing the new tokens to :root; rebuild the editor theme from the
+  // live tokens and reconfigure the compartment so the editor repaints with the
+  // rest of the app (CodeMirror's theme() can't read CSS variables directly).
+  useEffect(() => {
+    const onTheme = () => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({ effects: themeComp.reconfigure(buildEditorTheme()) });
+    };
+    window.addEventListener("octo:theme", onTheme);
+    return () => window.removeEventListener("octo:theme", onTheme);
+  }, []);
+
+  // Close the find overlay when the active file changes — its query/highlights
+  // belong to the previous document's state, which the swap just replaced.
+  useEffect(() => {
+    setSearchOpen(false);
+  }, [activePath]);
+
   // ── Blame gutter (G7 slice III) ─────────────────────────────────
   // Fetch blame for the active file while the toggle is on. Re-fetches on
   // file switch, save (mtime bump) and external reload (version bump) so the
@@ -335,6 +379,13 @@ export function EditorPane({ workspaceId, workspacePath, diffText }: Props) {
               reason={activeFile.binaryReason ?? "binary"}
             />
           </div>
+        )}
+        {searchOpen && activeFile?.kind === "text" && viewRef.current && (
+          <EditorSearch
+            view={viewRef.current}
+            focusSignal={searchNonce}
+            onClose={() => setSearchOpen(false)}
+          />
         )}
       </div>
       {activeFile?.kind === "text" && (

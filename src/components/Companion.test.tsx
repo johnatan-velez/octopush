@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { Companion } from "./Companion";
 
 // Minimal stubs for child components so the test focuses on structure.
@@ -28,6 +28,8 @@ const baseProps = {
   // jiraProjectKey drives resolveJiraProjectKey — set it so projectKey != null
   project: { id: "p1", name: "Test", path: "/tmp/repo", jiraProjectKey: "CLPNSNS", pinned: false, tint: null },
   onModeChange: vi.fn(),
+  collapsed: false,
+  onToggleCollapsed: vi.fn(),
 };
 
 describe("Companion cross-mode visibility of issue tracker block", () => {
@@ -42,7 +44,7 @@ describe("Companion cross-mode visibility of issue tracker block", () => {
   });
 
   it("renders BacklogPanel in REVIEW when projectKey is resolved", () => {
-    render(<Companion mode="review" {...baseProps} fileTree={{ rootPath: "/", rootLabel: "/", changedPaths: new Set() }} />);
+    render(<Companion mode="review" {...baseProps} />);
     expect(screen.getByTestId("backlog")).toBeInTheDocument();
   });
 
@@ -62,5 +64,36 @@ describe("Companion cross-mode visibility of issue tracker block", () => {
     expect(screen.queryByTestId("active")).not.toBeInTheDocument();
     expect(screen.queryByTestId("backlog")).not.toBeInTheDocument();
     expect(screen.queryByTestId("else")).not.toBeInTheDocument();
+  });
+});
+
+describe("Companion collapse", () => {
+  it("expanded: a collapse control toggles the parent state", () => {
+    const onToggleCollapsed = vi.fn();
+    render(<Companion mode="talk" {...baseProps} onToggleCollapsed={onToggleCollapsed} />);
+    const btn = screen.getByRole("button", { name: /collapse companion/i });
+    fireEvent.click(btn);
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+  });
+
+  it("collapsed: shows an expand control and a vertical mode switcher", () => {
+    const onModeChange = vi.fn();
+    const onToggleCollapsed = vi.fn();
+    render(
+      <Companion
+        mode="review"
+        {...baseProps}
+        collapsed
+        onModeChange={onModeChange}
+        onToggleCollapsed={onToggleCollapsed}
+      />,
+    );
+    // The expanded panel chrome is gone…
+    expect(screen.queryByRole("button", { name: /collapse companion/i })).not.toBeInTheDocument();
+    // …replaced by the expand control + a vertical mode switcher.
+    fireEvent.click(screen.getByRole("button", { name: /expand companion/i }));
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: /^talk$/i }));
+    expect(onModeChange).toHaveBeenCalledWith("talk");
   });
 });

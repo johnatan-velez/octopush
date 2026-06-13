@@ -260,6 +260,15 @@
 }
 .octo-sweep { animation: octo-sweep var(--dur-reveal) var(--ease-octo) both; }
 
+/* One-shot brass flash — draws the eye to a just-navigated target (e.g. the
+   diff row an AI-review finding points at). Fades from a brass glow back to
+   transparent so nothing is left tinted. */
+@keyframes octo-flash {
+  0%   { background-color: var(--brass-glow); }
+  100% { background-color: transparent; }
+}
+.octo-flash { animation: octo-flash 1.2s var(--ease-octo) both; }
+
 /* Accessibility: honor reduced-motion — neutralize all motion app-wide
    (entrance primitives, grid-rows collapses, glides, pulses). */
 @media (prefers-reduced-motion: reduce) {

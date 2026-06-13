@@ -19,6 +19,10 @@ interface Props {
   rootLabel: string;
   changedPaths: Set<string>;
   onFileClick?: (absPath: string) => void;
+  /** Optional node rendered at the start of the eyebrow in place of the
+   *  static "Files" title — used by ReviewSidebar to host its Changes|Files
+   *  tab switcher and collapse control without stacking a second bar. */
+  headerLeading?: React.ReactNode;
 }
 
 type ChildState = DirectoryEntry[] | "loading" | "error";
@@ -172,7 +176,7 @@ function flattenFiltered(
   return { rows, matchCount };
 }
 
-export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileClick }: Props) {
+export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileClick, headerLeading }: Props) {
   const showIgnored = useReviewPrefs((s) => !!s.showIgnoredFiles[rootPath]);
   const toggleShowIgnored = useReviewPrefs((s) => s.toggleShowIgnored);
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -589,7 +593,9 @@ export function CompanionFileTree({ rootPath, rootLabel, changedPaths, onFileCli
       {/* Eyebrow — same height & padding as the canvas toolbar and the
           left rail's CHANGES eyebrow so the three top bars form one row. */}
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-octo-hairline px-4">
-        <h3 className="font-mono text-[9px] uppercase tracking-[0.3em] text-octo-brass">Files</h3>
+        {headerLeading ?? (
+          <h3 className="font-mono text-[9px] uppercase tracking-[0.3em] text-octo-brass">Files</h3>
+        )}
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -801,9 +807,6 @@ function TreeRow({
       onContextMenu={onContextMenu}
       data-testid={!isDir ? `file-row-${path}` : undefined}
     >
-      {/* Indent guides — one 1px hairline per depth level */}
-      {depth > 0 && <IndentGuides depth={depth} />}
-
       {/* Chevron (dirs) or dot indicator (files) */}
       {isDir ? (
         <span
@@ -875,34 +878,5 @@ function PlaceholderLine({ row }: { row: PlaceholderRow }) {
     >
       {text}
     </div>
-  );
-}
-
-/**
- * Renders vertical indent guide lines, one per depth level.
- * Ancestor guides are rendered at low opacity (~20%) to recede;
- * the current row's own guide (last one) is highlighted using brass-dim.
- */
-function IndentGuides({ depth }: { depth: number }) {
-  return (
-    <>
-      {Array.from({ length: depth }, (_, i) => {
-        const isCurrentLevel = i === depth - 1;
-        return (
-          <span
-            key={i}
-            aria-hidden="true"
-            className="pointer-events-none absolute top-0 bottom-0 border-l"
-            style={{
-              left: `${i * 14 + 10}px`,
-              borderColor: isCurrentLevel
-                ? "var(--brass-dim)" // current row's guide: dimmed brass
-                : "var(--color-octo-hairline)", // ancestor guides: hairline, receded via opacity
-              opacity: isCurrentLevel ? 1 : 0.2,
-            }}
-          />
-        );
-      })}
-    </>
   );
 }

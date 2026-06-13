@@ -57,6 +57,11 @@ vi.mock("@codemirror/search", () => ({
   search: vi.fn(() => ({})),
   searchKeymap: [],
   gotoLine: vi.fn(() => true),
+  setSearchQuery: { of: vi.fn(() => ({})) },
+  SearchQuery: class {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    constructor(_opts: any) {}
+  },
 }));
 
 vi.mock("@codemirror/commands", () => ({
@@ -97,6 +102,13 @@ vi.mock("@codemirror/lang-javascript", () => ({
 
 vi.mock("../components/editor/atelierTheme", () => ({
   atelierTheme: [],
+  buildEditorTheme: () => [],
+}));
+
+// The find overlay drives CodeMirror's search commands; stub them since the
+// overlay isn't opened in these structural tests.
+vi.mock("./editor/EditorSearch", () => ({
+  EditorSearch: () => null,
 }));
 
 vi.mock("../components/editor/diffGutter", () => ({

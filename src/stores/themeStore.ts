@@ -95,4 +95,10 @@ function applyThemeToDom(t: ThemeConfig) {
 
   // Body bg for first paint before React mounts.
   document.body.style.backgroundColor = t.bg;
+
+  // Notify non-CSS surfaces that can't read `var(--…)` directly — chiefly the
+  // CodeMirror editor, whose theme() spec needs concrete colors. EditorPane
+  // listens for this and reconfigures its theme compartment from the live
+  // tokens (see components/editor/atelierTheme.ts · buildEditorTheme).
+  window.dispatchEvent(new CustomEvent("octo:theme"));
 }

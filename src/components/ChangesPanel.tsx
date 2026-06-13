@@ -54,6 +54,10 @@ interface Props {
   /** Optional: hands the parent a function that focuses the commit textarea
    *  (wired to the `c` keyboard shortcut in App). */
   registerFocusCommit?: (fn: () => void) => void;
+  /** Optional node rendered at the start of the eyebrow in place of the
+   *  static "Changes" title — used by ReviewSidebar to host its Changes|Files
+   *  tab switcher and collapse control without stacking a second bar. */
+  headerLeading?: React.ReactNode;
 }
 
 const POLL_MS = 5_000;
@@ -75,7 +79,7 @@ const CONFLICT_CHIP =
 const CONFLICT_ICON_BTN =
   "shrink-0 rounded p-1 text-octo-sage transition-colors hover:text-octo-brass disabled:opacity-40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-octo-brass";
 
-export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick, onChange, registerFocusCommit }: Props) {
+export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick, onChange, registerFocusCommit, headerLeading }: Props) {
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
   const [busyPath, setBusyPath] = useState<string | null>(null);
@@ -383,9 +387,11 @@ export function ChangesPanel({ projectPath, workspaceId, diff = "", onFileClick,
     <aside className="flex h-full w-full flex-col overflow-hidden bg-octo-panel">
       {/* Eyebrow row — aligned with canvas toolbar and FILES rail. */}
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-octo-hairline px-4">
-        <span className="font-mono text-[9px] uppercase tracking-[0.3em] text-octo-brass">
-          Changes
-        </span>
+        {headerLeading ?? (
+          <span className="font-mono text-[9px] uppercase tracking-[0.3em] text-octo-brass">
+            Changes
+          </span>
+        )}
         {(addCount > 0 || delCount > 0) && (
           <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-octo-mute">
             <span className="text-octo-verdigris">+{addCount}</span>
