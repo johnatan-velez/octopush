@@ -28,6 +28,16 @@ describe("AiFindingCard", () => {
     const card = container.firstElementChild as HTMLElement;
     expect(card.style.borderLeftColor).toBe("var(--color-octo-rouge)");
   });
+  it("offers an Edit action only when onEdit is provided and a file exists", () => {
+    const onEdit = vi.fn();
+    const { getByRole } = render(<AiFindingCard finding={f} onJump={() => {}} onEdit={onEdit} />);
+    fireEvent.click(getByRole("button", { name: /open in editor/i }));
+    expect(onEdit).toHaveBeenCalledWith("a.rs", 12);
+  });
+  it("renders no Edit action for a finding without a file", () => {
+    const { queryByRole } = render(<AiFindingCard finding={noFile} onJump={() => {}} onEdit={() => {}} />);
+    expect(queryByRole("button", { name: /open in editor/i })).toBeNull();
+  });
   it("maps medium to warning and low to mute", () => {
     const med = render(<AiFindingCard finding={{ ...f, severity: "medium" }} onJump={() => {}} />);
     expect((med.container.firstElementChild as HTMLElement).style.borderLeftColor).toBe("var(--color-octo-warning)");

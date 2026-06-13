@@ -15,14 +15,19 @@ import {
   CheckSquare,
   Columns2,
   AlignJustify,
+  FlaskConical,
+  Sparkles,
   X,
 } from "lucide-react";
 import { ipc } from "../lib/ipc";
 import { pushToast } from "./Toasts";
 import { parseFullDiff } from "../lib/diffParser";
+import { revealDiffTarget } from "../lib/diffJump";
 import type { ChatMessage, FileEdit, GitStatus, TestRunResult } from "../lib/types";
 import { useReviewPrefs } from "../stores/reviewPrefsStore";
+import { useAiReview } from "../stores/aiReviewStore";
 import { DiffView } from "./review/DiffView";
+import { AiReviewPanel } from "./review/AiReviewPanel";
 import { TestDrawer } from "./review/TestDrawer";
 
 // ─── Types ─────────────────────────────────────────────────────────
@@ -90,12 +95,23 @@ export function ReviewCanvas({
   // Why? drawer (canvas-level, keyed by file path)
   const [whyFile, setWhyFile] = useState<string | null>(null);
 
-  // Test runner state
+  // Test runner state — the command lives behind a compact popover so the
+  // toolbar stays a single tidy row (it used to host an always-on input).
   const [testCommand, setTestCommand] = useState<string>("");
-  const [testCommandEditing, setTestCommandEditing] = useState(false);
+  const [testsOpen, setTestsOpen] = useState(false);
   const [testRunning, setTestRunning] = useState(false);
   const [testResult, setTestResult] = useState<TestRunResult | null>(null);
-  const testInputRef = useRef<HTMLInputElement>(null);
+  const testsPopoverRef = useRef<HTMLDivElement>(null);
+  // Last value persisted to the backend — guards against the Enter handler and
+  // the input's blur-on-unmount both firing setWorkspaceTestCommand.
+  const savedCmdRef = useRef<string | null>(null);
+
+  // AI review drawer (lives in the diff, not the companion). Subtle brass
+  // access in the toolbar; the panel slides in over the right of the diff.
+  const [aiOpen, setAiOpen] = useState(false);
+  const aiReview = useAiReview((s) => s.reviewFor(workspaceId));
+  const aiFindingCount =
+    aiReview.status === "done" ? aiReview.result?.findings.length ?? 0 : null;
 
   // Parse diff — memoized so the per-hunk word-diff LCS only runs when the
   // diff string actually changes, not on every unrelated re-render.
@@ -122,11 +138,16 @@ export function ReviewCanvas({
   // it's open, so a single Esc closes only the topmost surface.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !whyFile) setTestResult(null);
+      // Escape peels back one surface at a time, topmost first. The Why?
+      // drawer owns Escape while open, so leave it alone here.
+      if (e.key !== "Escape" || whyFile) return;
+      if (testsOpen) { setTestsOpen(false); return; }
+      if (aiOpen) { setAiOpen(false); return; }
+      setTestResult(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [whyFile]);
+  }, [whyFile, testsOpen, aiOpen]);
 
   // Auto-clear the reject-undo bar after 6s — but keep the error message
   // visible until the user dismisses it (don't let a failed undo vanish).
@@ -136,16 +157,45 @@ export function ReviewCanvas({
     return () => clearTimeout(id);
   }, [undo]);
 
-  const handleTestCommandBlur = useCallback(async () => {
-    setTestCommandEditing(false);
-    if (testCommand.trim()) {
-      try {
-        await ipc.setWorkspaceTestCommand(workspaceId, testCommand.trim());
-      } catch (e) {
-        console.error("save test command failed:", e);
+  // When the last change is accepted/committed the toolbar's AI toggle hides
+  // (it only shows with files to review); close the drawer so its state can't
+  // disagree with a missing toggle.
+  useEffect(() => {
+    if ((gitStatus?.changedFiles.length ?? 0) === 0) setAiOpen(false);
+  }, [gitStatus]);
+
+  // Dismiss the test-command popover on an outside click.
+  useEffect(() => {
+    if (!testsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (testsPopoverRef.current && !testsPopoverRef.current.contains(e.target as Node)) {
+        setTestsOpen(false);
       }
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [testsOpen]);
+
+  const saveTestCommand = useCallback(async () => {
+    const cmd = testCommand.trim();
+    if (!cmd || savedCmdRef.current === cmd) return;
+    savedCmdRef.current = cmd;
+    try {
+      await ipc.setWorkspaceTestCommand(workspaceId, cmd);
+    } catch (e) {
+      console.error("save test command failed:", e);
+      savedCmdRef.current = null; // let a later attempt retry the failed save
     }
   }, [workspaceId, testCommand]);
+
+  // Scroll the diff to a finding's location and flash it, so an AI-review
+  // finding's target reads unambiguously instead of just jumping into view.
+  // Shares the anchor protocol with App's navigateToFile via revealDiffTarget.
+  const jumpToDiff = useCallback((file: string, line: number | null) => {
+    if (!revealDiffTarget(file, line, { flash: true })) {
+      pushToast({ level: "info", title: "Not in the current diff", body: file });
+    }
+  }, []);
 
   async function handleRunTests() {
     if (!testCommand.trim()) return;
@@ -200,25 +250,21 @@ export function ReviewCanvas({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {/* ── Toolbar ─────────────────────────────────────────────── */}
-      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-octo-hairline bg-octo-panel px-4">
+      {/* ── Toolbar ───────────────────────────────────────────────
+          One tidy row that never wraps: every control is shrink-0 +
+          whitespace-nowrap, and seldom-needed bits (the test command)
+          live behind a compact popover instead of an always-on field. */}
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-octo-hairline bg-octo-panel px-3">
         <div className="ml-auto flex items-center gap-2">
-          {/* View toggle */}
-          <div className="flex items-center rounded-md border border-octo-hairline overflow-hidden">
+          {/* View toggle — Diff / Editor */}
+          <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-octo-hairline">
             <button
               onClick={() => setViewMode("diff")}
               aria-label="Diff view"
-              className={[
-                "flex items-center gap-1 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.15em] transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass",
-                viewMode === "diff"
-                  ? "text-octo-brass"
-                  : "text-octo-mute hover:text-octo-sage",
-              ].join(" ")}
-              style={
-                viewMode === "diff"
-                  ? { background: "var(--brass-ghost)" }
-                  : undefined
-              }
+              className={`flex items-center gap-1 whitespace-nowrap px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.15em] transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass ${
+                viewMode === "diff" ? "text-octo-brass" : "text-octo-mute hover:text-octo-sage"
+              }`}
+              style={viewMode === "diff" ? { background: "var(--brass-ghost)" } : undefined}
             >
               <LayoutList size={12} />
               Diff
@@ -226,63 +272,42 @@ export function ReviewCanvas({
             <button
               onClick={() => setViewMode("editor")}
               aria-label="Editor view"
-              className={[
-                "flex items-center gap-1 border-l border-octo-hairline px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.15em] transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass",
-                viewMode === "editor"
-                  ? "text-octo-brass"
-                  : "text-octo-mute hover:text-octo-sage",
-              ].join(" ")}
-              style={
-                viewMode === "editor"
-                  ? { background: "var(--brass-ghost)" }
-                  : undefined
-              }
+              className={`flex items-center gap-1 whitespace-nowrap border-l border-octo-hairline px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.15em] transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass ${
+                viewMode === "editor" ? "text-octo-brass" : "text-octo-mute hover:text-octo-sage"
+              }`}
+              style={viewMode === "editor" ? { background: "var(--brass-ghost)" } : undefined}
             >
               <PenLine size={12} />
               Editor
             </button>
           </div>
 
-          {/* Reading mode + whitespace — only meaningful in Diff view */}
+          {/* Reading mode + whitespace — only meaningful in Diff view.
+              Icon-only with tooltips so the row stays compact. */}
           {viewMode === "diff" && (
             <>
-              {/* Inline / Split segmented control */}
-              <div className="flex items-center rounded-md border border-octo-hairline overflow-hidden">
+              <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-octo-hairline">
                 <button
                   onClick={() => setReadingMode("inline")}
                   aria-label="Inline"
-                  className={[
-                    "flex items-center gap-1 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.15em] transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass",
-                    readingMode === "inline"
-                      ? "text-octo-brass"
-                      : "text-octo-mute hover:text-octo-sage",
-                  ].join(" ")}
-                  style={
-                    readingMode === "inline"
-                      ? { background: "var(--brass-ghost)" }
-                      : undefined
-                  }
+                  title="Inline diff"
+                  className={`flex items-center justify-center px-2 py-1 transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass ${
+                    readingMode === "inline" ? "text-octo-brass" : "text-octo-mute hover:text-octo-sage"
+                  }`}
+                  style={readingMode === "inline" ? { background: "var(--brass-ghost)" } : undefined}
                 >
-                  <AlignJustify size={12} />
-                  Inline
+                  <AlignJustify size={13} />
                 </button>
                 <button
                   onClick={() => setReadingMode("sbs")}
                   aria-label="Side by side"
-                  className={[
-                    "flex items-center gap-1 border-l border-octo-hairline px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.15em] transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass",
-                    readingMode === "sbs"
-                      ? "text-octo-brass"
-                      : "text-octo-mute hover:text-octo-sage",
-                  ].join(" ")}
-                  style={
-                    readingMode === "sbs"
-                      ? { background: "var(--brass-ghost)" }
-                      : undefined
-                  }
+                  title="Side-by-side diff"
+                  className={`flex items-center justify-center border-l border-octo-hairline px-2 py-1 transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass ${
+                    readingMode === "sbs" ? "text-octo-brass" : "text-octo-mute hover:text-octo-sage"
+                  }`}
+                  style={readingMode === "sbs" ? { background: "var(--brass-ghost)" } : undefined}
                 >
-                  <Columns2 size={12} />
-                  Split
+                  <Columns2 size={13} />
                 </button>
               </div>
 
@@ -291,89 +316,100 @@ export function ReviewCanvas({
                 onClick={() => setIgnoreWhitespace(!ignoreWhitespace)}
                 aria-label="Ignore whitespace"
                 title="Hide whitespace-only changes (re-indents, trailing spaces, blank lines)"
-                className={[
-                  "flex items-center gap-1 rounded-md border border-octo-hairline px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.15em] transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass",
-                  ignoreWhitespace
-                    ? "text-octo-brass"
-                    : "text-octo-mute hover:text-octo-sage",
-                ].join(" ")}
-                style={
-                  ignoreWhitespace
-                    ? { background: "var(--brass-ghost)" }
-                    : undefined
-                }
+                className={`shrink-0 whitespace-nowrap rounded-md border border-octo-hairline px-2 py-1 font-mono text-[10px] uppercase tracking-[0.15em] transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass ${
+                  ignoreWhitespace ? "text-octo-brass" : "text-octo-mute hover:text-octo-sage"
+                }`}
+                style={ignoreWhitespace ? { background: "var(--brass-ghost)" } : undefined}
               >
                 ±WS
               </button>
             </>
           )}
 
-          {/* Test runner */}
-          <div className="flex items-center gap-0.5 rounded-md border border-octo-hairline pl-2 pr-1">
-            <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-octo-mute">
-              tests
-            </span>
-            {testCommandEditing ? (
-              <input
-                ref={testInputRef}
-                value={testCommand}
-                onChange={(e) => setTestCommand(e.target.value)}
-                onBlur={handleTestCommandBlur}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") testInputRef.current?.blur();
-                  if (e.key === "Escape") {
-                    setTestCommandEditing(false);
-                  }
-                }}
-                className="w-36 bg-transparent px-2 py-1 font-mono text-[11px] text-octo-ivory outline-none placeholder:font-serif placeholder:not-italic placeholder:text-octo-mute"
-                placeholder="npm test"
-                autoFocus
-              />
-            ) : (
-              <button
-                onClick={() => setTestCommandEditing(true)}
-                aria-label="Edit test command"
-                className={[
-                  "px-2 py-1 transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass",
-                  testCommand
-                    ? "font-mono text-[11px] text-octo-sage hover:text-octo-ivory"
-                    : "font-serif text-[11px] text-octo-mute hover:text-octo-sage",
-                ].join(" ")}
-                title="Click to set the command Octopus runs for tests"
-              >
-                {testCommand || "set a test command…"}
-              </button>
-            )}
+          {/* Test runner — compact icon button + popover */}
+          <div className="relative shrink-0" ref={testsPopoverRef}>
             <button
-              onClick={handleRunTests}
-              disabled={!testCommand.trim() || testRunning}
-              aria-label="Run tests"
-              className="flex items-center gap-1 rounded px-2 py-1 text-octo-mute transition-colors hover:bg-octo-panel-2 hover:text-octo-brass disabled:opacity-30 focus-visible:ring-1 focus-visible:ring-octo-brass"
-              title="Run tests"
+              onClick={() => setTestsOpen((v) => !v)}
+              aria-label="Tests"
+              aria-expanded={testsOpen}
+              title={testCommand ? `Run tests · ${testCommand}` : "Set a test command"}
+              className={`flex items-center gap-1 rounded-md border border-octo-hairline px-2 py-1 transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass ${
+                testsOpen || testRunning ? "text-octo-brass" : "text-octo-mute hover:text-octo-sage"
+              }`}
+              style={testsOpen ? { background: "var(--brass-ghost)" } : undefined}
             >
-              {testRunning ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : (
-                <Play size={12} />
-              )}
+              {testRunning ? <Loader2 size={13} className="animate-spin" /> : <FlaskConical size={13} />}
             </button>
+            {testsOpen && (
+              <div className="octo-menu-enter absolute right-0 top-[calc(100%+6px)] z-30 w-64 rounded-md border border-octo-hairline bg-octo-panel p-2 shadow-2xl">
+                <div className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute">
+                  Test command
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    value={testCommand}
+                    onChange={(e) => setTestCommand(e.target.value)}
+                    onBlur={() => void saveTestCommand()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { void saveTestCommand(); handleRunTests(); setTestsOpen(false); }
+                      if (e.key === "Escape") { e.stopPropagation(); setTestsOpen(false); }
+                    }}
+                    className="min-w-0 flex-1 rounded border border-octo-hairline bg-octo-onyx px-2 py-1 font-mono text-[11px] text-octo-ivory outline-none focus:border-octo-brass placeholder:font-serif placeholder:not-italic placeholder:text-octo-mute"
+                    placeholder="npm test"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => { void saveTestCommand(); handleRunTests(); }}
+                    disabled={!testCommand.trim() || testRunning}
+                    aria-label="Run tests"
+                    title="Run tests"
+                    className="flex shrink-0 items-center justify-center rounded px-2 py-1 text-octo-brass transition-colors hover:bg-[var(--brass-ghost)] disabled:opacity-30 focus-visible:ring-1 focus-visible:ring-octo-brass"
+                    style={{ border: "1px solid var(--brass-dim)" }}
+                  >
+                    {testRunning ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Accept all */}
-          {fileCount > 0 && viewMode === "diff" && (
-            <button
-              onClick={handleAcceptAll}
-              aria-label="Accept all changes"
-              className="flex items-center gap-1.5 rounded-md px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-octo-brass transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass"
-              style={{
-                background: "var(--brass-ghost)",
-                border: "1px solid var(--brass-dim)",
-              }}
-              title="Stages every change. Commit from the left panel."
-            >
-              <CheckSquare size={12} />
-              Accept all
-            </button>
+          {/* AI review + Accept all — diff view, with changes to act on */}
+          {viewMode === "diff" && fileCount > 0 && (
+            <>
+              <button
+                onClick={() => setAiOpen((v) => !v)}
+                aria-label="Review with AI"
+                aria-pressed={aiOpen}
+                title="Review this change with AI"
+                className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.15em] text-octo-brass transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass"
+                style={{
+                  background: aiOpen ? "var(--brass-ghost)" : "transparent",
+                  border: "1px solid var(--brass-dim)",
+                }}
+              >
+                <Sparkles size={12} />
+                AI
+                {aiFindingCount != null && aiFindingCount > 0 && (
+                  <span className="rounded-full bg-[var(--brass-ghost)] px-1 text-[9px] tabular-nums text-octo-brass">
+                    {aiFindingCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={handleAcceptAll}
+                aria-label="Accept all changes"
+                className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-octo-brass transition-colors focus-visible:ring-1 focus-visible:ring-octo-brass"
+                style={{
+                  background: "var(--brass-ghost)",
+                  border: "1px solid var(--brass-dim)",
+                }}
+                title="Stages every change. Commit from the left panel."
+              >
+                <CheckSquare size={12} />
+                Accept all
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -406,6 +442,25 @@ export function ReviewCanvas({
         {/* Editor mode — render children (EditorTabs + EditorPane) */}
         {viewMode === "editor" && (
           <div className="absolute inset-0 flex flex-col">{children}</div>
+        )}
+
+        {/* AI review drawer — slides over the right of the diff. Clicking a
+            finding scrolls + flashes its line in the diff behind it; Edit opens
+            the file in the editor at the line. */}
+        {viewMode === "diff" && aiOpen && (
+          <aside
+            className="octo-fade-in absolute inset-y-0 right-0 z-20 flex w-[340px] flex-col border-l border-octo-hairline bg-octo-panel shadow-2xl"
+            aria-label="AI review"
+          >
+            <AiReviewPanel
+              embedded
+              workspaceId={workspaceId}
+              gitDiff={gitDiff}
+              onJump={jumpToDiff}
+              onEdit={(file, line) => onOpenFileAtLine?.(file, line ?? 1)}
+              onClose={() => setAiOpen(false)}
+            />
+          </aside>
         )}
       </div>
 
