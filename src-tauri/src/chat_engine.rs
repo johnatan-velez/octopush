@@ -368,6 +368,10 @@ pub struct ChatEngine {
     /// agentic loop stops before its next iteration. Mirrors the orchestrator's
     /// cancel registry.
     cancels: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    /// MCP server registry — connects to configured stdio MCP servers, injects
+    /// their tools into the loop, and proxies tool calls. Shared so the
+    /// `list_mcp_*` commands can read the same connections.
+    pub mcp: Arc<crate::mcp::McpRegistry>,
 }
 
 impl ChatEngine {
@@ -377,6 +381,7 @@ impl ChatEngine {
             client: shared_http_client().clone(),
             db,
             cancels: Arc::new(Mutex::new(HashMap::new())),
+            mcp: Arc::new(crate::mcp::McpRegistry::new()),
         }
     }
 
@@ -617,6 +622,34 @@ impl ChatEngine {
                 }
             }
         }
+
+        // ── MCP tools ─────────────────────────────────────────────
+        // Append tools exposed by configured MCP servers (namespaced
+        // `mcp__server__tool`). Unreachable servers are skipped inside
+        // list_tools. A skill's allowed-tools filter above doesn't touch these
+        // (MCP tools are opt-in via the server config, not the skill).
+        // Run the (blocking) MCP discovery off the async runtime thread, bounded
+        // by a timeout so a hung server can't freeze the turn.
+        {
+            let mcp = Arc::clone(&self.mcp);
+            let wp = workspace_path.clone();
+            let discovered = tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                tokio::task::spawn_blocking(move || mcp.list_tools(&wp)),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_default();
+            for t in discovered {
+                tools.push(LlmTool {
+                    name: t.namespaced,
+                    description: t.description,
+                    input_schema: t.input_schema,
+                });
+            }
+        }
+
         let mut total_input: u64 = 0;
         let mut total_output: u64 = 0;
 
@@ -866,7 +899,28 @@ impl ChatEngine {
                     started_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
                 });
 
-                let (result, ok) = execute_tool(&workspace_path, &u.name, &u.input);
+                // Route MCP tools (`mcp__server__tool`) to their server; all
+                // other names are built-in workspace tools. MCP calls run off
+                // the runtime thread with a timeout so a slow/hung server
+                // surfaces as a tool error instead of freezing the turn.
+                let (result, ok) = if crate::mcp::is_mcp_tool(&u.name) {
+                    let mcp = Arc::clone(&self.mcp);
+                    let wp = workspace_path.clone();
+                    let name = u.name.clone();
+                    let input = u.input.clone();
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        tokio::task::spawn_blocking(move || mcp.call(&wp, &name, &input)),
+                    )
+                    .await
+                    {
+                        Ok(Ok(Ok(out))) => (out, true),
+                        Ok(Ok(Err(e))) => (format!("MCP error: {e}"), false),
+                        _ => ("MCP error: tool call timed out".to_string(), false),
+                    }
+                } else {
+                    execute_tool(&workspace_path, &u.name, &u.input)
+                };
 
                 // ── Live card: announce completion (timing + status) ──
                 let _ = app.emit("chat://tool-end", &ToolEndEvent {
