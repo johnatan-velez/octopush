@@ -199,7 +199,7 @@ export interface PtyAttentionEvent {
 export interface ChatMessage {
   id: number;
   workspaceId: string;
-  role: "user" | "assistant" | "tool" | "error";
+  role: "user" | "assistant" | "tool" | "error" | "stopped";
   content: string;
   model: string | null;
   inputTokens: number | null;

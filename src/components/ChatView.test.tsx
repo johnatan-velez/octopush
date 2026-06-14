@@ -325,6 +325,35 @@ describe("ChatView — renders tool cards in the DOM", () => {
     expect(screen.getByText("Tell me a secret.")).toBeInTheDocument();
   });
 
+  it("renders a stopped marker as a quiet note, not a model bubble", () => {
+    useChatStore.setState({
+      messagesByWs: {
+        "ws-1": [
+          {
+            id: 1, workspaceId: "ws-1", role: "user", content: "do a big thing",
+            model: null, inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-05-17T10:00:00Z",
+          },
+          {
+            id: 2, workspaceId: "ws-1", role: "stopped", content: "Generation stopped.",
+            model: "claude-sonnet-4-6", inputTokens: 100, outputTokens: 20, costUsd: 0.001,
+            createdAt: "2026-05-17T10:00:01Z",
+          },
+        ],
+      },
+      streamingByWs: { "ws-1": false },
+    });
+
+    render(<ChatView workspaceId="ws-1" workspacePath="/tmp" />);
+
+    const note = screen.getByText("Generation stopped.");
+    expect(note).toBeInTheDocument();
+    // It must render as the stopped note, never as an assistant bubble with a
+    // model eyebrow.
+    expect(note.closest('[data-role="stopped"]')).not.toBeNull();
+    expect(note.closest('[data-role="assistant"]')).toBeNull();
+  });
+
   it("survives the done event: tool cards remain after streaming finishes", async () => {
     // The exact sequence the user reported as broken — user message,
     // tool executions, final assistant, done event. Tools must stay visible.

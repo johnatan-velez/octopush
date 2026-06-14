@@ -11,6 +11,8 @@ import {
 import { ipc } from "../../lib/ipc";
 import type { ModelInfo, ProviderConfig } from "../../lib/types";
 import { ModelPicker } from "../ModelPicker";
+import { EffortSelector } from "./EffortSelector";
+import { FadeSwap } from "../primitives/FadeSwap";
 
 interface Props {
   workspaceId: string;
@@ -33,6 +35,7 @@ export function Composer({ workspaceId, workspacePath }: Props) {
   const model = useChatStore((s) => s.model);
   const setModel = useChatStore((s) => s.setModel);
   const send = useChatStore((s) => s.send);
+  const stop = useChatStore((s) => s.stop);
   const overrideActive = useBudgetsStore((s) => s.overrideActive);
 
   const [input, setInputState] = useState("");
@@ -159,9 +162,10 @@ export function Composer({ workspaceId, workspacePath }: Props) {
           style={{ maxHeight: "calc(8 * 1.25rem + 1.5rem)" }}
         />
 
-        {/* Control bar — model on the left, cost + send on the right. */}
+        {/* Control bar — model + effort on the left, cost + send/stop on the right. */}
         <div className="flex items-center gap-3 px-3 pb-2.5">
           <ModelPicker activeModel={model} onSelectModel={setModel} />
+          <EffortSelector />
 
           {inlineCost !== null && (
             <div
@@ -174,28 +178,32 @@ export function Composer({ workspaceId, workspacePath }: Props) {
             </div>
           )}
 
-          <button
-            onClick={handleSend}
-            disabled={!canSend}
-            title="Send (Enter)"
-            aria-label="Send message"
-            className={clsx(
-              "flex h-7 items-center gap-1.5 rounded-md px-3 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors duration-[180ms] disabled:cursor-not-allowed disabled:opacity-40",
-              inlineCost === null && "ml-auto",
+          {/* Send while idle, Stop while streaming — crossfades in one slot so
+              the bar never shifts (stability S2). */}
+          <FadeSwap swapKey={streaming ? "stop" : "send"} className={clsx(inlineCost === null && "ml-auto")}>
+            {streaming ? (
+              <ComposerActionButton
+                onClick={() => stop(workspaceId)}
+                title="Stop generating"
+                label="Stop"
+                glyph="◼"
+                color="var(--color-octo-rouge)"
+                bg="var(--rouge-ghost)"
+                border="1px solid var(--rouge-border)"
+              />
+            ) : (
+              <ComposerActionButton
+                onClick={handleSend}
+                disabled={!canSend}
+                title="Send (Enter)"
+                label="Send"
+                glyph="⟶"
+                color={canSend ? "var(--color-octo-brass)" : "var(--color-octo-mute)"}
+                bg={canSend ? "var(--brass-ghost)" : "transparent"}
+                border={canSend ? "1px solid var(--brass-dim)" : "1px solid var(--color-octo-hairline)"}
+              />
             )}
-            style={{
-              color: canSend ? "var(--color-octo-brass)" : "var(--color-octo-mute)",
-              background: canSend ? "var(--brass-ghost)" : "transparent",
-              border: canSend
-                ? "1px solid var(--brass-dim)"
-                : "1px solid var(--color-octo-hairline)",
-            }}
-          >
-            <span style={{ fontSize: 12, lineHeight: 1 }} aria-hidden>
-              ⟶
-            </span>
-            Send
-          </button>
+          </FadeSwap>
         </div>
       </div>
 
@@ -204,5 +212,44 @@ export function Composer({ workspaceId, workspacePath }: Props) {
         Enter to send · ⇧↵ for newline · ↑ for history
       </div>
     </div>
+  );
+}
+
+/** The composer's primary action button — Send (brass) or Stop (rouge). One
+ *  shape, parameterized by accent tokens, so the two states can't drift. All
+ *  colors are CSS-var tokens; no hardcoded literals. */
+function ComposerActionButton({
+  onClick,
+  disabled = false,
+  title,
+  label,
+  glyph,
+  color,
+  bg,
+  border,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  title: string;
+  label: string;
+  glyph: string;
+  color: string;
+  bg: string;
+  border: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={title}
+      className="flex h-7 items-center gap-1.5 rounded-md px-3 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors duration-[180ms] disabled:cursor-not-allowed disabled:opacity-40"
+      style={{ color, background: bg, border }}
+    >
+      <span style={{ fontSize: 12, lineHeight: 1 }} aria-hidden>
+        {glyph}
+      </span>
+      {label}
+    </button>
   );
 }

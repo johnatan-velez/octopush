@@ -206,6 +206,19 @@ export function ChatMessage({ message, onOpenInEditor }: Props) {
 
   if (!content || !content.trim()) return null;
 
+  // A cancelled turn — a quiet, centered system note, never a model bubble.
+  if (role === "stopped") {
+    return (
+      <div
+        data-role="stopped"
+        className="flex items-center justify-center gap-2 py-1 font-mono text-[9px] uppercase tracking-[0.25em] text-octo-mute"
+      >
+        <span aria-hidden>◼</span>
+        {content}
+      </div>
+    );
+  }
+
   if (role === "user") {
     return (
       <div data-role="user" className="chat-selectable flex flex-col gap-1.5">
