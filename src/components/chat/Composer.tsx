@@ -10,8 +10,15 @@ import {
 } from "../../lib/cost";
 import { ipc } from "../../lib/ipc";
 import type { ModelInfo, ProviderConfig } from "../../lib/types";
+import {
+  findActiveMention,
+  rankFiles,
+  extractMentions,
+  applyMention,
+} from "../../lib/mentions";
 import { ModelPicker } from "../ModelPicker";
 import { EffortSelector } from "./EffortSelector";
+import { MentionPopover } from "./MentionPopover";
 import { FadeSwap } from "../primitives/FadeSwap";
 
 interface Props {
@@ -53,12 +60,79 @@ export function Composer({ workspaceId, workspacePath }: Props) {
   const historyRef = useRef<string[]>([]);
   const historyIdxRef = useRef<number>(-1); // -1 = not navigating
 
+  // ── @file mentions ──────────────────────────────────────────────────
+  // Worktree file catalog (loaded once per workspace) + the active mention
+  // popover state. filesSetRef gives extractMentions an O(1) membership test.
+  const [files, setFiles] = useState<string[]>([]);
+  const filesSetRef = useRef<Set<string>>(new Set());
+  const [mention, setMention] = useState<{ query: string; start: number; caret: number } | null>(null);
+  const [mentionItems, setMentionItems] = useState<string[]>([]);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  // Caret to apply after a mention insertion re-renders the textarea.
+  const pendingCaretRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    ipc
+      .listWorkspaceFiles(workspacePath)
+      .then((paths) => {
+        if (cancelled) return;
+        setFiles(paths);
+        filesSetRef.current = new Set(paths);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [workspacePath]);
+
+  function closeMention() {
+    setMention(null);
+    setMentionItems([]);
+    setMentionIndex(0);
+  }
+
+  /** Recompute the active mention from the textarea's current value + caret. */
+  function refreshMention(value: string, caret: number) {
+    const m = findActiveMention(value, caret);
+    if (!m) {
+      closeMention();
+      return;
+    }
+    const items = rankFiles(files, m.query);
+    setMention({ ...m, caret });
+    setMentionItems(items);
+    setMentionIndex(0);
+  }
+
+  function selectMention(path: string) {
+    if (!mention) return;
+    const { text, caret } = applyMention(inputRef.current, mention.start, mention.caret, path);
+    pendingCaretRef.current = caret;
+    setInput(text);
+    closeMention();
+  }
+
+  // After a mention insertion, restore focus + caret to the textarea.
+  useEffect(() => {
+    if (pendingCaretRef.current == null) return;
+    const ta = textareaRef.current;
+    const pos = pendingCaretRef.current;
+    pendingCaretRef.current = null;
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(pos, pos);
+    }
+  }, [input]);
+
   // Reset per-workspace prompt history when switching workspaces.
   useEffect(() => {
     historyRef.current = [];
     historyIdxRef.current = -1;
     setInput("");
+    closeMention();
     if (textareaRef.current) textareaRef.current.style.height = "auto";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
   // ── Inline cost preview ─────────────────────────────────────────────
@@ -84,6 +158,7 @@ export function Composer({ workspaceId, workspacePath }: Props) {
     const val = e.target.value;
     setInput(val);
     historyIdxRef.current = -1; // any manual edit exits history navigation
+    refreshMention(val, e.target.selectionStart ?? val.length);
     const ta = e.target;
     ta.style.height = "auto";
     const lineHeight = 20;
@@ -96,15 +171,64 @@ export function Composer({ workspaceId, workspacePath }: Props) {
     if (!trimmed || streaming) return;
     setInput("");
     historyIdxRef.current = -1;
+    closeMention();
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-    // Prepend to history, de-duplicating only consecutive duplicates.
+    // Prepend to history, de-duplicating only consecutive duplicates. History
+    // keeps the user's literal text (with @mentions), not the expansion.
     if (historyRef.current[0] !== trimmed) {
       historyRef.current = [trimmed, ...historyRef.current];
     }
-    send(workspaceId, workspacePath, trimmed);
+    // Expand any @file mentions into fenced context blocks appended to the
+    // message, so the model receives the referenced files' contents. The chat
+    // shows exactly what was sent (transparent). Files are read with a byte cap.
+    const mentions = extractMentions(trimmed, filesSetRef.current);
+    if (mentions.length === 0) {
+      send(workspaceId, workspacePath, trimmed);
+      return;
+    }
+    void (async () => {
+      const blocks = await Promise.all(
+        mentions.map(async (rel) => {
+          try {
+            const res = await ipc.readFileChecked(`${workspacePath}/${rel}`, 64_000);
+            if (res.kind === "text") {
+              return `\n\n§ ${rel}\n\`\`\`\n${res.content}\n\`\`\``;
+            }
+            return `\n\n§ ${rel} _(not included: ${res.kind})_`;
+          } catch {
+            return "";
+          }
+        }),
+      );
+      send(workspaceId, workspacePath, trimmed + blocks.join(""));
+    })();
   }, [streaming, send, workspaceId, workspacePath]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // ── Mention popover takes precedence over history/send while open ──
+    if (mention && mentionItems.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((i) => (i + 1) % mentionItems.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((i) => (i - 1 + mentionItems.length) % mentionItems.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        selectMention(mentionItems[mentionIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeMention();
+        return;
+      }
+    }
+
     const hist = historyRef.current;
     const idx = historyIdxRef.current;
 
@@ -144,19 +268,32 @@ export function Composer({ workspaceId, workspacePath }: Props) {
     <div className="px-6 pb-4 pt-3">
       <div
         className={clsx(
-          "rounded-lg border bg-octo-onyx transition-colors duration-[180ms]",
+          "relative rounded-lg border bg-octo-onyx transition-colors duration-[180ms]",
           streaming
             ? "border-octo-hairline opacity-60"
             : "border-octo-hairline focus-within:border-[var(--brass-dim)]",
         )}
       >
+        {mention && (
+          <MentionPopover
+            items={mentionItems}
+            activeIndex={mentionIndex}
+            onSelect={selectMention}
+            onHover={setMentionIndex}
+          />
+        )}
         <textarea
           ref={textareaRef}
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
+          onBlur={() => {
+            // Let a popover mouse-down selection land first (it preventDefaults
+            // blur), then dismiss on a genuine focus loss.
+            setTimeout(closeMention, 120);
+          }}
           disabled={streaming}
-          placeholder="Ask anything…"
+          placeholder="Ask anything…  ⟶  @ to reference a file"
           rows={1}
           className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[14px] leading-[1.5] text-octo-ivory outline-none placeholder:font-serif placeholder:not-italic placeholder:text-octo-mute"
           style={{ maxHeight: "calc(8 * 1.25rem + 1.5rem)" }}
