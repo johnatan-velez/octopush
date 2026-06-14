@@ -3813,6 +3813,23 @@ fn expand_tilde(path: &str) -> String {
     }
 }
 
+// ── MCP server integration (Connect to Claude Code) ───────────────────────
+
+/// Current state of the bundled `octopush-mcp` server and its Claude Code
+/// registration — drives the Integrations settings card.
+#[tauri::command]
+pub async fn mcp_connection_status() -> AppResult<crate::mcp_setup::McpStatus> {
+    Ok(crate::mcp_setup::status())
+}
+
+/// One-click: register the bundled `octopush-mcp` server with Claude Code at
+/// user scope. Returns a structured result (with a manual fallback command) so
+/// the UI can guide the user when the CLI isn't found.
+#[tauri::command]
+pub async fn connect_claude_code() -> AppResult<crate::mcp_setup::McpConnectResult> {
+    Ok(crate::mcp_setup::connect())
+}
+
 #[cfg(test)]
 mod ai_complete_tests {
     use crate::providers::{LlmContent, LlmRole};

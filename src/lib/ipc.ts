@@ -787,7 +787,31 @@ export const ipc = {
         jsonSchema: opts?.jsonSchema ?? null,
       },
     ),
+
+  // ─── MCP server (Connect to Claude Code) ──────────────────────────
+  mcpConnectionStatus: () =>
+    invoke<McpStatus>("mcp_connection_status"),
+  connectClaudeCode: () =>
+    invoke<McpConnectResult>("connect_claude_code"),
 };
+
+/** State of the bundled octopush-mcp server + its Claude Code registration. */
+export interface McpStatus {
+  binaryPath: string | null;
+  binaryFound: boolean;
+  claudeFound: boolean;
+  registered: boolean;
+  manualCommand: string;
+}
+
+/** Result of a one-click "Connect to Claude Code". */
+export interface McpConnectResult {
+  ok: boolean;
+  registered: boolean;
+  message: string;
+  manualCommand: string;
+  binaryPath: string | null;
+}
 
 /** Tauri event names emitted by the orchestrator. */
 export const RUN_EVENTS = {

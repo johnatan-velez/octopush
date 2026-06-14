@@ -17,6 +17,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "octopush-pty-server"
 path = "src/bin/octopush-pty-server/main.rs"
 
+# Standalone Model Context Protocol server. Speaks JSON-RPC 2.0 over stdio and
+# exposes Octopush's pipeline-authoring and workspace surface to MCP clients
+# (Claude Code first). Drives `octopush_lib::db` directly — no app required.
+[[bin]]
+name = "octopush-mcp"
+path = "src/bin/octopush-mcp/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -4,8 +4,11 @@ pub mod agent_adapter;
 pub mod chat_engine;
 mod commands;
 pub mod context_guard;
-mod db;
-mod error;
+// `db` and `error` are public so the `octopush-mcp` binary (a sibling bin in
+// this crate) can drive the data layer directly. The MCP server is a thin,
+// read-and-author surface over the same SQLite store the desktop app uses.
+pub mod db;
+pub mod error;
 pub mod git_ops;
 pub mod git_url;
 pub mod provider_router;
@@ -25,6 +28,7 @@ pub mod issue_tracker;
 pub mod github;
 pub mod orchestrator;
 pub mod git_lock;
+pub mod mcp_setup;
 
 #[cfg(test)]
 mod tests;
@@ -292,6 +296,9 @@ pub fn run() {
             commands::save_issue_tracker_config,
             // AI primitive (G5)
             commands::ai_complete,
+            // MCP server integration (Connect to Claude Code)
+            commands::mcp_connection_status,
+            commands::connect_claude_code,
         ])
         .setup(|app| {
             // Restore sessions that were active when the app last closed.
