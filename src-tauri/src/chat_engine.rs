@@ -56,15 +56,33 @@ pub struct ChatStreamEvent {
     pub output_tokens: Option<u64>,
 }
 
-/// Emitted when Claude calls a tool — the frontend shows this inline.
+/// Emitted the moment a tool BEGINS executing — before the (potentially slow)
+/// `execute_tool` call returns. Lets the frontend show a live "running" card
+/// with an elapsed timer instead of a silent gap. Reconciled to the resolved
+/// `ToolCallCard` when the matching `chat://message-added` (role=tool) arrives,
+/// correlated by `call_id` (the provider's `tool_use.id`).
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolUseEvent {
+pub struct ToolStartEvent {
     pub workspace_id: String,
+    pub call_id: String,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
-    pub result: String,
+    pub started_at: String,
 }
+
+/// Emitted the moment a tool FINISHES executing. Carries timing + a best-effort
+/// success flag so the live card can show a duration and flip to a failed
+/// (rouge) state before the resolved card takes over.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolEndEvent {
+    pub workspace_id: String,
+    pub call_id: String,
+    pub ok: bool,
+    pub duration_ms: u64,
+}
+
 
 /// Emitted whenever a chat message is persisted to the DB.
 /// Carries the DB rowid + the full message row so the frontend can append
@@ -153,7 +171,11 @@ fn tool_definitions() -> serde_json::Value {
 
 // ─── Tool execution ───────────────────────────────────────────────
 
-pub(crate) fn execute_tool(workspace_path: &Path, name: &str, input: &serde_json::Value) -> String {
+/// Execute a tool and return `(result_text, ok)`. `ok` is a STRUCTURAL success
+/// signal — `run_command` reports the process exit status, file ops report
+/// whether the syscall succeeded — never a sniff of the result text. Callers
+/// that only want the text can ignore the bool (`let (result, _) = …`).
+pub(crate) fn execute_tool(workspace_path: &Path, name: &str, input: &serde_json::Value) -> (String, bool) {
     match name {
         "run_command" => {
             let cmd = input.get("command").and_then(|c| c.as_str()).unwrap_or("");
@@ -185,9 +207,9 @@ pub(crate) fn execute_tool(workspace_path: &Path, name: &str, input: &serde_json
                         result.truncate(50_000);
                         result.push_str("\n... (truncated)");
                     }
-                    result
+                    (result, output.status.success())
                 }
-                Err(e) => format!("Failed to execute command: {e}"),
+                Err(e) => (format!("Failed to execute command: {e}"), false),
             }
         }
         "read_file" => {
@@ -196,12 +218,12 @@ pub(crate) fn execute_tool(workspace_path: &Path, name: &str, input: &serde_json
             match std::fs::read_to_string(&full) {
                 Ok(content) => {
                     if content.len() > 100_000 {
-                        format!("{}... (truncated, {} bytes total)", &content[..100_000], content.len())
+                        (format!("{}... (truncated, {} bytes total)", &content[..100_000], content.len()), true)
                     } else {
-                        content
+                        (content, true)
                     }
                 }
-                Err(e) => format!("Error reading {path}: {e}"),
+                Err(e) => (format!("Error reading {path}: {e}"), false),
             }
         }
         "write_file" => {
@@ -212,8 +234,8 @@ pub(crate) fn execute_tool(workspace_path: &Path, name: &str, input: &serde_json
                 let _ = std::fs::create_dir_all(parent);
             }
             match std::fs::write(&full, content) {
-                Ok(()) => format!("Wrote {} bytes to {path}", content.len()),
-                Err(e) => format!("Error writing {path}: {e}"),
+                Ok(()) => (format!("Wrote {} bytes to {path}", content.len()), true),
+                Err(e) => (format!("Error writing {path}: {e}"), false),
             }
         }
         "list_files" => {
@@ -233,15 +255,15 @@ pub(crate) fn execute_tool(workspace_path: &Path, name: &str, input: &serde_json
                     }
                     lines.sort();
                     if lines.is_empty() {
-                        "(empty directory)".to_string()
+                        ("(empty directory)".to_string(), true)
                     } else {
-                        lines.join("\n")
+                        (lines.join("\n"), true)
                     }
                 }
-                Err(e) => format!("Error listing {path}: {e}"),
+                Err(e) => (format!("Error listing {path}: {e}"), false),
             }
         }
-        _ => format!("Unknown tool: {name}"),
+        _ => (format!("Unknown tool: {name}"), false),
     }
 }
 
@@ -627,7 +649,41 @@ impl ChatEngine {
             let mut tool_results: Vec<LlmToolResult> = Vec::new();
             for u in &response.tool_uses {
                 tracing::info!(tool = %u.name, "executing tool");
-                let result = execute_tool(&workspace_path, &u.name, &u.input);
+
+                // Build the display-safe input ONCE, up front: strip large
+                // write_file bodies (already destined for disk) so neither the
+                // live-card event nor the persisted record carries multi-KB
+                // JSON. Reused for tool-start, persistence, and the message.
+                let input_for_display = if u.name == "write_file" {
+                    let mut display = u.input.clone();
+                    if let Some(content) = display.get("content").and_then(|c| c.as_str()) {
+                        let len = content.len();
+                        display["content"] = serde_json::json!(format!("({len} chars, written to disk)"));
+                    }
+                    display
+                } else {
+                    u.input.clone()
+                };
+
+                // ── Live card: announce the tool is starting ──────────
+                let call_started = std::time::Instant::now();
+                let _ = app.emit("chat://tool-start", &ToolStartEvent {
+                    workspace_id: request.workspace_id.clone(),
+                    call_id: u.id.clone(),
+                    tool_name: u.name.clone(),
+                    tool_input: input_for_display.clone(),
+                    started_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                });
+
+                let (result, ok) = execute_tool(&workspace_path, &u.name, &u.input);
+
+                // ── Live card: announce completion (timing + status) ──
+                let _ = app.emit("chat://tool-end", &ToolEndEvent {
+                    workspace_id: request.workspace_id.clone(),
+                    call_id: u.id.clone(),
+                    ok,
+                    duration_ms: call_started.elapsed().as_millis() as u64,
+                });
 
                 // If the tool wrote a file, record it in file_edits for the Review canvas.
                 if u.name == "write_file" {
@@ -646,22 +702,12 @@ impl ChatEngine {
                     }
                 }
 
-                // For persistence and events, strip large file contents from
-                // the input (the file is already on disk). This prevents
-                // multi-KB JSON payloads that slow down events and DB.
-                let input_for_display = if u.name == "write_file" {
-                    let mut display = u.input.clone();
-                    if let Some(content) = display.get("content").and_then(|c| c.as_str()) {
-                        let len = content.len();
-                        display["content"] = serde_json::json!(format!("({len} chars, written to disk)"));
-                    }
-                    display
-                } else {
-                    u.input.clone()
-                };
-
                 // Persist tool execution as role="tool" and emit message-added.
+                // `callId` correlates this resolved card back to the live card
+                // created by the earlier tool-start event so the frontend can
+                // retire the spinner without a flash.
                 let tool_record = serde_json::json!({
+                    "callId": u.id,
                     "toolName": u.name,
                     "toolInput": input_for_display,
                     "result": result,
@@ -788,4 +834,36 @@ fn git_status_files(workspace_path: &std::path::Path) -> std::collections::HashS
         files.insert(path.trim().to_string());
     }
     files
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execute_tool_reports_structural_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let wp = dir.path();
+
+        // run_command: success/failure by EXIT CODE, not output text.
+        let (_, ok) = execute_tool(wp, "run_command", &serde_json::json!({"command": "exit 0"}));
+        assert!(ok, "exit 0 is success");
+        let (_, ok) = execute_tool(wp, "run_command", &serde_json::json!({"command": "exit 3"}));
+        assert!(!ok, "non-zero exit is failure");
+        // A successful command whose stdout merely *contains* 'Error' is still ok.
+        let (_, ok) = execute_tool(wp, "run_command", &serde_json::json!({"command": "echo 'Error: not really'"}));
+        assert!(ok, "stdout text must not flip the status");
+
+        // File ops: ok reflects whether the syscall succeeded.
+        let (_, ok) = execute_tool(wp, "read_file", &serde_json::json!({"path": "missing.txt"}));
+        assert!(!ok, "reading a missing file fails");
+        let (_, ok) = execute_tool(wp, "write_file", &serde_json::json!({"path": "a.txt", "content": "hi"}));
+        assert!(ok, "writing succeeds");
+        let (_, ok) = execute_tool(wp, "list_files", &serde_json::json!({"path": "."}));
+        assert!(ok, "listing an existing dir succeeds");
+
+        // Unknown tool → failure.
+        let (_, ok) = execute_tool(wp, "frobnicate", &serde_json::json!({}));
+        assert!(!ok);
+    }
 }

@@ -1,6 +1,6 @@
 import { useState, type CSSProperties } from "react";
 import { ipc } from "../lib/ipc";
-import { copyToClipboard } from "../lib/clipboard";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import type { ToolExecution } from "../stores/chatStore";
 
 interface Props {
@@ -12,12 +12,38 @@ interface Props {
 }
 
 // Tool name → uppercase mono label. Falls back to the raw tool name.
-const TOOL_LABELS: Record<string, string> = {
+export const TOOL_LABELS: Record<string, string> = {
   run_command: "RUN",
   read_file: "READ",
   write_file: "WRITE",
   list_files: "LIST",
 };
+
+/** The card header label for a tool name (e.g. `write_file` → `WRITE`). */
+export function toolLabel(toolName: string): string {
+  return TOOL_LABELS[toolName] ?? toolName.toUpperCase();
+}
+
+/** One-line summary of a tool call from its input (path or command). Shared by
+ *  the resolved ToolCallCard and the live "running" card. */
+export function summarizeTool(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string {
+  switch (toolName) {
+    case "run_command": {
+      const cmd = String(toolInput?.command ?? "");
+      return cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
+    }
+    case "write_file":
+    case "read_file":
+      return String(toolInput?.path ?? "");
+    case "list_files":
+      return String(toolInput?.path ?? ".");
+    default:
+      return toolName;
+  }
+}
 
 // Onyx & Brass design tokens. Defined inline because this component renders
 // inside react-markdown siblings — the previous fix cycle (commit d9c1517)
@@ -75,10 +101,10 @@ const headerStyle: CSSProperties = {
 
 export function ToolCallCard({ tool, workspacePath, onOpenInEditor }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyFeedback();
 
-  const label = TOOL_LABELS[tool.toolName] ?? tool.toolName.toUpperCase();
-  const summary = buildSummary(tool);
+  const label = toolLabel(tool.toolName);
+  const summary = summarizeTool(tool.toolName, tool.toolInput);
   const filePath = getFilePath(tool);
   const isWebFile = filePath ? /\.(html?|htm)$/i.test(filePath) : false;
 
@@ -244,12 +270,7 @@ export function ToolCallCard({ tool, workspacePath, onOpenInEditor }: Props) {
             <span
               role="button"
               tabIndex={0}
-              onClick={() => {
-                // Inline "copied" label is the success feedback; no toast.
-                void copyToClipboard(tool.result);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
+              onClick={() => copy(tool.result)}
               onKeyDown={() => {}}
               style={{
                 fontSize: 9,
@@ -288,22 +309,6 @@ export function ToolCallCard({ tool, workspacePath, onOpenInEditor }: Props) {
       )}
     </div>
   );
-}
-
-function buildSummary(tool: ToolExecution): string {
-  switch (tool.toolName) {
-    case "run_command": {
-      const cmd = String(tool.toolInput?.command ?? "");
-      return cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
-    }
-    case "write_file":
-    case "read_file":
-      return String(tool.toolInput?.path ?? "");
-    case "list_files":
-      return String(tool.toolInput?.path ?? ".");
-    default:
-      return tool.toolName;
-  }
 }
 
 function getFilePath(tool: ToolExecution): string | null {
