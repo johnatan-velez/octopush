@@ -8,6 +8,7 @@ import {
   BarChart, Bar, Cell,
 } from "recharts";
 import { ipc } from "../lib/ipc";
+import { useProviderStore } from "../stores/providerStore";
 import type { McpStatus } from "../lib/ipc";
 import { useTokenStore } from "../stores/tokenStore";
 import { useThemeStore } from "../stores/themeStore";
@@ -451,6 +452,7 @@ function ToggleRow({
 const BUILTIN_PROVIDER_NAMES = new Set(["anthropic", "openai", "deepseek", "ollama"]);
 
 export function ModelsPane() {
+  const refreshProviders = useProviderStore((s) => s.refresh);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [baseUrls, setBaseUrls] = useState<Record<string, string>>({});
@@ -500,8 +502,9 @@ export function ModelsPane() {
           Object.entries(baseUrls).filter(([, v]) => v && v.length > 0),
         ),
       });
-      // Refresh models so the picker reflects edits
-      await ipc.listModels?.();
+      // Refresh the shared provider catalog so all ModelPicker instances update
+      // immediately without requiring an app restart.
+      await refreshProviders();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {

@@ -1,18 +1,29 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { useProviderStore } from "../stores/providerStore";
 
-// ─── Mocks (must be set up BEFORE the component is imported) ──────────────────
+// ─── Mocks ────────────────────────────────────────────────────────────────────
 
-const listProvidersMock = vi.fn().mockResolvedValue([]);
-
+// ipc is still imported transitively; stub the minimum required.
 vi.mock("../lib/ipc", () => ({
   ipc: {
-    listProviders: listProvidersMock,
+    listProviders: vi.fn().mockResolvedValue([]),
   },
 }));
 
 // Dynamic import AFTER mocks are wired.
 const { ModelPicker } = await import("./ModelPicker");
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// Seed the shared providerStore directly — ModelPicker reads from there now.
+function seedProviders(providers: unknown[]) {
+  useProviderStore.setState({ providers: providers as never, loading: false });
+}
+
+beforeEach(() => {
+  useProviderStore.setState({ providers: [], loading: false });
+});
 
 // ─── Shared fixture ───────────────────────────────────────────────────────────
 
@@ -60,28 +71,26 @@ const twoProviders = [
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("ModelPicker", () => {
-  it("chip shows the active model name after providers load", async () => {
-    listProvidersMock.mockResolvedValueOnce(twoProviders);
+  it("chip shows the active model name after providers load", () => {
+    seedProviders(twoProviders);
     render(
       <ModelPicker
         activeModel="claude-opus-4-6"
         onSelectModel={vi.fn()}
       />,
     );
-    await act(async () => { await Promise.resolve(); });
 
     expect(screen.getByText("Opus 4.6")).toBeInTheDocument();
   });
 
-  it("opens dropdown on chip click and shows both provider eyebrows + models", async () => {
-    listProvidersMock.mockResolvedValueOnce(twoProviders);
+  it("opens dropdown on chip click and shows both provider eyebrows + models", () => {
+    seedProviders(twoProviders);
     render(
       <ModelPicker
         activeModel="claude-opus-4-6"
         onSelectModel={vi.fn()}
       />,
     );
-    await act(async () => { await Promise.resolve(); });
 
     // Chip is visible; dropdown is not yet open.
     const chip = screen.getByRole("button", { name: /Opus 4\.6/i });
@@ -96,8 +105,8 @@ describe("ModelPicker", () => {
     expect(screen.getByText("GPT-4o")).toBeInTheDocument();
   });
 
-  it("calls onSelectModel with the model id when an inactive model row is clicked", async () => {
-    listProvidersMock.mockResolvedValueOnce(twoProviders);
+  it("calls onSelectModel with the model id when an inactive model row is clicked", () => {
+    seedProviders(twoProviders);
     const onSelect = vi.fn();
     render(
       <ModelPicker
@@ -105,7 +114,6 @@ describe("ModelPicker", () => {
         onSelectModel={onSelect}
       />,
     );
-    await act(async () => { await Promise.resolve(); });
 
     // Open dropdown.
     fireEvent.click(screen.getByRole("button", { name: /Opus 4\.6/i }));
@@ -114,8 +122,8 @@ describe("ModelPicker", () => {
     expect(onSelect).toHaveBeenCalledWith("gpt-4o");
   });
 
-  it("closes dropdown when clicking outside", async () => {
-    listProvidersMock.mockResolvedValueOnce(twoProviders);
+  it("closes dropdown when clicking outside", () => {
+    seedProviders(twoProviders);
     render(
       <div>
         <ModelPicker
@@ -125,7 +133,6 @@ describe("ModelPicker", () => {
         <div data-testid="outside">outside</div>
       </div>,
     );
-    await act(async () => { await Promise.resolve(); });
 
     // Open.
     fireEvent.click(screen.getByRole("button", { name: /Opus 4\.6/i }));
@@ -136,8 +143,8 @@ describe("ModelPicker", () => {
     expect(screen.queryByText("ANTHROPIC")).not.toBeInTheDocument();
   });
 
-  it("renders tag pills next to a model when the provider exposes tags", async () => {
-    listProvidersMock.mockResolvedValueOnce([
+  it("renders tag pills next to a model when the provider exposes tags", () => {
+    seedProviders([
       {
         ...twoProviders[0],
         models: [
@@ -151,7 +158,6 @@ describe("ModelPicker", () => {
     render(
       <ModelPicker activeModel="claude-opus-4-6" onSelectModel={vi.fn()} />,
     );
-    await act(async () => { await Promise.resolve(); });
 
     fireEvent.click(screen.getByRole("button", { name: /Opus 4\.6/i }));
     // The tags appear once in the Recommended section + once in the provider
@@ -160,16 +166,15 @@ describe("ModelPicker", () => {
     expect(screen.getAllByText("best reasoning").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("pins recently-used models into a Recents section read from localStorage", async () => {
+  it("pins recently-used models into a Recents section read from localStorage", () => {
     localStorage.setItem(
       "octopush.modelPicker.recents",
       JSON.stringify(["gpt-4o"]),
     );
-    listProvidersMock.mockResolvedValueOnce(twoProviders);
+    seedProviders(twoProviders);
     render(
       <ModelPicker activeModel="claude-opus-4-6" onSelectModel={vi.fn()} />,
     );
-    await act(async () => { await Promise.resolve(); });
 
     fireEvent.click(screen.getByRole("button", { name: /Opus 4\.6/i }));
     expect(screen.getByText("Recents")).toBeInTheDocument();
@@ -178,12 +183,11 @@ describe("ModelPicker", () => {
     localStorage.clear();
   });
 
-  it("appends a freshly selected model to the front of the Recents list", async () => {
+  it("appends a freshly selected model to the front of the Recents list", () => {
     localStorage.clear();
-    listProvidersMock.mockResolvedValueOnce(twoProviders);
+    seedProviders(twoProviders);
     const onSelect = vi.fn();
     render(<ModelPicker activeModel="claude-opus-4-6" onSelectModel={onSelect} />);
-    await act(async () => { await Promise.resolve(); });
 
     fireEvent.click(screen.getByRole("button", { name: /Opus 4\.6/i }));
     fireEvent.click(screen.getByText("GPT-4o"));
@@ -199,8 +203,8 @@ describe("ModelPicker", () => {
   // global AppTopBar Settings button — the model row no longer
   // duplicates that access point.
 
-  it("shows Recommended section with intent rows when tags match", async () => {
-    listProvidersMock.mockResolvedValueOnce([
+  it("shows Recommended section with intent rows when tags match", () => {
+    seedProviders([
       {
         ...twoProviders[0],
         models: [
@@ -212,7 +216,6 @@ describe("ModelPicker", () => {
       },
     ]);
     render(<ModelPicker activeModel="claude-opus-4-6" onSelectModel={vi.fn()} />);
-    await act(async () => { await Promise.resolve(); });
 
     fireEvent.click(screen.getByRole("button", { name: /Opus 4\.6/i }));
     expect(screen.getByText("Recommended")).toBeInTheDocument();
@@ -221,7 +224,7 @@ describe("ModelPicker", () => {
     expect(screen.getByText("For cost")).toBeInTheDocument();
   });
 
-  it("filters provider list to local-only when toggle is pressed", async () => {
+  it("filters provider list to local-only when toggle is pressed", () => {
     const localProvider = {
       ...twoProviders[1],
       name: "ollama",
@@ -238,9 +241,8 @@ describe("ModelPicker", () => {
         },
       ],
     };
-    listProvidersMock.mockResolvedValueOnce([twoProviders[0], localProvider]);
+    seedProviders([twoProviders[0], localProvider]);
     render(<ModelPicker activeModel="claude-opus-4-6" onSelectModel={vi.fn()} />);
-    await act(async () => { await Promise.resolve(); });
 
     fireEvent.click(screen.getByRole("button", { name: /Opus 4\.6/i }));
     expect(screen.getByText("ANTHROPIC")).toBeInTheDocument();
@@ -252,12 +254,11 @@ describe("ModelPicker", () => {
     expect(screen.getByText("OLLAMA · local")).toBeInTheDocument();
   });
 
-  it("renders per-provider rate (per-million) in the dropdown — never the dynamic per-turn estimate", async () => {
-    listProvidersMock.mockResolvedValueOnce(twoProviders);
+  it("renders per-provider rate (per-million) in the dropdown — never the dynamic per-turn estimate", () => {
+    seedProviders(twoProviders);
     render(
       <ModelPicker activeModel="claude-opus-4-6" onSelectModel={vi.fn()} />,
     );
-    await act(async () => { await Promise.resolve(); });
 
     fireEvent.click(screen.getByRole("button", { name: /Opus 4\.6/i }));
     // No "≈" estimate anywhere — the dropdown is a static reference surface.
@@ -268,8 +269,8 @@ describe("ModelPicker", () => {
 });
 
 describe("ModelPicker dropdown escapes clipping containers", () => {
-  it("renders the open panel OUTSIDE the overflow-clipped container (portal)", async () => {
-    listProvidersMock.mockResolvedValueOnce([
+  it("renders the open panel OUTSIDE the overflow-clipped container (portal)", () => {
+    seedProviders([
       {
         name: "anthropic",
         enabled: true,
@@ -288,9 +289,9 @@ describe("ModelPicker dropdown escapes clipping containers", () => {
         <ModelPicker activeModel="m1" onSelectModel={() => {}} />
       </div>,
     );
-    const chip = await screen.findByRole("button", { name: /Model One/i });
+    const chip = screen.getByRole("button", { name: /Model One/i });
     fireEvent.click(chip);
-    const listbox = await screen.findByRole("listbox");
+    const listbox = screen.getByRole("listbox");
     const clip = screen.getByTestId("clip");
     // The dropdown must NOT be nested inside the overflow-clipped container.
     expect(clip.contains(listbox)).toBe(false);

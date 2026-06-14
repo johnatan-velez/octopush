@@ -49,6 +49,7 @@ import { useTokenStore } from "./stores/tokenStore";
 import { useTerminalsStore } from "./stores/terminalsStore";
 import { useChatStore } from "./stores/chatStore";
 import { useBudgetsStore } from "./stores/budgetsStore";
+import { useProviderStore } from "./stores/providerStore";
 import type { ProjectGroup } from "./components/WorkspaceRail";
 import { listen } from "@tauri-apps/api/event";
 import { deriveChatTitle, deriveChatMeta, formatRelTime } from "./lib/chatTitle";
@@ -80,6 +81,7 @@ function App() {
   // Narrow per-field selectors (codebase norm) — a bare `useStore()` call
   // subscribes App to EVERY store change and re-renders the whole shell.
   const loadBudgets = useBudgetsStore((s) => s.loadAll);
+  const refreshProviders = useProviderStore((s) => s.refresh);
   const refreshAllSpend = useBudgetsStore((s) => s.refreshAllSpend);
   const budgets = useBudgetsStore((s) => s.budgets);
   const spend = useBudgetsStore((s) => s.spend);
@@ -306,6 +308,11 @@ function App() {
   useEffect(() => {
     loadBudgets();
   }, [loadBudgets]);
+
+  // ── Load provider catalog on startup ──
+  useEffect(() => {
+    void refreshProviders();
+  }, [refreshProviders]);
 
   // ── Startup: load recent projects and restore last opened project ──
   const startupFiredRef = useRef(false);

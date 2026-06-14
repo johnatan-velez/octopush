@@ -9,7 +9,8 @@ import {
   formatTokens,
 } from "../../lib/cost";
 import { ipc } from "../../lib/ipc";
-import type { ModelInfo, ProviderConfig, SkillMeta } from "../../lib/types";
+import type { ModelInfo, SkillMeta } from "../../lib/types";
+import { useProviderStore } from "../../stores/providerStore";
 import {
   findActiveMention,
   rankFiles,
@@ -201,10 +202,7 @@ export function Composer({ workspaceId, workspacePath }: Props) {
   }, [workspaceId]);
 
   // ── Inline cost preview ─────────────────────────────────────────────
-  const [modelCatalog, setModelCatalog] = useState<ProviderConfig[]>([]);
-  useEffect(() => {
-    ipc.listProviders().then(setModelCatalog).catch(() => {});
-  }, []);
+  const modelCatalog = useProviderStore((s) => s.providers);
   const activeModelInfo: ModelInfo | null = (() => {
     for (const p of modelCatalog) {
       for (const m of p.models) {

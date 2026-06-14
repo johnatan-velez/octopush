@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { ipc } from "../lib/ipc";
 import { pushToast } from "../components/Toasts";
+import { useProviderStore } from "./providerStore";
 import { AI_REVIEW_SCHEMA, AI_REVIEW_SYSTEM, buildReviewPrompt, parseAiReview, type AiReviewResult } from "../lib/aiReview";
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
@@ -122,12 +123,17 @@ export async function reconcileAiReviewModels(): Promise<void> {
     ([, id]) => id !== DEFAULT_MODEL,
   );
   if (entries.length === 0) return;
-  let providers;
-  try {
-    providers = await ipc.listProviders();
-  } catch {
-    reconciled = false; // catalog unavailable — let a later call retry
-    return;
+  // Use the shared provider store if it has already loaded; fall back to a
+  // direct IPC call in case reconciliation runs before the store is populated
+  // (e.g. in tests or during very early app startup).
+  let providers = useProviderStore.getState().providers;
+  if (providers.length === 0) {
+    try {
+      providers = await ipc.listProviders();
+    } catch {
+      reconciled = false; // catalog unavailable — let a later call retry
+      return;
+    }
   }
   const valid = new Set(
     providers.filter((p) => p.enabled).flatMap((p) => p.models.map((m) => m.id)),

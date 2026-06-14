@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { clsx } from "clsx";
-import { ipc } from "../lib/ipc";
-import type { ModelInfo, ProviderConfig } from "../lib/types";
+import type { ModelInfo } from "../lib/types";
+import { useProviderStore } from "../stores/providerStore";
 
 /** localStorage key for the recently-used model ids (most-recent first). */
 const RECENTS_KEY = "octopush.modelPicker.recents";
@@ -69,7 +69,11 @@ export function ModelPicker({
   onSelectModel,
   allowedProviders,
 }: Props) {
-  const [providers, setProviders] = useState<ProviderConfig[]>([]);
+  const allProviders = useProviderStore((s) => s.providers);
+  const providers = useMemo(
+    () => allProviders.filter((p) => p.enabled && p.models.length > 0),
+    [allProviders],
+  );
   const [open, setOpen] = useState(false);
   const [recents, setRecents] = useState<string[]>(() => loadRecents());
   const containerRef = useRef<HTMLDivElement>(null);
@@ -79,12 +83,6 @@ export function ModelPicker({
     left: number; top?: number; bottom?: number; width: number; maxHeight: number;
     placement: "below" | "above";
   } | null>(null);
-
-  useEffect(() => {
-    ipc.listProviders().then((provs) => {
-      setProviders(provs.filter((p) => p.enabled && p.models.length > 0));
-    });
-  }, []);
 
   const PANEL_W = 300;
   const updatePosition = useCallback(() => {
