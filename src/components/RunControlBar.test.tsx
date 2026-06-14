@@ -21,7 +21,7 @@ const stage = (over: Partial<RunStage>): RunStage => ({
 
 const handlers = () => ({
   onPause: vi.fn(), onStopStage: vi.fn(), onAbort: vi.fn(), onApprove: vi.fn(),
-  onReject: vi.fn(), onResume: vi.fn(), onSendBack: vi.fn(), onRunAgain: vi.fn(),
+  onReject: vi.fn(), onResume: vi.fn(), onDiscard: vi.fn(), onSendBack: vi.fn(), onRunAgain: vi.fn(),
 });
 
 describe("RunControlBar", () => {
@@ -53,7 +53,8 @@ describe("RunControlBar", () => {
     // The editor crossfades in (FadeSwap holds the old view ~120ms first).
     fireEvent.change(await screen.findByRole("textbox"), { target: { value: "fix the imports" } });
     fireEvent.click(screen.getByRole("button", { name: /Re-run the stage/i }));
-    expect(h.onReject).toHaveBeenCalledWith("fix the imports");
+    // onReject now receives (feedback, turns); turns defaults to maxIterations * 2 (25 * 2 = 50).
+    expect(h.onReject).toHaveBeenCalledWith("fix the imports", 50);
   });
 
   it("checkpoint with a loop target: offers Send back and shows loop state", async () => {
@@ -69,12 +70,17 @@ describe("RunControlBar", () => {
     expect(h.onSendBack).toHaveBeenCalledWith("missed a case");
   });
 
-  it("hard failure: Accept & continue + Re-run", () => {
+  it("hard failure (Option A): Re-run primary action, why panel reveals accept/discard", async () => {
     const h = handlers();
     render(<RunControlBar run={run("paused")} blockedStage={stage({ status: "failed", error: "compile error: missing semicolon" })}
       loopTargetRole={null} loopState={null} {...h} />);
     expect(screen.getByText(/stage halted/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Accept & continue/i }));
+    // API substrate with no sessionId → primary action is Re-run.
+    fireEvent.click(screen.getByRole("button", { name: /^Re-run$/i }));
+    expect(h.onReject).toHaveBeenCalledWith("", 50);
+    // Open the why panel to access Accept partial work.
+    fireEvent.click(screen.getByRole("button", { name: /why this halted/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Accept partial work/i }));
     expect(h.onApprove).toHaveBeenCalled();
   });
 
