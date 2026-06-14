@@ -58,6 +58,7 @@ function resetStore() {
     liveToolsByWs: {},
     threadsByWs: {},
     activeThreadByWs: {},
+    streamingThreadByWs: {},
   });
 }
 

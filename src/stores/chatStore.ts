@@ -6,6 +6,7 @@ import { useWorkspaceStore } from "./workspaceStore";
 import { useBudgetsStore, BUDGET_CAP_MSG } from "./budgetsStore";
 import { useAttentionStore } from "./attentionStore";
 import { focus } from "../lib/focus";
+import { deriveChatTitle } from "../lib/chatTitle";
 
 export interface ToolExecution {
   toolName: string;
@@ -150,6 +151,10 @@ interface ChatState {
   /** The thread currently shown per workspace. The `…ByWs` chat state above
    *  always reflects THIS thread; switching threads reloads it. */
   activeThreadByWs: Record<string, string>;
+  /** Which thread (if any) currently has an in-flight turn per workspace, even
+   *  if it's not the one being shown — lets the streaming indicator be restored
+   *  when switching back to a still-running thread. */
+  streamingThreadByWs: Record<string, string | null>;
 
   /** Global model preference. Applies to whichever workspace the user types in. */
   model: string;
@@ -182,6 +187,9 @@ interface ChatState {
   clear: (workspaceId: string) => void;
   clearError: (workspaceId: string) => void;
   // Thread actions
+  /** Return the workspace's active thread id, creating+loading a default one
+   *  if none is active yet (so a send can never orphan a message). */
+  ensureThread: (workspaceId: string) => Promise<string>;
   selectThread: (workspaceId: string, threadId: string) => Promise<void>;
   newThread: (workspaceId: string) => Promise<void>;
   renameThread: (workspaceId: string, threadId: string, title: string) => Promise<void>;
@@ -189,6 +197,10 @@ interface ChatState {
 }
 
 export const useChatStore = create<ChatState>((set, get) => {
+  // Guards loadHistory against concurrent double-creation of a default thread
+  // (rapid workspace switches / mount races). Mirrors the terminal-init guard.
+  const loadingHistory = new Set<string>();
+
   // ── chat://message-added ──────────────────────────────────────
   // Append a message to ITS workspace's bucket, with idempotency on id.
   listen<MessageAddedEvent>("chat://message-added", (ev) => {
@@ -265,24 +277,36 @@ export const useChatStore = create<ChatState>((set, get) => {
     const payload = ev.payload;
     const wsId = payload.workspaceId;
     if (!wsId) return;
-    // Ignore stream events for a thread that isn't the one on screen.
-    if (!isActiveThread(get().activeThreadByWs, wsId, payload.threadId)) return;
+    const active = isActiveThread(get().activeThreadByWs, wsId, payload.threadId);
 
     if (payload.done) {
-      set((s) => ({
-        streamingByWs: { ...s.streamingByWs, [wsId]: false },
-        streamBufferByWs: { ...s.streamBufferByWs, [wsId]: "" },
-        // Clear any stragglers (e.g. a tool whose result errored before its
-        // resolved row landed) so no spinner outlives the turn.
-        liveToolsByWs: { ...s.liveToolsByWs, [wsId]: EMPTY_LIVE_TOOLS },
-      }));
+      // The done event clears the streaming-thread tracker and fires the
+      // attention ping even for a BACKGROUND thread (so its flag never sticks
+      // and its completion is still announced). View state only clears for the
+      // thread currently on screen.
+      set((s) => {
+        const clearsTracker =
+          payload.threadId == null || s.streamingThreadByWs[wsId] === payload.threadId;
+        const streamingThreadByWs = clearsTracker
+          ? { ...s.streamingThreadByWs, [wsId]: null }
+          : s.streamingThreadByWs;
+        if (!active) return { streamingThreadByWs };
+        return {
+          streamingByWs: { ...s.streamingByWs, [wsId]: false },
+          streamBufferByWs: { ...s.streamBufferByWs, [wsId]: "" },
+          // Clear any stragglers (e.g. a tool whose result errored before its
+          // resolved row landed) so no spinner outlives the turn.
+          liveToolsByWs: { ...s.liveToolsByWs, [wsId]: EMPTY_LIVE_TOOLS },
+          streamingThreadByWs,
+        };
+      });
       // Only ring the chime / pulse the rail if the user isn't already
       // looking at this chat — otherwise they'll just be told what
       // they're already seeing.
       if (focus.workspaceId !== wsId || focus.mode !== "talk") {
         useAttentionStore.getState().ping(wsId, "chat");
       }
-    } else {
+    } else if (active) {
       set((s) => ({
         streamBufferByWs: {
           ...s.streamBufferByWs,
@@ -343,6 +367,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     liveToolsByWs: {},
     threadsByWs: {},
     activeThreadByWs: {},
+    streamingThreadByWs: {},
     model: "claude-sonnet-4-6",
     effort: "standard",
 
@@ -361,24 +386,32 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     loadHistory: async (workspaceId) => {
-      // Ensure the workspace has at least one thread, pick the active one
-      // (keeping a valid prior selection), then load that thread's messages.
-      let threads = await ipc.listChatThreads(workspaceId);
-      if (threads.length === 0) {
-        const created = await ipc.createChatThread(workspaceId, "New conversation");
-        threads = [created];
+      // In-flight guard: two concurrent calls would each see zero threads and
+      // both create a default. The loser simply skips (the winner populates).
+      if (loadingHistory.has(workspaceId)) return;
+      loadingHistory.add(workspaceId);
+      try {
+        // Ensure the workspace has at least one thread, pick the active one
+        // (keeping a valid prior selection), then load that thread's messages.
+        let threads = await ipc.listChatThreads(workspaceId);
+        if (threads.length === 0) {
+          const created = await ipc.createChatThread(workspaceId, "New conversation");
+          threads = [created];
+        }
+        const prior = get().activeThreadByWs[workspaceId];
+        const activeId =
+          prior && threads.some((t) => t.id === prior) ? prior : threads[0].id;
+        set((s) => ({
+          threadsByWs: { ...s.threadsByWs, [workspaceId]: threads },
+          activeThreadByWs: { ...s.activeThreadByWs, [workspaceId]: activeId },
+        }));
+        const messages = await ipc.listChatMessages(activeId);
+        set((s) => ({
+          messagesByWs: { ...s.messagesByWs, [workspaceId]: messages as ChatMessage[] },
+        }));
+      } finally {
+        loadingHistory.delete(workspaceId);
       }
-      const prior = get().activeThreadByWs[workspaceId];
-      const activeId =
-        prior && threads.some((t) => t.id === prior) ? prior : threads[0].id;
-      set((s) => ({
-        threadsByWs: { ...s.threadsByWs, [workspaceId]: threads },
-        activeThreadByWs: { ...s.activeThreadByWs, [workspaceId]: activeId },
-      }));
-      const messages = await ipc.listChatMessages(activeId);
-      set((s) => ({
-        messagesByWs: { ...s.messagesByWs, [workspaceId]: messages as ChatMessage[] },
-      }));
     },
 
     send: async (workspaceId, workspacePath, content, systemPrompt) => {
@@ -393,8 +426,33 @@ export const useChatStore = create<ChatState>((set, get) => {
         }
       }
 
+      // Guarantee a real thread BEFORE persisting, so a fast first-send during
+      // the loadHistory race can never orphan the turn under thread_id="".
+      const threadId = await get().ensureThread(workspaceId);
+      if (!threadId) {
+        set((s) => ({
+          errorByWs: { ...s.errorByWs, [workspaceId]: "Could not start a conversation." },
+        }));
+        return;
+      }
+
+      // The first message names the thread: persist a derived title if it's
+      // still the untouched default, so the History list stays meaningful even
+      // for threads that aren't the active one.
+      const existingMsgs = get().messagesByWs[workspaceId] ?? EMPTY_MESSAGES;
+      const thread = (get().threadsByWs[workspaceId] ?? EMPTY_THREADS).find((t) => t.id === threadId);
+      if (
+        existingMsgs.length === 0 &&
+        thread &&
+        (thread.title === "New conversation" || thread.title === "Conversation")
+      ) {
+        const title = deriveChatTitle([{ role: "user", content } as ChatMessage]);
+        void get().renameThread(workspaceId, threadId, title).catch(() => {});
+      }
+
       set((s) => ({
         streamingByWs: { ...s.streamingByWs, [workspaceId]: true },
+        streamingThreadByWs: { ...s.streamingThreadByWs, [workspaceId]: threadId },
         streamBufferByWs: { ...s.streamBufferByWs, [workspaceId]: "" },
         errorByWs: { ...s.errorByWs, [workspaceId]: null },
         liveToolsByWs: { ...s.liveToolsByWs, [workspaceId]: EMPTY_LIVE_TOOLS },
@@ -403,7 +461,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       try {
         await ipc.sendChatMessage({
           workspaceId,
-          threadId: get().activeThreadByWs[workspaceId] ?? "",
+          threadId,
           workspacePath,
           model: get().model,
           userMessage: content,
@@ -413,6 +471,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       } catch (e) {
         set((s) => ({
           streamingByWs: { ...s.streamingByWs, [workspaceId]: false },
+          streamingThreadByWs: { ...s.streamingThreadByWs, [workspaceId]: null },
           streamBufferByWs: { ...s.streamBufferByWs, [workspaceId]: "" },
           errorByWs: { ...s.errorByWs, [workspaceId]: String(e) },
         }));
@@ -444,13 +503,25 @@ export const useChatStore = create<ChatState>((set, get) => {
       })),
 
     // ── Thread actions ───────────────────────────────────────────
+    ensureThread: async (workspaceId) => {
+      const existing = get().activeThreadByWs[workspaceId];
+      if (existing) return existing;
+      // No active thread yet — load (creates a default if needed). The guard in
+      // loadHistory makes a concurrent send + canvas-mount safe.
+      await get().loadHistory(workspaceId);
+      return get().activeThreadByWs[workspaceId] ?? "";
+    },
+
     selectThread: async (workspaceId, threadId) => {
-      // Switch the shown thread and load its messages, resetting the volatile
-      // view state (a background thread may still be streaming, but the newly
-      // selected thread shows its own clean state).
+      // Switch the shown thread and load its messages. Restore the streaming
+      // indicator if the target thread is the one currently running in the
+      // background (its tracker survives the switch).
       set((s) => ({
         activeThreadByWs: { ...s.activeThreadByWs, [workspaceId]: threadId },
-        streamingByWs: { ...s.streamingByWs, [workspaceId]: false },
+        streamingByWs: {
+          ...s.streamingByWs,
+          [workspaceId]: s.streamingThreadByWs[workspaceId] === threadId,
+        },
         streamBufferByWs: { ...s.streamBufferByWs, [workspaceId]: "" },
         errorByWs: { ...s.errorByWs, [workspaceId]: null },
         liveToolsByWs: { ...s.liveToolsByWs, [workspaceId]: EMPTY_LIVE_TOOLS },
@@ -492,16 +563,22 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     deleteThread: async (workspaceId, threadId) => {
+      const wasActive = get().activeThreadByWs[workspaceId] === threadId;
       await ipc.deleteChatThread(threadId);
-      const remaining = (get().threadsByWs[workspaceId] ?? EMPTY_THREADS).filter(
-        (t) => t.id !== threadId,
-      );
+      // Remove inside a functional update so interleaved deletes don't resurrect
+      // a row from a stale snapshot.
       set((s) => ({
-        threadsByWs: { ...s.threadsByWs, [workspaceId]: remaining },
+        threadsByWs: {
+          ...s.threadsByWs,
+          [workspaceId]: (s.threadsByWs[workspaceId] ?? EMPTY_THREADS).filter(
+            (t) => t.id !== threadId,
+          ),
+        },
       }));
-      // If we deleted the active thread, fall back to the next one (or a fresh
-      // default), reloading the view.
-      if (get().activeThreadByWs[workspaceId] === threadId) {
+      // Only reload the view if we deleted the thread being shown; deleting a
+      // background thread leaves the active conversation untouched.
+      if (wasActive) {
+        const remaining = get().threadsByWs[workspaceId] ?? EMPTY_THREADS;
         if (remaining.length > 0) {
           await get().selectThread(workspaceId, remaining[0].id);
         } else {

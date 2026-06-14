@@ -64,6 +64,7 @@ function resetStore() {
     liveToolsByWs: {},
     threadsByWs: {},
     activeThreadByWs: {},
+    streamingThreadByWs: {},
   });
   useBudgetsStore.setState({
     budgets: [],

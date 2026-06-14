@@ -478,10 +478,16 @@ impl Db {
             return Ok(());
         }
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+        // Only workspaces that still EXIST get a backfilled thread — inserting a
+        // chat_threads row for an orphan workspace_id would violate the FK and
+        // wedge the app in a crash-on-start loop. Truly orphaned messages stay
+        // un-threaded (they were already unreachable).
         let workspaces: Vec<String> = {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT DISTINCT workspace_id FROM chat_messages WHERE thread_id IS NULL")?;
+            let mut stmt = self.conn.prepare(
+                "SELECT DISTINCT workspace_id FROM chat_messages
+                 WHERE thread_id IS NULL
+                   AND workspace_id IN (SELECT id FROM workspaces)",
+            )?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
