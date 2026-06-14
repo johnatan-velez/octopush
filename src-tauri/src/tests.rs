@@ -5338,6 +5338,9 @@ mod ancestry_tests {
             tools: None,
             custom_name: None,
             instructions: None,
+            session_id: None,
+            resume_pending: false,
+            baseline_commit: None,
         }
     }
 
