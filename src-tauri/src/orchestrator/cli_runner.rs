@@ -16,7 +16,11 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
-const CLI_TIMEOUT_SECS: u64 = 900; // 15-minute wall-clock backstop for a hung CLI
+/// Fail a CLI stage if it emits NO output for this long — a hung CLI, not a
+/// busy one. A stage that keeps streaming (a long build/release) stays alive.
+const IDLE_TIMEOUT_SECS: u64 = 300; // 5 minutes of silence
+/// Absolute backstop: even a trickle of output can't run forever.
+const ABS_CAP_SECS: u64 = 3600; // 60 minutes total
 
 #[derive(Deserialize, Debug, Default)]
 struct CliResult {
@@ -245,6 +249,13 @@ pub fn is_result_event(v: &Value) -> bool {
     v.get("type").and_then(Value::as_str) == Some("result")
 }
 
+/// How the stdout read loop ended — drives the post-loop handling.
+enum ReadEnd {
+    Eof(Option<String>, std::collections::VecDeque<String>),
+    Idle(Option<String>, std::collections::VecDeque<String>),
+    AbsCap(Option<String>, std::collections::VecDeque<String>),
+}
+
 /// The CLI substrate: runs a stage by shelling out to headless Claude Code.
 pub struct CliRunner;
 
@@ -323,12 +334,22 @@ impl AgentRunner for CliRunner {
             let mut result_line: Option<String> = None;
             let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
             let mut raw: Vec<u8> = Vec::new();
+            let started = std::time::Instant::now();
             loop {
+                if started.elapsed().as_secs() >= ABS_CAP_SECS {
+                    return ReadEnd::AbsCap(result_line, tail);
+                }
                 raw.clear();
-                match reader.read_until(b'\n', &mut raw).await {
-                    Ok(0) => break,  // EOF
-                    Ok(_) => {}
-                    Err(_) => break, // read error → stop streaming, use what we have
+                let read = tokio::time::timeout(
+                    std::time::Duration::from_secs(IDLE_TIMEOUT_SECS),
+                    reader.read_until(b'\n', &mut raw),
+                )
+                .await;
+                match read {
+                    Err(_) => return ReadEnd::Idle(result_line, tail), // no line within IDLE
+                    Ok(Ok(0)) => break,                                 // EOF
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) => break,                                // read error
                 }
                 let line = String::from_utf8_lossy(&raw);
                 let trimmed = line.trim();
@@ -349,13 +370,14 @@ impl AgentRunner for CliRunner {
                     emitter.emit_raw_entry(entry);
                 }
             }
-            (result_line, tail)
+            ReadEnd::Eof(result_line, tail)
         };
 
         // Race the child's output against the director's stop signal: poll the
         // cancel flag every ~500ms and, when set, kill the child and fail the
         // stage with the director message (zero usage — the burned spend is
-        // unknowable mid-flight). The 15-minute wall-clock backstop still applies.
+        // unknowable mid-flight). An idle timeout fires when NO output arrives
+        // for IDLE_TIMEOUT_SECS; an absolute cap fires after ABS_CAP_SECS total.
         let cancel = std::sync::Arc::clone(&ctx.cancel);
         let cancel_watch = async move {
             loop {
@@ -365,24 +387,22 @@ impl AgentRunner for CliRunner {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
         };
-        let (result_line, tail) = tokio::select! {
-            out = tokio::time::timeout(
-                std::time::Duration::from_secs(CLI_TIMEOUT_SECS),
-                read_loop,
-            ) => match out {
-                Ok(out) => out,
-                // child is dropped on return → kill_on_drop terminates the process.
-                Err(_) => {
-                    return Ok(failed_stage(
-                        "claude stage timed out (no result within 15 minutes)",
-                    ))
-                }
-            },
+        let read_end = tokio::select! {
+            end = read_loop => end,
             _ = cancel_watch => {
                 let _ = child.kill().await;
                 return Ok(failed_stage(
                     &crate::orchestrator::runner::unfinished_stage_error(true, 0),
                 ));
+            }
+        };
+        let (result_line, tail) = match read_end {
+            ReadEnd::Eof(r, t) => (r, t),
+            ReadEnd::Idle(_, _) => {
+                return Ok(failed_stage("claude timed out — no output for 5 minutes"));
+            }
+            ReadEnd::AbsCap(_, _) => {
+                return Ok(failed_stage("claude exceeded the 60-minute cap"));
             }
         };
 

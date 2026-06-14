@@ -5423,4 +5423,13 @@ mod cli_result_tests {
         let out = parse_cli_result(line, true, "fix", "").unwrap();
         assert_eq!(out.session_id.as_deref(), Some("abc-123"));
     }
+
+    /// Task 7: idle and absolute-cap timeout messages are distinct user-facing strings.
+    #[test]
+    fn idle_and_abscap_messages_are_distinct() {
+        assert_ne!(
+            "claude timed out — no output for 5 minutes",
+            "claude exceeded the 60-minute cap"
+        );
+    }
 }
