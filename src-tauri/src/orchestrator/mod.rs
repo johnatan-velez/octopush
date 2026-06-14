@@ -349,6 +349,10 @@ impl Orchestrator {
             }
         };
 
+        if outcome.session_id.is_some() {
+            self.db.lock().set_stage_session(&stage.id, outcome.session_id.as_deref())?;
+        }
+
         match outcome.status {
             StageStatus::Done => {
                 let verdict = outcome.verdict.clone();

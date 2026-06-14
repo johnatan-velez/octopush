@@ -2227,6 +2227,15 @@ impl Db {
         Ok(())
     }
 
+    /// Persist the CLI session id from a stage's attempt (done or failed).
+    pub fn set_stage_session(&self, stage_id: &str, session_id: Option<&str>) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE run_stages SET session_id = ?2 WHERE id = ?1",
+            params![stage_id, session_id],
+        )?;
+        Ok(())
+    }
+
     /// Append one `run://log` entry (JSON) to a stage's persisted journal.
     pub fn append_stage_log(&self, run_id: &str, stage_id: &str, entry_json: &str) -> AppResult<()> {
         self.conn.execute(
