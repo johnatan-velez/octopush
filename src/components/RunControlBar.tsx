@@ -144,6 +144,7 @@ function DecisionBar({
   const failed = blockedStage.status === "failed";
   const transient = failed && isTransientHalt(blockedStage.error);
   const canResume = blockedStage.substrate === "cli" && !!blockedStage.sessionId;
+  const canDiscard = !!blockedStage.baselineCommit;
   const cause = haltCause(blockedStage.error, blockedStage.maxIterations);
 
   // Reset the editor whenever a new checkpoint arrives (the bar stays mounted).
@@ -223,6 +224,11 @@ function DecisionBar({
               <Reveal open={showWhy}>
                 <div id="halt-why-panel" className="mt-1 rounded-md border border-octo-hairline bg-octo-panel-2 px-3 py-3">
                   {cause.remedy && <p className="mb-2 text-xs text-octo-sage">{cause.remedy}</p>}
+                  <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] text-octo-mute">
+                    {blockedStage.sessionId && <span>session {blockedStage.sessionId.slice(0, 8)}</span>}
+                    <span className="octo-tabular">{(blockedStage.inputTokens + blockedStage.outputTokens).toLocaleString()} tokens</span>
+                    <span className="octo-tabular">${blockedStage.costUsd.toFixed(2)}</span>
+                  </div>
                   <pre className="mb-3 max-h-32 overflow-auto rounded-md border border-octo-hairline bg-octo-onyx px-2.5 py-2 font-mono text-[11px] text-octo-mute whitespace-pre-wrap">{blockedStage.error ?? "no detail"}</pre>
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="flex items-center gap-2 font-mono text-[11px] text-octo-mute">
@@ -238,10 +244,12 @@ function DecisionBar({
                       Accept partial work
                     </button>
                     <span className="flex-1" />
-                    <button type="button" onClick={() => setConfirmDiscard(true)}
-                      className="rounded-md border border-octo-hairline px-3 py-1.5 font-mono text-xs text-octo-rouge transition-colors duration-[180ms] hover:bg-[var(--rouge-ghost)]">
-                      Discard changes
-                    </button>
+                    {canDiscard && (
+                      <button type="button" onClick={() => setConfirmDiscard(true)}
+                        className="rounded-md border border-octo-hairline px-3 py-1.5 font-mono text-xs text-octo-rouge transition-colors duration-[180ms] hover:bg-[var(--rouge-ghost)]">
+                        Discard changes
+                      </button>
+                    )}
                   </div>
                 </div>
               </Reveal>

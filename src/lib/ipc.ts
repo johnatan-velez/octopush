@@ -124,6 +124,8 @@ export interface RunStage {
   instructions: string | null;
   /** CLI session id from the stage's last run; enables --resume. Null for API stages and legacy rows. */
   sessionId: string | null;
+  /** Git commit SHA captured before the stage ran (enables Discard). Null when capture failed or non-repo. */
+  baselineCommit: string | null;
 }
 export interface RunDetail {
   run: Run | null;

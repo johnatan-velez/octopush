@@ -44,6 +44,7 @@ function makeStage(overrides: Partial<RunStage> = {}): RunStage {
     customName: null,
     instructions: null,
     sessionId: null,
+    baselineCommit: null,
     ...overrides,
   };
 }
