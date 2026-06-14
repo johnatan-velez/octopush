@@ -34,6 +34,9 @@ vi.mock("../lib/ipc", () => ({
     openFileInSystem: vi.fn(),
     listBudgets: vi.fn().mockResolvedValue([]),
     currentSpend: vi.fn().mockResolvedValue({ costUsd: 0, tokens: 0 }),
+    listWorkspaceFiles: vi.fn().mockResolvedValue([]),
+    readFileChecked: vi.fn().mockResolvedValue({ kind: "text", content: "", size: 0, mtime: 0 }),
+    cancelChat: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
