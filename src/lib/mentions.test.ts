@@ -22,6 +22,14 @@ describe("findActiveMention", () => {
     const t = "@foo bar";
     expect(findActiveMention(t, t.length)).toBeNull();
   });
+  it("triggers after an opening delimiter like ( or quote", () => {
+    expect(findActiveMention("(@foo", 5)).toEqual({ query: "foo", start: 1 });
+    expect(findActiveMention('"@bar', 5)).toEqual({ query: "bar", start: 1 });
+  });
+  it("detects a mention on a second line (newline is whitespace)", () => {
+    const t = "line one\n@src/foo";
+    expect(findActiveMention(t, t.length)).toEqual({ query: "src/foo", start: 9 });
+  });
 });
 
 describe("rankFiles", () => {
@@ -45,6 +53,13 @@ describe("extractMentions", () => {
   });
   it("ignores an @ glued to a word", () => {
     expect(extractMentions("ping me@src/foo.ts", known)).toEqual([]);
+  });
+  it("strips trailing prose punctuation so a sentence-final mention still matches", () => {
+    expect(extractMentions("see @src/foo.ts.", known)).toEqual(["src/foo.ts"]);
+    expect(extractMentions("check @lib/bar.ts, then go", known)).toEqual(["lib/bar.ts"]);
+  });
+  it("matches a mention wrapped in parens", () => {
+    expect(extractMentions("(@src/foo.ts)", known)).toEqual(["src/foo.ts"]);
   });
 });
 

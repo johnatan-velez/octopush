@@ -70,6 +70,15 @@ export function Composer({ workspaceId, workspacePath }: Props) {
   const [mentionIndex, setMentionIndex] = useState(0);
   // Caret to apply after a mention insertion re-renders the textarea.
   const pendingCaretRef = useRef<number | null>(null);
+  // Tracks the onBlur dismiss timer so it can be cleared on unmount.
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+  }, []);
+  // True while @file mentions are being read+expanded on send — blocks a second
+  // send during that async window (streaming only flips once send() runs).
+  const expandingRef = useRef(false);
+  const [expanding, setExpanding] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -168,7 +177,7 @@ export function Composer({ workspaceId, workspacePath }: Props) {
 
   const handleSend = useCallback(() => {
     const trimmed = inputRef.current.trim();
-    if (!trimmed || streaming) return;
+    if (!trimmed || streaming || expandingRef.current) return;
     setInput("");
     historyIdxRef.current = -1;
     closeMention();
@@ -186,21 +195,28 @@ export function Composer({ workspaceId, workspacePath }: Props) {
       send(workspaceId, workspacePath, trimmed);
       return;
     }
+    expandingRef.current = true;
+    setExpanding(true);
     void (async () => {
-      const blocks = await Promise.all(
-        mentions.map(async (rel) => {
-          try {
-            const res = await ipc.readFileChecked(`${workspacePath}/${rel}`, 64_000);
-            if (res.kind === "text") {
-              return `\n\n§ ${rel}\n\`\`\`\n${res.content}\n\`\`\``;
+      try {
+        const blocks = await Promise.all(
+          mentions.map(async (rel) => {
+            try {
+              const res = await ipc.readFileChecked(`${workspacePath}/${rel}`, 64_000);
+              if (res.kind === "text") {
+                return `\n\n§ ${rel}\n\`\`\`\n${res.content}\n\`\`\``;
+              }
+              return `\n\n§ ${rel} _(not included: ${res.kind})_`;
+            } catch {
+              return "";
             }
-            return `\n\n§ ${rel} _(not included: ${res.kind})_`;
-          } catch {
-            return "";
-          }
-        }),
-      );
-      send(workspaceId, workspacePath, trimmed + blocks.join(""));
+          }),
+        );
+        send(workspaceId, workspacePath, trimmed + blocks.join(""));
+      } finally {
+        expandingRef.current = false;
+        setExpanding(false);
+      }
     })();
   }, [streaming, send, workspaceId, workspacePath]);
 
@@ -262,7 +278,10 @@ export function Composer({ workspaceId, workspacePath }: Props) {
 
   const isBudgetError = error === BUDGET_CAP_MSG;
   const canSend =
-    !streaming && input.trim().length > 0 && (!isBudgetError || overrideActive);
+    !streaming &&
+    !expanding &&
+    input.trim().length > 0 &&
+    (!isBudgetError || overrideActive);
 
   return (
     <div className="px-6 pb-4 pt-3">
@@ -287,10 +306,18 @@ export function Composer({ workspaceId, workspacePath }: Props) {
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
+          // Recompute the mention on every caret move (click, ArrowLeft/Right,
+          // Home/End) — not just on typing — so the popover closes when the
+          // caret leaves the trigger and mention.caret never goes stale.
+          onSelect={(e) =>
+            refreshMention(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)
+          }
           onBlur={() => {
             // Let a popover mouse-down selection land first (it preventDefaults
-            // blur), then dismiss on a genuine focus loss.
-            setTimeout(closeMention, 120);
+            // blur), then dismiss on a genuine focus loss. Tracked so it can be
+            // cleared on unmount.
+            if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+            blurTimerRef.current = setTimeout(closeMention, 120);
           }}
           disabled={streaming}
           placeholder="Ask anything…  ⟶  @ to reference a file"

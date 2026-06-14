@@ -17,7 +17,9 @@ export function findActiveMention(
     const ch = text[i];
     if (ch === "@") {
       const prev = i > 0 ? text[i - 1] : " ";
-      if (i === 0 || /\s/.test(prev)) {
+      // Trigger at line start, after whitespace, or after a common opening
+      // delimiter ( [ { " ' so `(@foo` and `"@foo` also autocomplete.
+      if (i === 0 || /[\s([{"'`]/.test(prev)) {
         const query = text.slice(i + 1, caret);
         if (/\s/.test(query)) return null; // mention ends at whitespace
         return { query, start: i };
@@ -28,6 +30,10 @@ export function findActiveMention(
   }
   return null;
 }
+
+/** Trailing characters that commonly follow a mention in prose but aren't part
+ *  of a path, stripped before matching against the known-files set. */
+const TRAILING_PUNCT = /[.,;:!?)\]}'"`]+$/;
 
 /** Subsequence test: are all chars of `q` present in `s` in order? */
 function isSubsequence(q: string, s: string): boolean {
@@ -65,11 +71,16 @@ export function rankFiles(files: string[], query: string, limit = 8): string[] {
  *  that match a known worktree file (so stray `@handles` are ignored). */
 export function extractMentions(text: string, knownFiles: Set<string>): string[] {
   const out: string[] = [];
-  const re = /(?:^|\s)@(\S+)/g;
+  // Allow `@` at line start, after whitespace, or after an opening delimiter.
+  const re = /(?:^|[\s([{"'`])@(\S+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    const path = m[1];
-    if (knownFiles.has(path) && !out.includes(path)) out.push(path);
+    const raw = m[1];
+    // The token may carry trailing prose punctuation (e.g. `@foo.ts.`); try the
+    // raw token first, then a punctuation-stripped form, against the catalog.
+    const stripped = raw.replace(TRAILING_PUNCT, "");
+    const path = knownFiles.has(raw) ? raw : knownFiles.has(stripped) ? stripped : null;
+    if (path && !out.includes(path)) out.push(path);
   }
   return out;
 }
