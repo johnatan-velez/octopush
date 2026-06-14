@@ -182,42 +182,26 @@ export function Composer({ workspaceId, workspacePath }: Props) {
               the bar never shifts (stability S2). */}
           <FadeSwap swapKey={streaming ? "stop" : "send"} className={clsx(inlineCost === null && "ml-auto")}>
             {streaming ? (
-              <button
+              <ComposerActionButton
                 onClick={() => stop(workspaceId)}
                 title="Stop generating"
-                aria-label="Stop generating"
-                className="flex h-7 items-center gap-1.5 rounded-md px-3 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors duration-[180ms]"
-                style={{
-                  color: "var(--color-octo-rouge)",
-                  background: "rgba(209, 139, 139, 0.08)",
-                  border: "1px solid rgba(209, 139, 139, 0.4)",
-                }}
-              >
-                <span style={{ fontSize: 11, lineHeight: 1 }} aria-hidden>
-                  ◼
-                </span>
-                Stop
-              </button>
+                label="Stop"
+                glyph="◼"
+                color="var(--color-octo-rouge)"
+                bg="var(--rouge-ghost)"
+                border="1px solid var(--rouge-border)"
+              />
             ) : (
-              <button
+              <ComposerActionButton
                 onClick={handleSend}
                 disabled={!canSend}
                 title="Send (Enter)"
-                aria-label="Send message"
-                className="flex h-7 items-center gap-1.5 rounded-md px-3 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors duration-[180ms] disabled:cursor-not-allowed disabled:opacity-40"
-                style={{
-                  color: canSend ? "var(--color-octo-brass)" : "var(--color-octo-mute)",
-                  background: canSend ? "var(--brass-ghost)" : "transparent",
-                  border: canSend
-                    ? "1px solid var(--brass-dim)"
-                    : "1px solid var(--color-octo-hairline)",
-                }}
-              >
-                <span style={{ fontSize: 12, lineHeight: 1 }} aria-hidden>
-                  ⟶
-                </span>
-                Send
-              </button>
+                label="Send"
+                glyph="⟶"
+                color={canSend ? "var(--color-octo-brass)" : "var(--color-octo-mute)"}
+                bg={canSend ? "var(--brass-ghost)" : "transparent"}
+                border={canSend ? "1px solid var(--brass-dim)" : "1px solid var(--color-octo-hairline)"}
+              />
             )}
           </FadeSwap>
         </div>
@@ -228,5 +212,44 @@ export function Composer({ workspaceId, workspacePath }: Props) {
         Enter to send · ⇧↵ for newline · ↑ for history
       </div>
     </div>
+  );
+}
+
+/** The composer's primary action button — Send (brass) or Stop (rouge). One
+ *  shape, parameterized by accent tokens, so the two states can't drift. All
+ *  colors are CSS-var tokens; no hardcoded literals. */
+function ComposerActionButton({
+  onClick,
+  disabled = false,
+  title,
+  label,
+  glyph,
+  color,
+  bg,
+  border,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  title: string;
+  label: string;
+  glyph: string;
+  color: string;
+  bg: string;
+  border: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={title}
+      className="flex h-7 items-center gap-1.5 rounded-md px-3 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors duration-[180ms] disabled:cursor-not-allowed disabled:opacity-40"
+      style={{ color, background: bg, border }}
+    >
+      <span style={{ fontSize: 12, lineHeight: 1 }} aria-hidden>
+        {glyph}
+      </span>
+      {label}
+    </button>
   );
 }

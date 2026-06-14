@@ -368,8 +368,13 @@ impl ChatEngine {
         }
     }
 
-    /// Persist a brief "stopped" note and emit the done event so the frontend
+    /// Persist a brief "stopped" marker and emit the done event so the frontend
     /// clears its streaming state when a turn is cancelled mid-flight.
+    ///
+    /// The marker uses role `"stopped"` — NOT `"assistant"` — for two reasons:
+    /// the history builder only replays user/assistant/tool rows, so a stopped
+    /// marker never re-enters the model's context as something it "said"; and
+    /// the frontend renders it as a quiet system note, not a model bubble.
     fn finish_stopped(
         &self,
         app: &AppHandle,
@@ -382,7 +387,7 @@ impl ChatEngine {
         self.insert_and_emit_message(
             app,
             workspace_id,
-            "assistant",
+            "stopped",
             "Generation stopped.",
             Some(model),
             Some(total_input as i64),
@@ -554,6 +559,11 @@ impl ChatEngine {
                 // Honor the caller's requested budget (the EffortSelector sets
                 // it) with a sane floor; the old code force-clamped to 32768,
                 // silently ignoring the request.
+                // FOLLOW-UP: some providers cap output below the Deep preset
+                // (e.g. gpt-4o at 16384) and will 400 on a larger value. A
+                // proper per-model ceiling needs a `max_output_tokens` field on
+                // ModelInfo; until then the budget is forwarded as-is (this was
+                // already the case pre-change, which force-sent 32768).
                 max_tokens: request.max_tokens.max(4096),
                 system: system_prompt.clone(),
                 messages: messages.clone(),

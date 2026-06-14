@@ -173,7 +173,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       const newMessage: ChatMessage = {
         id: payload.id,
         workspaceId: payload.workspaceId,
-        role: payload.role as "user" | "assistant" | "tool" | "error",
+        role: payload.role as "user" | "assistant" | "tool" | "error" | "stopped",
         content: payload.content,
         model: payload.model,
         inputTokens: payload.inputTokens,
