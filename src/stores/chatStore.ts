@@ -536,6 +536,8 @@ export const useChatStore = create<ChatState>((set, get) => {
         errorByWs: { ...s.errorByWs, [workspaceId]: null },
         liveToolsByWs: { ...s.liveToolsByWs, [workspaceId]: EMPTY_LIVE_TOOLS },
         messagesByWs: { ...s.messagesByWs, [workspaceId]: EMPTY_MESSAGES },
+        // A skill is a per-conversation choice — don't leak it across threads.
+        activeSkillByWs: { ...s.activeSkillByWs, [workspaceId]: null },
       }));
       const messages = await ipc.listChatMessages(threadId);
       set((s) => ({
@@ -557,6 +559,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         streamBufferByWs: { ...s.streamBufferByWs, [workspaceId]: "" },
         errorByWs: { ...s.errorByWs, [workspaceId]: null },
         liveToolsByWs: { ...s.liveToolsByWs, [workspaceId]: EMPTY_LIVE_TOOLS },
+        activeSkillByWs: { ...s.activeSkillByWs, [workspaceId]: null },
       }));
     },
 

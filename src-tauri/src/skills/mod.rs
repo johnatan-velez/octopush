@@ -65,19 +65,38 @@ fn skill_roots(worktree: &Path) -> Vec<(PathBuf, &'static str)> {
 /// Parse a SKILL.md's text into a Skill. Returns None when there's no usable
 /// frontmatter `name`. `source` labels the origin ("project"/"user").
 pub fn parse_skill(content: &str, source: &str) -> Option<Skill> {
-    // Frontmatter is a leading `---` … `---` block. Normalize CRLF first.
+    // Frontmatter is a leading `---` … `---` block delimited by lines that are
+    // exactly `---`. Parsing line-by-line (rather than substring-searching for
+    // `\n---`) means a `---` horizontal rule or a leading `-` list item in the
+    // BODY is never mistaken for the fence or stripped.
     let text = content.replace("\r\n", "\n");
-    let rest = text.strip_prefix("---\n")?;
-    let end = rest.find("\n---")?;
-    let front = &rest[..end];
-    // Body begins after the closing fence's line.
-    let after = &rest[end + 4..];
-    let body = after.trim_start_matches(['\n', '-']).trim().to_string();
+    let mut lines = text.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return None; // must open with a `---` fence line
+    }
+    let mut front_lines: Vec<&str> = Vec::new();
+    let mut body_lines: Vec<&str> = Vec::new();
+    let mut closed = false;
+    for line in lines {
+        if !closed {
+            if line.trim() == "---" {
+                closed = true;
+            } else {
+                front_lines.push(line);
+            }
+        } else {
+            body_lines.push(line);
+        }
+    }
+    if !closed {
+        return None; // no closing fence — malformed
+    }
+    let body = body_lines.join("\n").trim().to_string();
 
     let mut name = String::new();
     let mut description = String::new();
     let mut allowed_tools: Option<Vec<String>> = None;
-    for line in front.lines() {
+    for line in front_lines {
         let Some((key, value)) = line.split_once(':') else { continue };
         let key = key.trim().to_ascii_lowercase();
         let value = value.trim().trim_matches(['"', '\'']).to_string();
@@ -154,6 +173,21 @@ mod tests {
         assert_eq!(s.allowed_tools.as_deref(), Some(&["read_file".to_string(), "write_file".to_string()][..]));
         assert!(s.body.starts_with("You are a test engineer."));
         assert!(s.body.contains("Be thorough."));
+    }
+
+    #[test]
+    fn body_leading_dash_and_hr_are_preserved() {
+        // A body that starts with a markdown list must keep its first bullet,
+        // and a `---` horizontal rule inside the body must not be eaten.
+        let md = "---\nname: s\ndescription: d\n---\n- step one\n- step two\n\n---\n\ntail";
+        let s = parse_skill(md, "project").unwrap();
+        assert_eq!(s.body, "- step one\n- step two\n\n---\n\ntail");
+    }
+
+    #[test]
+    fn missing_closing_fence_is_rejected() {
+        // Without a closing fence we must not swallow body into frontmatter.
+        assert!(parse_skill("---\nname: s\ndescription: d\nbody with no fence", "user").is_none());
     }
 
     #[test]

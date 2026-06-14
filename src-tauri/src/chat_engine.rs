@@ -559,7 +559,21 @@ impl ChatEngine {
                     skill.name, skill.body
                 ));
                 if let Some(allowed) = &skill.allowed_tools {
-                    tools.retain(|t| allowed.iter().any(|a| a == &t.name));
+                    let filtered: Vec<LlmTool> = tools
+                        .iter()
+                        .filter(|t| allowed.iter().any(|a| a == &t.name))
+                        .cloned()
+                        .collect();
+                    // A typo'd / unknown tool name would otherwise empty the set
+                    // and silently disable the agent — keep all tools + warn.
+                    if filtered.is_empty() {
+                        tracing::warn!(
+                            skill = %skill.name,
+                            "skill allowed-tools matched no known tools; keeping the full tool set"
+                        );
+                    } else {
+                        tools = filtered;
+                    }
                 }
             }
         }
