@@ -2240,7 +2240,13 @@ function ClaudeCodeCard() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    ipc.mcpConnectionStatus().then(setStatus).catch(() => setStatus(null));
+    let alive = true;
+    ipc.mcpConnectionStatus()
+      .then((s) => alive && setStatus(s))
+      .catch(() => alive && setStatus(null));
+    return () => {
+      alive = false;
+    };
   }, []);
 
   async function connect() {

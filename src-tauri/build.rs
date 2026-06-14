@@ -36,20 +36,25 @@ fn main() {
 fn stage_external_bin(bin: &str, target_triple: &str, manifest_dir: &Path, out_dir: &Path) {
     let dst = manifest_dir.join(format!("{bin}-{target_triple}"));
 
-    let src_opt = out_dir
-        .ancestors()
-        .nth(3)
-        .map(|p| p.join(bin))
-        .filter(|p| p.exists() && p.metadata().map(|m| m.len() > 0).unwrap_or(false));
+    // The compiled sidecar lives at target/<profile>/<bin>. Watch that path
+    // unconditionally so that the FIRST time the binary is actually built (it
+    // doesn't exist yet when this script runs in a clean tree), cargo re-runs
+    // this script and we overwrite the empty placeholder with the real binary.
+    // Without this, a 0-byte placeholder can survive into the bundle.
+    let src = out_dir.ancestors().nth(3).map(|p| p.join(bin));
+    if let Some(src) = &src {
+        println!("cargo:rerun-if-changed={}", src.display());
+    }
+
+    let src_opt = src.filter(|p| p.exists() && p.metadata().map(|m| m.len() > 0).unwrap_or(false));
 
     if let Some(src) = src_opt {
-        match std::fs::copy(&src, &dst) {
-            Ok(_) => println!("cargo:rerun-if-changed={}", src.display()),
-            Err(e) => println!(
+        if let Err(e) = std::fs::copy(&src, &dst) {
+            println!(
                 "cargo:warning=build.rs: could not copy {} → {}: {e}",
                 src.display(),
                 dst.display()
-            ),
+            );
         }
     } else if !dst.exists() {
         if let Err(e) = std::fs::write(&dst, b"") {

@@ -3819,7 +3819,11 @@ fn expand_tilde(path: &str) -> String {
 /// registration — drives the Integrations settings card.
 #[tauri::command]
 pub async fn mcp_connection_status() -> AppResult<crate::mcp_setup::McpStatus> {
-    Ok(crate::mcp_setup::status())
+    // `status()` shells out to the `claude` CLI; run it off the async runtime
+    // so a slow CLI can't stall other IPC handlers.
+    tokio::task::spawn_blocking(crate::mcp_setup::status)
+        .await
+        .map_err(|e| AppError::Other(format!("status task failed: {e}")))
 }
 
 /// One-click: register the bundled `octopush-mcp` server with Claude Code at
@@ -3827,7 +3831,9 @@ pub async fn mcp_connection_status() -> AppResult<crate::mcp_setup::McpStatus> {
 /// the UI can guide the user when the CLI isn't found.
 #[tauri::command]
 pub async fn connect_claude_code() -> AppResult<crate::mcp_setup::McpConnectResult> {
-    Ok(crate::mcp_setup::connect())
+    tokio::task::spawn_blocking(crate::mcp_setup::connect)
+        .await
+        .map_err(|e| AppError::Other(format!("connect task failed: {e}")))
 }
 
 #[cfg(test)]

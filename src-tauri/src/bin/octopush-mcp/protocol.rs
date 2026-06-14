@@ -8,10 +8,25 @@
 
 use serde_json::{json, Value};
 
-/// The newest spec revision we implement. If the client asks for a different
-/// dated version we echo *theirs* back (forward/backward compatible handshake);
-/// this is only the fallback when the client omits one.
+/// The newest spec revision we implement, used when the client omits one or
+/// asks for a version we don't speak.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// Dated revisions this server can speak. On `initialize` we echo the client's
+/// requested version only if it's one of these; otherwise we answer with our
+/// latest and let the client decide, per the MCP version-negotiation rule.
+const SUPPORTED_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+
+fn negotiate_version(client_protocol: Option<&str>) -> &'static str {
+    match client_protocol {
+        Some(v) => SUPPORTED_VERSIONS
+            .iter()
+            .copied()
+            .find(|&s| s == v)
+            .unwrap_or(PROTOCOL_VERSION),
+        None => PROTOCOL_VERSION,
+    }
+}
 
 pub const SERVER_NAME: &str = "octopush";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -38,7 +53,7 @@ pub fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
 /// The `initialize` result: advertise the tools capability and our identity.
 pub fn initialize_result(client_protocol: Option<&str>) -> Value {
     json!({
-        "protocolVersion": client_protocol.unwrap_or(PROTOCOL_VERSION),
+        "protocolVersion": negotiate_version(client_protocol),
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
         "instructions": INSTRUCTIONS,

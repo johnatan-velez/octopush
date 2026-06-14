@@ -371,8 +371,13 @@ fn get_workspace(db: &Db, args: &Value) -> Result<Value, String> {
 
 fn link_workspace_issue(db: &Db, args: &Value) -> Result<Value, String> {
     let id = req_str(args, "workspaceId")?;
-    // Present-but-null clears the link; absent also clears it.
-    let issue = opt_str(args, "issueKey");
+    // Confirm the workspace exists — otherwise the UPDATE touches zero rows and
+    // we'd report a success the model would trust.
+    if db.get_workspace(&id).map_err(|e| e.to_string())?.is_none() {
+        return Err(format!("no workspace with id '{id}'"));
+    }
+    // null, absent, or an empty/whitespace key all mean "clear the link".
+    let issue = opt_str(args, "issueKey").filter(|s| !s.trim().is_empty());
     db.update_workspace_link(&id, issue.clone())
         .map_err(|e| e.to_string())?;
     Ok(json!({ "workspaceId": id, "linkedIssueKey": issue }))
