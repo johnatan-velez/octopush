@@ -519,6 +519,10 @@ fn cmd_attach(
                 // Attaching registers the live client; from here on new output
                 // is delivered live (seq >= current).
                 let backlog = sess.attach(tx, since);
+                // Arm the post-attach grace + reset attention baselines so the
+                // reattach redraw (and any already-parked TUI) doesn't fire a
+                // spurious alert. See `Session::on_attach`.
+                sess.on_attach();
                 (oldest, backlog)
             }
         };

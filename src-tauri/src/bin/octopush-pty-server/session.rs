@@ -92,6 +92,23 @@ pub struct Session {
     /// observed at <1% CPU. We require two in a row before firing
     /// to filter out single quiet-tick blips.
     consecutive_idle_ticks: u8,
+    /// Instant before which attention detection is fully suppressed.
+    /// Set on every client (re)attach. The frontend fires a SIGWINCH
+    /// "wiggle" right after a reattach to force alt-screen TUIs (Claude
+    /// Code, vim, htop) to redraw; that redraw is a large output burst
+    /// followed by the process parking again — indistinguishable from
+    /// a genuine busy→idle transition. Without this window every
+    /// backgrounded-but-idle TUI fired an alert the moment the app
+    /// reattached on startup, lighting up several workspaces at once.
+    /// `None` once the window has elapsed (cleared lazily).
+    attention_grace_until: Option<Instant>,
+    /// Whether the foreground process has been observed actually doing
+    /// work (a *measured* >1% CPU tick) since the last (re)attach.
+    /// Event B (TUI-parked) only fires on a real busy→idle transition:
+    /// a TUI that was already parked when the client connected never
+    /// produces a busy tick, so it never alerts on open. Reset on
+    /// every attach.
+    saw_fg_activity: bool,
 }
 
 /// Output-quiet window before considering the byte stream "calm"
@@ -102,6 +119,13 @@ pub const OUTPUT_QUIET_MS: u64 = 2_000;
 /// Minimum bytes since the last attention emit. Filters out a
 /// freshly-spawned shell whose only output is the prompt itself.
 pub const MIN_BYTES_FOR_ATTENTION: u64 = 200;
+
+/// Grace window after a client (re)attaches during which no attention
+/// fires. Must comfortably outlast the frontend's post-reattach
+/// SIGWINCH redraw (~600ms) plus the time the TUI takes to repaint and
+/// settle, so that redraw burst is never mistaken for a fresh
+/// busy→idle transition.
+pub const ATTACH_GRACE_MS: u64 = 3_000;
 
 impl Session {
     pub fn new(id: TerminalId, label: String, cwd: String, started_at: i64) -> Self {
@@ -131,6 +155,8 @@ impl Session {
             last_fg_pgroup: None,
             last_cpu_sample: None,
             consecutive_idle_ticks: 0,
+            attention_grace_until: None,
+            saw_fg_activity: false,
         }
     }
 
@@ -229,6 +255,28 @@ impl Session {
         self.attached = None;
     }
 
+    /// Reset attention bookkeeping for a fresh (re)attach.
+    ///
+    /// Sessions outlive the app (the daemon survives restarts), so a
+    /// session that has been parked for hours retains "idle" state.
+    /// When the UI reconnects it also fires a SIGWINCH that makes
+    /// alt-screen TUIs redraw. Both look like a busy→idle transition to
+    /// the detector. We arm a grace window and clear the activity latch
+    /// + sampling baselines so the *next* alert only fires on a genuine
+    /// transition observed live after this attach — not on whatever the
+    /// session happened to be doing when the client showed up.
+    pub fn on_attach(&mut self) {
+        let now = Instant::now();
+        self.attention_grace_until = Some(now + Duration::from_millis(ATTACH_GRACE_MS));
+        self.saw_fg_activity = false;
+        self.attention_pending = false;
+        self.bytes_since_attention = 0;
+        self.last_cpu_sample = None;
+        self.consecutive_idle_ticks = 0;
+        self.last_fg_pgroup = None;
+        self.last_data_at = now;
+    }
+
     /// Returns whether there is a LIVE attached client. A sender whose
     /// receiving end is gone (its connection's writer thread exited without
     /// the per-connection cleanup running, e.g. on a panic) counts as
@@ -279,6 +327,17 @@ impl Session {
         if !self.running {
             return false;
         }
+        // Post-(re)attach grace: ignore everything (including the
+        // SIGWINCH redraw burst the reattach itself provokes) until the
+        // window elapses. We deliberately touch no other state here so
+        // that when detection resumes the baselines are exactly what
+        // `on_attach` reset them to — a clean slate, not a stale diff.
+        if let Some(until) = self.attention_grace_until {
+            if Instant::now() < until {
+                return false;
+            }
+            self.attention_grace_until = None;
+        }
         if self.attention_pending {
             return false;
         }
@@ -327,6 +386,11 @@ impl Session {
             }
         };
         let now = Instant::now();
+        // Whether we have a real prior sample to diff against. The very
+        // first post-attach sample is "unknown" (no baseline) — it must
+        // count as neither idle nor activity, otherwise reattaching onto
+        // a parked TUI would record a phantom busy tick.
+        let had_prev_sample = self.last_cpu_sample.is_some();
         let is_idle_now = match self.last_cpu_sample {
             Some((t, prev_ns)) => {
                 let wall_ns = now.duration_since(t).as_nanos() as u64;
@@ -346,11 +410,20 @@ impl Session {
             self.consecutive_idle_ticks = self.consecutive_idle_ticks.saturating_add(1);
         } else {
             self.consecutive_idle_ticks = 0;
+            // A *measured* busy tick (we had a baseline and CPU moved)
+            // marks the session as having genuinely worked since attach.
+            if had_prev_sample {
+                self.saw_fg_activity = true;
+            }
         }
 
         let quiet = self.last_data_at.elapsed() >= Duration::from_millis(OUTPUT_QUIET_MS);
 
-        if self.consecutive_idle_ticks >= 2 && quiet {
+        // Only fire on a busy→idle transition we actually witnessed
+        // (`saw_fg_activity`). A TUI that was already parked when the
+        // client attached produces idle ticks forever but never a busy
+        // one, so it stays silent — which is the whole point.
+        if self.consecutive_idle_ticks >= 2 && quiet && self.saw_fg_activity {
             self.attention_pending = true;
             self.bytes_since_attention = 0;
             self.consecutive_idle_ticks = 0;
@@ -463,5 +536,84 @@ mod tests {
         assert_eq!(backlog[0].1, b"second");
         assert_eq!(backlog[1].0, 2);
         assert_eq!(backlog[1].1, b"third");
+    }
+
+    fn new_sess() -> Session {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("HOME", tmp.path());
+        Session::new("attn-test".into(), "label".into(), "/tmp".into(), 0)
+    }
+
+    /// Event A (command-finished): the foreground pgroup transitions from
+    /// a non-shell child back to the shell → fire, once the grace window
+    /// has elapsed and there was substantial output.
+    #[test]
+    fn command_finished_fires_after_grace() {
+        let mut sess = new_sess();
+        sess.shell_pid = Some(100);
+        sess.bytes_since_attention = MIN_BYTES_FOR_ATTENTION;
+        sess.attention_grace_until = None; // grace already elapsed
+
+        // Tick 1: a child owns the PTY. Records prev_fg, doesn't fire.
+        assert!(!sess.check_attention(Some(200)));
+        // Tick 2: shell regained control → the child exited → fire.
+        assert!(sess.check_attention(Some(100)));
+        // Latched: a second identical tick must not re-fire.
+        assert!(!sess.check_attention(Some(100)));
+    }
+
+    /// During the post-attach grace window, even a clean command-finished
+    /// transition is suppressed — this is what stops several workspaces
+    /// lighting up the instant the app reattaches on startup.
+    #[test]
+    fn grace_suppresses_command_finished() {
+        let mut sess = new_sess();
+        sess.shell_pid = Some(100);
+        sess.bytes_since_attention = MIN_BYTES_FOR_ATTENTION;
+        // Wide-open grace window.
+        sess.attention_grace_until = Some(Instant::now() + Duration::from_secs(60));
+
+        // The child→shell transition happens entirely inside the grace
+        // window and must not fire.
+        assert!(!sess.check_attention(Some(200)));
+        assert!(!sess.check_attention(Some(100)));
+    }
+
+    /// `on_attach` arms the grace window and wipes the activity latch and
+    /// sampling baselines so a session that was parked before the client
+    /// connected can't fire until it does fresh work.
+    #[test]
+    fn on_attach_resets_attention_state() {
+        let mut sess = new_sess();
+        // Simulate a session that had accumulated "ready to fire" state.
+        sess.bytes_since_attention = 10_000;
+        sess.attention_pending = true;
+        sess.saw_fg_activity = true;
+        sess.consecutive_idle_ticks = 5;
+        sess.last_fg_pgroup = Some(200);
+        sess.last_cpu_sample = Some((Instant::now(), 123));
+
+        sess.on_attach();
+
+        assert!(sess.attention_grace_until.is_some());
+        assert!(!sess.saw_fg_activity);
+        assert!(!sess.attention_pending);
+        assert_eq!(sess.bytes_since_attention, 0);
+        assert_eq!(sess.consecutive_idle_ticks, 0);
+        assert!(sess.last_fg_pgroup.is_none());
+        assert!(sess.last_cpu_sample.is_none());
+    }
+
+    /// A tiny output burst (under the byte threshold) never fires, even
+    /// after grace — filters out a bare shell prompt redrawing.
+    #[test]
+    fn below_byte_threshold_never_fires() {
+        let mut sess = new_sess();
+        sess.shell_pid = Some(100);
+        sess.attention_grace_until = None;
+        sess.bytes_since_attention = MIN_BYTES_FOR_ATTENTION - 1;
+
+        assert!(!sess.check_attention(Some(200)));
+        assert!(!sess.check_attention(Some(100)));
     }
 }
