@@ -266,15 +266,28 @@ impl Session {
     /// transition observed live after this attach — not on whatever the
     /// session happened to be doing when the client showed up.
     pub fn on_attach(&mut self) {
-        let now = Instant::now();
-        self.attention_grace_until = Some(now + Duration::from_millis(ATTACH_GRACE_MS));
-        self.saw_fg_activity = false;
+        self.attention_grace_until =
+            Some(Instant::now() + Duration::from_millis(ATTACH_GRACE_MS));
         self.attention_pending = false;
+        self.reset_attention_baselines();
+    }
+
+    /// Wipe the live attention baselines — byte counter, CPU sample,
+    /// idle-tick counter, foreground-pgroup history and activity latch —
+    /// so detection restarts from a clean slate with no stale diff.
+    ///
+    /// Shared by [`Self::on_attach`] (at connect time) and the grace
+    /// expiry in [`Self::check_attention`]: the latter discards the
+    /// reattach SIGWINCH redraw burst, which lands *during* the grace
+    /// window, so its bytes and the transient repaint CPU never seed the
+    /// first post-grace measurement.
+    fn reset_attention_baselines(&mut self) {
+        self.saw_fg_activity = false;
         self.bytes_since_attention = 0;
         self.last_cpu_sample = None;
         self.consecutive_idle_ticks = 0;
         self.last_fg_pgroup = None;
-        self.last_data_at = now;
+        self.last_data_at = Instant::now();
     }
 
     /// Returns whether there is a LIVE attached client. A sender whose
@@ -336,7 +349,11 @@ impl Session {
             if Instant::now() < until {
                 return false;
             }
+            // Grace just elapsed: discard the reattach redraw burst (and
+            // any pre-grace CPU/pgroup readings) so detection resumes
+            // from a genuinely clean slate, not a stale diff.
             self.attention_grace_until = None;
+            self.reset_attention_baselines();
         }
         if self.attention_pending {
             return false;
@@ -601,6 +618,33 @@ mod tests {
         assert_eq!(sess.bytes_since_attention, 0);
         assert_eq!(sess.consecutive_idle_ticks, 0);
         assert!(sess.last_fg_pgroup.is_none());
+        assert!(sess.last_cpu_sample.is_none());
+    }
+
+    /// When the grace window expires, the bytes/CPU/pgroup baselines are
+    /// wiped so the reattach redraw burst that landed during grace can't
+    /// seed the first post-grace measurement.
+    #[test]
+    fn grace_expiry_discards_redraw_baseline() {
+        let mut sess = new_sess();
+        sess.shell_pid = Some(100);
+        // Simulate the redraw burst + stale readings accumulated during grace.
+        sess.bytes_since_attention = 10_000;
+        sess.saw_fg_activity = true;
+        sess.consecutive_idle_ticks = 4;
+        sess.last_fg_pgroup = Some(200);
+        sess.last_cpu_sample = Some((Instant::now(), 999));
+        // A grace deadline already in the past → next tick treats it as expired.
+        sess.attention_grace_until =
+            Instant::now().checked_sub(Duration::from_millis(50));
+        assert!(sess.attention_grace_until.is_some(), "test precondition");
+
+        // The expiry tick wipes the baselines and does not fire.
+        assert!(!sess.check_attention(Some(100)));
+        assert!(sess.attention_grace_until.is_none());
+        assert_eq!(sess.bytes_since_attention, 0);
+        assert!(!sess.saw_fg_activity);
+        assert_eq!(sess.consecutive_idle_ticks, 0);
         assert!(sess.last_cpu_sample.is_none());
     }
 
