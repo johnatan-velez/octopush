@@ -304,11 +304,18 @@ impl Orchestrator {
                 return Ok((StageStatus::Failed, None));
             }
         };
-        let role_def = match self.db.lock().get_role(&stage.role)? {
-            Some(rd) => rd,
-            None => {
-                self.db.lock().fail_run_stage(&stage.id, &format!("unknown role '{}'", stage.role))?;
-                self.record_halt(&run.id, &stage.id, &format!("unknown role '{}'", stage.role));
+        let role_def = match self.db.lock().get_role(&stage.role) {
+            Ok(Some(rd)) => rd,
+            Ok(None) => {
+                let msg = format!("unknown role '{}'", stage.role);
+                let _ = self.db.lock().fail_run_stage(&stage.id, &msg);
+                self.record_halt(&run.id, &stage.id, &msg);
+                return Ok((StageStatus::Failed, None));
+            }
+            Err(_) => {
+                let msg = format!("could not resolve role '{}'", stage.role);
+                let _ = self.db.lock().fail_run_stage(&stage.id, &msg);
+                self.record_halt(&run.id, &stage.id, &msg);
                 return Ok((StageStatus::Failed, None));
             }
         };
@@ -845,7 +852,7 @@ impl Orchestrator {
                         let kind = self.db.lock().get_role(&s.role)
                             .ok().flatten()
                             .map(|rd| rd.artifact_kind)
-                            .unwrap_or(ArtifactKind::Note);
+                            .unwrap_or(ArtifactKind::Diff);
                         let refs_worktree = matches!(kind, ArtifactKind::Diff | ArtifactKind::Tests);
                         let reason = s
                             .error

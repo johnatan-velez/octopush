@@ -579,14 +579,23 @@ impl Db {
         self.conn.execute(
             "INSERT INTO roles (key,label,description,prompt_body,artifact_kind,environment,can_loop,default_tools,default_substrate,default_checkpoint,token_est_in,token_est_out,is_builtin,created_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
-             ON CONFLICT(key) DO UPDATE SET label=?2,description=?3,prompt_body=?4,artifact_kind=?5,environment=?6,can_loop=?7,default_tools=?8,default_substrate=?9,default_checkpoint=?10,token_est_in=?11,token_est_out=?12",
+             ON CONFLICT(key) DO UPDATE SET label=?2,description=?3,prompt_body=?4,artifact_kind=?5,environment=?6,can_loop=?7,default_tools=?8,default_substrate=?9,default_checkpoint=?10,token_est_in=?11,token_est_out=?12
+             WHERE roles.is_builtin=0",
             params![role.key, role.label, role.description, role.prompt_body, role.artifact_kind.as_db(), role.environment.as_db(), role.can_loop as i64, serde_json::to_string(&role.default_tools)?, role.default_substrate, role.default_checkpoint as i64, role.token_est_in, role.token_est_out, role.is_builtin as i64, now],
         )?;
         Ok(())
     }
 
     pub fn role_in_use(&self, key: &str) -> AppResult<bool> {
-        let n: i64 = self.conn.query_row("SELECT COUNT(*) FROM pipeline_stages WHERE role=?1", params![key], |r| r.get(0))?;
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM (
+                SELECT id FROM pipeline_stages WHERE role=?1
+                UNION ALL
+                SELECT id FROM run_stages WHERE role=?1
+             )",
+            params![key],
+            |r| r.get(0),
+        )?;
         Ok(n > 0)
     }
 

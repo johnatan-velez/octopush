@@ -5797,4 +5797,28 @@ mod roles_tests {
         let err_msg = del_result.unwrap_err().to_string();
         assert!(err_msg.contains("perf_audit"), "error should mention the role key");
     }
+
+    #[test]
+    fn save_role_cannot_overwrite_builtin() {
+        let (db, _tmp) = test_db();
+        // Grab the built-in code_review's original prompt so we can check it after.
+        let builtin = db.get_role("code_review").unwrap().unwrap();
+        assert!(builtin.is_builtin, "code_review must be a built-in");
+        let original_prompt = builtin.prompt_body.clone();
+
+        // Attempt to upsert a custom role that happens to share the same key.
+        let mut imposter = builtin.clone();
+        imposter.is_builtin = false;
+        imposter.prompt_body = "INJECTED PROMPT".into();
+        // upsert_role's WHERE guard (is_builtin=0) must silently ignore this.
+        db.upsert_role(&imposter).unwrap();
+
+        // The built-in row must be UNCHANGED.
+        let after = db.get_role("code_review").unwrap().unwrap();
+        assert_eq!(
+            after.prompt_body, original_prompt,
+            "upsert_role must not overwrite a built-in role's prompt"
+        );
+        assert!(after.is_builtin, "is_builtin flag must still be 1");
+    }
 }

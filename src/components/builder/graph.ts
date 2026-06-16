@@ -39,7 +39,7 @@ export const TOOLS: ToolMeta[] = [
 const TOOL_IDS = TOOLS.map((t) => t.id);
 
 // ─── Archetypes ─────────────────────────────────────────────────────────────
-// Keep roles in sync with KNOWN_ROLES/REVIEW_ROLES in src-tauri/src/db.rs.
+// Roles are loaded from the backend `roles` table via listRoles()/setArchetypes().
 
 export type ArtifactKind = "plan" | "review" | "diff" | "tests" | "note";
 

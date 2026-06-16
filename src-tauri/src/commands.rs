@@ -4005,13 +4005,28 @@ pub async fn save_role(state: State<'_, AppState>, role: crate::orchestrator::ro
     let mut role = role;
     role.is_builtin = false; // user-saved roles are never built-in
     if role.key.trim().is_empty() { return Err(crate::error::AppError::Other("role key required".into())); }
-    state.db.lock().upsert_role(&role)?;
+    if role.prompt_body.trim().is_empty() { return Err(crate::error::AppError::Other("role prompt cannot be empty".into())); }
+    let db = state.db.lock();
+    if let Some(existing) = db.get_role(&role.key)? {
+        if existing.is_builtin {
+            return Err(crate::error::AppError::Other(format!(
+                "the name '{}' maps to a built-in role key ('{}'); choose a different name",
+                role.label, role.key
+            )));
+        }
+    }
+    db.upsert_role(&role)?;
     Ok(role)
 }
 
 #[tauri::command]
 pub async fn delete_role(state: State<'_, AppState>, key: String) -> AppResult<()> {
     let db = state.db.lock();
+    if let Some(existing) = db.get_role(&key)? {
+        if existing.is_builtin {
+            return Err(crate::error::AppError::Other(format!("cannot delete the built-in role '{key}'")));
+        }
+    }
     if db.role_in_use(&key)? { return Err(crate::error::AppError::Other(format!("role '{key}' is used by a pipeline"))); }
     db.delete_role(&key)
 }
