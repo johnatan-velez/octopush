@@ -5659,3 +5659,31 @@ mod git_baseline_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod roles_tests {
+    #[test]
+    fn builtin_roles_seed_matches_legacy_prompts() {
+        use crate::orchestrator::roles::{builtin_roles, compose_system_prompt};
+        use crate::orchestrator::types::RoleEnvironment;
+        let by = |k: &str| builtin_roles().into_iter().find(|r| r.key == k).unwrap();
+        // plan body, worktree preamble, no instructions, no verdict
+        let plan = by("plan");
+        let got = compose_system_prompt(&plan.prompt_body, plan.environment, None, None);
+        assert!(got.contains("You are one stage in an automated, headless build pipeline."));
+        assert!(got.contains("Do not commit, push, or otherwise manage git"));
+        assert!(got.contains("Produce a concise, concrete implementation plan"));
+        // there are 15 builtin roles, all keys unique
+        let all = builtin_roles();
+        assert_eq!(all.len(), 15);
+        let mut keys: Vec<_> = all.iter().map(|r| r.key.clone()).collect();
+        keys.sort(); keys.dedup();
+        assert_eq!(keys.len(), 15);
+        // an action role uses the action preamble
+        let rel = by("release");
+        assert_eq!(rel.environment, RoleEnvironment::Action);
+        let rp = compose_system_prompt(&rel.prompt_body, rel.environment, None, None);
+        assert!(rp.contains("may commit, push"));
+        assert!(!rp.contains("Do not commit, push"));
+    }
+}
