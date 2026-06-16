@@ -2251,17 +2251,17 @@ mod pipeline_crud_tests {
 
     #[test]
     fn validate_pipeline_stages_bounds_the_tool_turn_budget() {
-        use crate::db::validate_pipeline_stages;
+        let db = test_db();
         // F4: per-stage max_iterations must be 1..=100.
         let mut zero = draft("plan"); zero.max_iterations = 0;
-        assert!(validate_pipeline_stages(&[zero]).is_err());
+        assert!(db.validate_pipeline_stages(&[zero]).is_err());
         let mut over = draft("plan"); over.max_iterations = 101;
-        assert!(validate_pipeline_stages(&[over]).is_err());
+        assert!(db.validate_pipeline_stages(&[over]).is_err());
         let mut ok = draft("plan"); ok.max_iterations = 25;
-        assert!(validate_pipeline_stages(&[ok]).is_ok());
+        assert!(db.validate_pipeline_stages(&[ok]).is_ok());
         let mut edge_lo = draft("plan"); edge_lo.max_iterations = 1;
         let mut edge_hi = draft("plan"); edge_hi.max_iterations = 100;
-        assert!(validate_pipeline_stages(&[edge_lo, edge_hi]).is_ok());
+        assert!(db.validate_pipeline_stages(&[edge_lo, edge_hi]).is_ok());
     }
 
     #[test]
@@ -2286,40 +2286,40 @@ mod pipeline_crud_tests {
 
     #[test]
     fn validate_pipeline_stages_enforces_roles_substrates_and_loop_contract() {
-        use crate::db::validate_pipeline_stages;
+        let db = test_db();
         // valid linear pipeline
-        assert!(validate_pipeline_stages(&[draft("plan"), draft("implement")]).is_ok());
+        assert!(db.validate_pipeline_stages(&[draft("plan"), draft("implement")]).is_ok());
         // empty pipeline / unknown role / bad substrate / empty model
-        assert!(validate_pipeline_stages(&[]).is_err());
-        assert!(validate_pipeline_stages(&[draft("dance")]).is_err());
+        assert!(db.validate_pipeline_stages(&[]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("dance")]).is_err());
         let mut bad_sub = draft("plan"); bad_sub.substrate = "ftp".into();
-        assert!(validate_pipeline_stages(&[bad_sub]).is_err());
+        assert!(db.validate_pipeline_stages(&[bad_sub]).is_err());
         let mut no_model = draft("plan"); no_model.agent_model = "".into();
-        assert!(validate_pipeline_stages(&[no_model]).is_err());
+        assert!(db.validate_pipeline_stages(&[no_model]).is_err());
 
         // valid gated loop: code_review at index 1 loops back to 0
         let mut review = draft("code_review");
         review.loop_target_position = Some(0); review.loop_max_iterations = 2; review.loop_mode = Some("gated".into());
-        assert!(validate_pipeline_stages(&[draft("implement"), review.clone()]).is_ok());
+        assert!(db.validate_pipeline_stages(&[draft("implement"), review.clone()]).is_ok());
 
         // loop on a non-review role
         let mut looped_impl = draft("implement");
         looped_impl.loop_target_position = Some(0); looped_impl.loop_max_iterations = 2; looped_impl.loop_mode = Some("gated".into());
-        assert!(validate_pipeline_stages(&[draft("plan"), looped_impl]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("plan"), looped_impl]).is_err());
         // target not strictly earlier (self)
         let mut self_loop = review.clone(); self_loop.loop_target_position = Some(1);
-        assert!(validate_pipeline_stages(&[draft("implement"), self_loop]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("implement"), self_loop]).is_err());
         // target out of range
         let mut far = review.clone(); far.loop_target_position = Some(5);
-        assert!(validate_pipeline_stages(&[draft("implement"), far]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("implement"), far]).is_err());
         // max 0 with a target / bad mode
         let mut zero = review.clone(); zero.loop_max_iterations = 0;
-        assert!(validate_pipeline_stages(&[draft("implement"), zero]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("implement"), zero]).is_err());
         let mut mode = review.clone(); mode.loop_mode = Some("magic".into());
-        assert!(validate_pipeline_stages(&[draft("implement"), mode]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("implement"), mode]).is_err());
         // no target but leftover loop fields → invalid (builder must normalize)
         let mut leftover = draft("code_review"); leftover.loop_max_iterations = 2;
-        assert!(validate_pipeline_stages(&[draft("implement"), leftover]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("implement"), leftover]).is_err());
     }
 
     #[test]
@@ -2364,40 +2364,40 @@ mod pipeline_crud_tests {
 
     #[test]
     fn validate_pipeline_stages_enforces_graph_fields() {
-        use crate::db::validate_pipeline_stages;
+        let db = test_db();
 
         // parents must reference strictly-earlier stages.
         let mut a = draft("plan");
         let mut b = draft("implement");
         b.parents = vec![0]; // ok: 0 < 1
-        assert!(validate_pipeline_stages(&[a.clone(), b.clone()]).is_ok());
+        assert!(db.validate_pipeline_stages(&[a.clone(), b.clone()]).is_ok());
         let mut fwd = draft("implement");
         fwd.parents = vec![1]; // a parent at its own position
-        assert!(validate_pipeline_stages(&[draft("plan"), fwd]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("plan"), fwd]).is_err());
         let mut neg = draft("implement");
         neg.parents = vec![-1];
-        assert!(validate_pipeline_stages(&[draft("plan"), neg]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("plan"), neg]).is_err());
         let mut dup = draft("implement");
         dup.parents = vec![0, 0]; // same upstream twice
-        assert!(validate_pipeline_stages(&[draft("plan"), dup]).is_err());
+        assert!(db.validate_pipeline_stages(&[draft("plan"), dup]).is_err());
 
         // tools: a non-empty subset of the known set; empty or unknown → error.
         a.tools = Some(vec!["read_file".into(), "list_files".into()]);
-        assert!(validate_pipeline_stages(&[a.clone()]).is_ok());
+        assert!(db.validate_pipeline_stages(&[a.clone()]).is_ok());
         let mut empty_tools = draft("plan");
         empty_tools.tools = Some(vec![]);
-        assert!(validate_pipeline_stages(&[empty_tools]).is_err());
+        assert!(db.validate_pipeline_stages(&[empty_tools]).is_err());
         let mut bad_tool = draft("plan");
         bad_tool.tools = Some(vec!["telepathy".into()]);
-        assert!(validate_pipeline_stages(&[bad_tool]).is_err());
+        assert!(db.validate_pipeline_stages(&[bad_tool]).is_err());
 
         // instructions: long but bounded.
         let mut long = draft("plan");
         long.instructions = Some("x".repeat(9_000));
-        assert!(validate_pipeline_stages(&[long]).is_err());
+        assert!(db.validate_pipeline_stages(&[long]).is_err());
         let mut ok_instr = draft("plan");
         ok_instr.instructions = Some("Focus on the auth module.".into());
-        assert!(validate_pipeline_stages(&[ok_instr]).is_ok());
+        assert!(db.validate_pipeline_stages(&[ok_instr]).is_ok());
 
         // In an authored graph, a loop must return to an ANCESTOR of the review,
         // not merely an earlier position (a sibling branch).
@@ -2409,10 +2409,10 @@ mod pipeline_crud_tests {
         rv.loop_max_iterations = 2;
         rv.loop_mode = Some("gated".into());
         rv.loop_target_position = Some(2); // sibling branch B — NOT an ancestor of the review
-        assert!(validate_pipeline_stages(&[p.clone(), ia.clone(), ib.clone(), rv.clone()]).is_err());
+        assert!(db.validate_pipeline_stages(&[p.clone(), ia.clone(), ib.clone(), rv.clone()]).is_err());
         let mut rv_ok = rv.clone();
         rv_ok.loop_target_position = Some(0); // the shared ancestor — fine
-        assert!(validate_pipeline_stages(&[p, ia, ib, rv_ok]).is_ok());
+        assert!(db.validate_pipeline_stages(&[p, ia, ib, rv_ok]).is_ok());
     }
 
     #[test]
@@ -2454,6 +2454,19 @@ mod pipeline_crud_tests {
         db.delete_pipeline(&id).unwrap();
         assert!(db.list_pipelines().unwrap().iter().all(|p| p.id != id));
         assert!(db.get_pipeline_stages(&id).unwrap().is_empty()); // stages gone too
+    }
+
+    #[test]
+    fn validate_accepts_seeded_and_custom_rejects_unknown() {
+        let db = test_db();
+        let mk = |role: &str| crate::db::StageDraft {
+            role: role.into(), agent_model: "m".into(), substrate: "api".into(),
+            checkpoint: false, loop_target_position: None, loop_max_iterations: 0, loop_mode: None,
+            max_iterations: 25, pos_x: None, pos_y: None, parents: vec![], tools: None,
+            custom_name: None, instructions: None,
+        };
+        assert!(db.validate_pipeline_stages(&[mk("code_review")]).is_ok());
+        assert!(db.validate_pipeline_stages(&[mk("bogus_role")]).is_err());
     }
 }
 

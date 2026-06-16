@@ -1192,16 +1192,6 @@ pub async fn estimate_run_cost(
     pipeline_id: String,
     stage_overrides: Option<Vec<(i64, String)>>,
 ) -> AppResult<serde_json::Value> {
-    // Heuristic per-role token estimate (refined later from history).
-    fn est_tokens(role: &str) -> (u64, u64) {
-        match role {
-            "implement" | "fix" => (12_000, 6_000),
-            "plan" | "refine" => (4_000, 1_500),
-            "code_review" | "plan_review" | "critique" | "verify" | "repro" => (8_000, 1_000),
-            "test" => (6_000, 2_000),
-            _ => (4_000, 1_000),
-        }
-    }
     let overrides = stage_overrides.unwrap_or_default();
     let db = state.db.lock();
     let stages = db.get_pipeline_stages(&pipeline_id)?;
@@ -1209,15 +1199,20 @@ pub async fn estimate_run_cost(
     let mut cost = 0.0;
     let mut baseline = 0.0;
     for s in &stages {
-        let (i, o) = est_tokens(&s.role);
+        // Token estimates come from the role's definition in the DB; fall back to
+        // (4000, 1000) when the role is absent (custom/deleted roles).
+        let (tok_in, tok_out) = db
+            .get_role(&s.role)?
+            .map(|r| (r.token_est_in as u64, r.token_est_out as u64))
+            .unwrap_or((4_000, 1_000));
         let model = overrides
             .iter()
             .find(|(pos, _)| *pos == s.position)
             .map(|(_, m)| m.as_str())
             .unwrap_or(s.agent_model.as_str());
-        cost += crate::orchestrator::cost::stage_cost(model, i, o, 0, 0);
+        cost += crate::orchestrator::cost::stage_cost(model, tok_in, tok_out, 0, 0);
         if let Some(ref_model) = &reference {
-            baseline += crate::orchestrator::cost::baseline_cost(ref_model, i, o);
+            baseline += crate::orchestrator::cost::baseline_cost(ref_model, tok_in, tok_out);
         }
     }
     if reference.is_none() || baseline < cost {

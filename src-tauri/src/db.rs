@@ -1876,7 +1876,7 @@ impl Db {
         if name.trim().is_empty() {
             return Err(AppError::Other("the pipeline needs a name".into()));
         }
-        validate_pipeline_stages(stages)?;
+        self.validate_pipeline_stages(stages)?;
 
         // Resolve the edit target: does it exist, and is it a builtin?
         let target: Option<(String, bool)> = match pipeline_id.as_deref() {
@@ -2593,12 +2593,6 @@ const MAX_INSTRUCTIONS_CHARS: usize = 8_000;
 /// `tool_definitions()` in chat_engine.rs and `ARCHETYPES` in the builder.
 pub const KNOWN_TOOLS: &[&str] = &["read_file", "list_files", "write_file", "run_command"];
 
-// TODO(roles-T5): Replace KNOWN_ROLES/REVIEW_ROLES with DB lookup after validate_pipeline_stages becomes a Db method.
-const KNOWN_ROLES: &[&str] = &[
-    "plan", "plan_review", "implement", "code_review", "test",
-    "repro", "fix", "verify", "critique", "refine",
-];
-const REVIEW_ROLES: &[&str] = &["plan_review", "code_review", "critique", "verify"];
 
 /// Transitive flow-ancestors of stage `idx`, following `parents` (positions).
 /// Assumes parents reference earlier indices (validated before this is used).
@@ -2614,8 +2608,10 @@ fn draft_ancestors(stages: &[StageDraft], idx: usize) -> std::collections::HashS
     seen
 }
 
-/// Validate a pipeline's stage drafts (the §3.7 builder contract). Pure.
-pub fn validate_pipeline_stages(stages: &[StageDraft]) -> crate::error::AppResult<()> {
+/// Validate a pipeline's stage drafts (the §3.7 builder contract).
+/// Roles are looked up from the DB; an unknown role key is rejected.
+impl Db {
+pub fn validate_pipeline_stages(&self, stages: &[StageDraft]) -> crate::error::AppResult<()> {
     use crate::error::AppError;
     if stages.is_empty() {
         return Err(AppError::Other("a pipeline needs at least one stage".into()));
@@ -2625,7 +2621,7 @@ pub fn validate_pipeline_stages(stages: &[StageDraft]) -> crate::error::AppResul
     // draft has no parents, so "earlier position" is the right contract there).
     let authored = stages.iter().any(|s| !s.parents.is_empty());
     for (i, s) in stages.iter().enumerate() {
-        if !KNOWN_ROLES.contains(&s.role.as_str()) {
+        if self.get_role(&s.role)?.is_none() {
             return Err(AppError::Other(format!("unknown stage role '{}'", s.role)));
         }
         if !matches!(s.substrate.as_str(), "api" | "cli") {
@@ -2687,7 +2683,7 @@ pub fn validate_pipeline_stages(stages: &[StageDraft]) -> crate::error::AppResul
         }
         match s.loop_target_position {
             Some(target) => {
-                if !REVIEW_ROLES.contains(&s.role.as_str()) {
+                if !self.get_role(&s.role)?.map(|r| r.can_loop).unwrap_or(false) {
                     return Err(AppError::Other(format!("stage '{}' cannot carry a loop (not a review role)", s.role)));
                 }
                 if target < 0 || target >= i as i64 {
@@ -2717,6 +2713,7 @@ pub fn validate_pipeline_stages(stages: &[StageDraft]) -> crate::error::AppResul
     }
     Ok(())
 }
+} // impl Db (validate_pipeline_stages)
 
 #[derive(serde::Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
