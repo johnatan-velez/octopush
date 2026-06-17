@@ -657,6 +657,27 @@ function App() {
     [activeWorkspaceId],
   );
 
+  // Cross-mode action (P9): re-run a chat tool's shell command in RUN mode.
+  // Switches to the terminal, then types the command into the active terminal
+  // (creating one if the workspace has none yet) — the user presses Enter, so
+  // nothing executes without their confirmation.
+  const handleRunInTerminal = useCallback(
+    async (command: string) => {
+      if (!activeWorkspaceId) return;
+      setMode("run");
+      let terminalId = useTerminalsStore.getState().getActiveId(activeWorkspaceId);
+      if (!terminalId) {
+        await createTerminal(activeWorkspaceId, "Main").catch(() => {});
+        terminalId = useTerminalsStore.getState().getActiveId(activeWorkspaceId);
+      }
+      if (terminalId) {
+        // No trailing newline — let the user review and hit Enter themselves.
+        await ipc.writeTextToSession(terminalId, command).catch(() => {});
+      }
+    },
+    [activeWorkspaceId, setMode, createTerminal],
+  );
+
   // ── Chat / terminal handlers wired to Companion ──
   // Conversation-thread handlers delegate to chatStore, which persists threads
   // in the DB (real multi-conversation per workspace) and keeps the active
@@ -1407,6 +1428,7 @@ function App() {
                     workspacePath={activeWorkspace.worktreePath || project.path}
                     onOpenSettings={() => setSettingsTab("general")}
                     onOpenInEditor={(p) => navigateToFile(p, "editor")}
+                    onRunInTerminal={handleRunInTerminal}
                   />
                 )}
               </ModeOverlay>
