@@ -199,8 +199,8 @@ export function ToolCallCard({ tool, workspacePath, onOpenInEditor, onRunInTermi
                 onRunInTerminal(command);
               }
             }}
-            title="Run in terminal"
-            aria-label="Run in terminal"
+            title="Send to terminal (copies the command and switches to Run)"
+            aria-label="Send to terminal"
             style={{
               fontFamily: "system-ui, sans-serif",
               fontSize: 11,
@@ -214,7 +214,7 @@ export function ToolCallCard({ tool, workspacePath, onOpenInEditor, onRunInTermi
               flexShrink: 0,
             }}
           >
-            Run in terminal
+            Send to terminal
           </div>
         )}
 

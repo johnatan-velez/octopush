@@ -657,25 +657,18 @@ function App() {
     [activeWorkspaceId],
   );
 
-  // Cross-mode action (P9): re-run a chat tool's shell command in RUN mode.
-  // Switches to the terminal, then types the command into the active terminal
-  // (creating one if the workspace has none yet) — the user presses Enter, so
-  // nothing executes without their confirmation.
+  // Cross-mode action (P9): take a chat tool's shell command to RUN mode.
+  // Switches to the terminal and copies the command to the clipboard so the
+  // user pastes + reviews + presses Enter — deliberately a hand-off, not an
+  // auto-run: it never injects into a not-yet-spawned PTY (which would silently
+  // drop the text) and never auto-executes a multi-line command.
   const handleRunInTerminal = useCallback(
-    async (command: string) => {
+    (command: string) => {
       if (!activeWorkspaceId) return;
       setMode("run");
-      let terminalId = useTerminalsStore.getState().getActiveId(activeWorkspaceId);
-      if (!terminalId) {
-        await createTerminal(activeWorkspaceId, "Main").catch(() => {});
-        terminalId = useTerminalsStore.getState().getActiveId(activeWorkspaceId);
-      }
-      if (terminalId) {
-        // No trailing newline — let the user review and hit Enter themselves.
-        await ipc.writeTextToSession(terminalId, command).catch(() => {});
-      }
+      void copyToClipboard(command, "Command copied — paste into the terminal to run");
     },
-    [activeWorkspaceId, setMode, createTerminal],
+    [activeWorkspaceId, setMode],
   );
 
   // ── Chat / terminal handlers wired to Companion ──
