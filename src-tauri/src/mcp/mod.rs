@@ -83,8 +83,15 @@ pub fn save_user_config(servers: &HashMap<String, McpServerConfig>) -> Result<()
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let body = serde_json::json!({ "mcpServers": servers });
-    let pretty = serde_json::to_string_pretty(&body).map_err(|e| e.to_string())?;
+    // Preserve any sibling top-level keys the user keeps in mcp.json — only the
+    // `mcpServers` object is ours to rewrite. (Comments aren't preserved; JSON.)
+    let mut root = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    root["mcpServers"] = serde_json::to_value(servers).map_err(|e| e.to_string())?;
+    let pretty = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
     std::fs::write(&path, pretty).map_err(|e| e.to_string())
 }
 
@@ -395,6 +402,7 @@ while IFS= read -r line; do
 done
 "#;
 
+    #[cfg(unix)]
     #[test]
     fn client_connects_and_lists_tools_against_a_fixture_server() {
         use std::os::unix::fs::PermissionsExt;

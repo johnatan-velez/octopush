@@ -92,9 +92,11 @@ export function McpServersSection() {
   }
 
   async function testServer(key: string) {
+    const config = servers[key];
+    if (!config) return;
     setTests((s) => ({ ...s, [key]: { kind: "testing" } }));
     try {
-      const tools = await ipc.testMcpServer(key, servers[key]);
+      const tools = await ipc.testMcpServer(key, config);
       setTests((s) => ({ ...s, [key]: { kind: "ok", tools: tools.length } }));
     } catch (e) {
       setTests((s) => ({ ...s, [key]: { kind: "error", message: String(e) } }));
@@ -196,11 +198,15 @@ export function McpServersSection() {
             <button
               type="button"
               onClick={addServer}
-              disabled={!name.trim() || !command.trim()}
+              disabled={!name.trim() || !command.trim() || !!servers[name.trim()]}
+              title={servers[name.trim()] ? "A server with this name already exists" : undefined}
               className="rounded-md border border-[var(--brass-dim)] bg-[var(--brass-ghost)] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-octo-brass transition-colors disabled:opacity-40"
             >
               Add server
             </button>
+            {!!servers[name.trim()] && (
+              <span className="font-mono text-[10px] text-octo-rouge">name already exists</span>
+            )}
             <button
               type="button"
               onClick={resetDraft}

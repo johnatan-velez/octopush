@@ -1007,10 +1007,17 @@ pub async fn test_mcp_server(
     name: String,
     config: crate::mcp::McpServerConfig,
 ) -> AppResult<Vec<crate::mcp::McpToolInfo>> {
-    tokio::task::spawn_blocking(move || crate::mcp::McpRegistry::test_connect(&name, &config))
-        .await
-        .map_err(|e| crate::error::AppError::Other(e.to_string()))?
-        .map_err(crate::error::AppError::Other)
+    let fut = tokio::task::spawn_blocking(move || crate::mcp::McpRegistry::test_connect(&name, &config));
+    // Bound the test so a server that spawns but never speaks JSON-RPC doesn't
+    // leave the UI spinner stuck forever.
+    match tokio::time::timeout(std::time::Duration::from_secs(15), fut).await {
+        Ok(join) => join
+            .map_err(|e| crate::error::AppError::Other(e.to_string()))?
+            .map_err(crate::error::AppError::Other),
+        Err(_) => Err(crate::error::AppError::Other(
+            "Connection timed out — the server didn't respond within 15s.".into(),
+        )),
+    }
 }
 
 /// Identify a supported image type from its leading bytes, or None.
