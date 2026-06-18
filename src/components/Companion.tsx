@@ -172,7 +172,7 @@ export function Companion({
           ModeSwitcher can never slide under it; its wrapper is min-w-0 and
           scrolls if the companion is narrowed past the switcher's width. */}
       <div className="flex items-center gap-1 border-b border-octo-hairline px-2 py-2">
-        <div className="flex min-w-0 flex-1 justify-center overflow-x-auto">
+        <div className="flex min-w-0 flex-1 justify-center overflow-x-auto [scrollbar-width:thin]">
           <ModeSwitcher
             mode={mode}
             onChange={onModeChange}

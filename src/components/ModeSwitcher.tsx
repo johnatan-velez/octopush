@@ -39,7 +39,10 @@ export function ModeSwitcher({ mode, onChange, workspaceId }: Props) {
     const measure = () => {
       const el = btnRefs.current.get(mode);
       if (!el) return;
-      setIndicator({ left: el.offsetLeft, width: el.offsetWidth });
+      const left = el.offsetLeft;
+      const width = el.offsetWidth;
+      // Skip no-op updates so a resize tick doesn't trigger a redundant render.
+      setIndicator((prev) => (prev && prev.left === left && prev.width === width ? prev : { left, width }));
     };
     measure();
     let ro: ResizeObserver | undefined;
