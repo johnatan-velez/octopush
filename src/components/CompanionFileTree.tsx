@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } fr
 import { Eye, EyeOff, Search } from "lucide-react";
 import { ipc } from "../lib/ipc";
 import type { DirectoryEntry } from "../lib/types";
-import { fileIcon } from "../lib/fileIcons";
+import { fileIcon, fileIconTint } from "../lib/fileIcons";
 import { useReviewPrefs } from "../stores/reviewPrefsStore";
 import { FileTreeContextMenu } from "./FileTreeContextMenu";
 import { FileNameDialog } from "./FileNameDialog";
@@ -773,6 +773,9 @@ function TreeRow({
 }: TreeRowProps) {
   const { path, label, isDir, isIgnored, depth, isRoot, isExpanded, match } = row;
   const Icon = !isDir ? fileIcon(label) : null;
+  // Unchanged files take their category tint; a changed file overrides to
+  // brass so the diff-worthy rows still win the eye.
+  const iconColor = isChanged ? "var(--color-octo-brass)" : (!isDir ? fileIconTint(label) : undefined);
   // Freeze the entrance decision for the lifetime of this mounted instance:
   // re-renders within the animation window must not strip the class
   // mid-flight, and a remount via scrolling arrives with isNew=false.
@@ -827,7 +830,7 @@ function TreeRow({
             size={12}
             aria-hidden="true"
             className="shrink-0 transition-colors duration-[220ms]"
-            style={{ color: isChanged ? "var(--color-octo-brass)" : "var(--color-octo-mute)" }}
+            style={{ color: iconColor }}
           />
         )
       )}

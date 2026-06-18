@@ -124,7 +124,7 @@ describe("CompanionFileTree", () => {
     expect(mockReadDirectory).toHaveBeenCalledTimes(2); // ROOT + src once each
   });
 
-  it("changed files keep their type icon, tinted brass", async () => {
+  it("changed files override to brass; unchanged files take their category tint", async () => {
     render(<CompanionFileTree rootPath={ROOT} rootLabel="my-project" changedPaths={CHANGED} />);
     await waitFor(() => expect(screen.getByText("src")).toBeInTheDocument());
 
@@ -139,11 +139,11 @@ describe("CompanionFileTree", () => {
     // The changed label reads ivory.
     expect(screen.getByText("Main.java").className).toContain("text-octo-ivory");
 
-    // Helper.java is NOT in CHANGED — its type icon stays mute.
+    // Helper.java is NOT in CHANGED — a code file takes the sage category tint.
     const helperRow = screen.getByTestId("file-row-/repo/src/Helper.java");
     const helperIcon = helperRow.querySelector("svg");
     expect(helperIcon).not.toBeNull();
-    expect(helperIcon!.style.color).toContain("var(--color-octo-mute)");
+    expect(helperIcon!.style.color).toContain("var(--color-octo-sage)");
   });
 
   it("shows loading indicator while a folder fetch is in progress", async () => {
