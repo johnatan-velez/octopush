@@ -15,6 +15,7 @@ import { ShortcutsPane } from "./settings/ShortcutsPane";
 import { PrivacyPane } from "./settings/PrivacyPane";
 import { IntegrationsPane } from "./settings/IntegrationsPane";
 import { AboutPane } from "./settings/AboutPane";
+import { isModalOpen } from "./ModalShell";
 
 interface Props {
   open: boolean;
@@ -31,14 +32,33 @@ export function Settings({ open, initialTab = "general", onClose, onIssueTracker
     if (open) setTab(initialTab);
   }, [open, initialTab]);
 
-  // Esc closes Settings.
+  // Esc closes Settings. Registered in the capture phase and consuming the event
+  // so it never reaches the webview/OS — otherwise, in a maximized (macOS
+  // full-screen) window, Escape would exit full-screen instead of closing
+  // Settings. Defers to any ModalShell dialog stacked on top, which runs its own
+  // Escape handler (e.g. the add-model dialog).
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      if (isModalOpen()) return; // a dialog on top handles its own Escape
+      // Always consume the event so a maximized (macOS full-screen) window
+      // never exits full-screen on Escape.
+      e.preventDefault();
+      // If focus is in a field, let that field's own Escape run (e.g. cancel an
+      // inline edit) and leave Settings open — don't hijack it.
+      const target = e.target;
+      if (
+        target instanceof Element &&
+        target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")
+      ) {
+        return;
+      }
+      e.stopPropagation();
+      onClose();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open, onClose]);
 
   if (!open) return null;
