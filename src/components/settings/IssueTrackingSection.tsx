@@ -31,7 +31,17 @@ const TRACKERS: Tracker[] = [
 
 export function IssueTrackingSection({ onConfigSaved }: { onConfigSaved?: () => void }) {
   const [selected, setSelected] = useState<TrackerId>("jira");
-  // Jira is the only configurable tracker today; its detail owns the state.
+  // Whether Jira has a saved connection — drives the status dot honestly, so an
+  // unconfigured tracker doesn't read as connected. Seeded from the saved config
+  // and updated when the detail saves.
+  const [jiraConnected, setJiraConnected] = useState(false);
+
+  useEffect(() => {
+    ipc.getIssueTrackerConfig()
+      .then((cfg) => setJiraConnected(!!(cfg?.baseUrl && cfg?.apiToken)))
+      .catch(() => { /* leave as not-connected */ });
+  }, []);
+
   return (
     <div className="max-w-[820px]">
       <SectionLabel>Issue tracking</SectionLabel>
@@ -48,23 +58,28 @@ export function IssueTrackingSection({ onConfigSaved }: { onConfigSaved?: () => 
               key={t.id}
               tracker={t}
               active={selected === t.id}
+              connected={t.id === "jira" && jiraConnected}
               onSelect={t.available ? () => setSelected(t.id) : undefined}
             />
           ))}
         </div>
 
-        {/* Detail — the selected tracker */}
+        {/* Detail — dispatched on the selection so adding a real tracker later
+            can't silently render Jira's form under another tracker's name. */}
         <div className="min-w-0">
-          <JiraDetail onConfigSaved={onConfigSaved} />
+          {selected === "jira" ? (
+            <JiraDetail onConfigSaved={onConfigSaved} onConnectedChange={setJiraConnected} />
+          ) : null}
         </div>
       </div>
     </div>
   );
 }
 
-function TrackerListItem({ tracker, active, onSelect }: {
+function TrackerListItem({ tracker, active, connected, onSelect }: {
   tracker: Tracker;
   active: boolean;
+  connected: boolean;
   onSelect?: () => void;
 }) {
   const disabled = !tracker.available;
@@ -74,7 +89,7 @@ function TrackerListItem({ tracker, active, onSelect }: {
       onClick={onSelect}
       disabled={disabled}
       aria-pressed={active}
-      title={disabled ? `${tracker.name} — coming soon` : undefined}
+      title={disabled ? `${tracker.name} — coming soon` : connected ? `${tracker.name} — connected` : undefined}
       className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors duration-[180ms] ${
         disabled ? "cursor-default" : ""
       }`}
@@ -86,7 +101,7 @@ function TrackerListItem({ tracker, active, onSelect }: {
       <span
         aria-hidden
         className="h-2 w-2 shrink-0 rounded-full"
-        style={{ background: disabled ? "var(--color-octo-hairline)" : "var(--color-octo-verdigris)" }}
+        style={{ background: connected ? "var(--color-octo-verdigris)" : "var(--color-octo-hairline)" }}
       />
       <span
         className={`flex-1 truncate font-serif text-[14px] ${
@@ -102,7 +117,10 @@ function TrackerListItem({ tracker, active, onSelect }: {
   );
 }
 
-function JiraDetail({ onConfigSaved }: { onConfigSaved?: () => void }) {
+function JiraDetail({ onConfigSaved, onConnectedChange }: {
+  onConfigSaved?: () => void;
+  onConnectedChange?: (connected: boolean) => void;
+}) {
   const [baseUrl, setBaseUrl] = useState("");
   const [email, setEmail] = useState("");
   const [apiToken, setApiToken] = useState("");
@@ -164,6 +182,7 @@ function JiraDetail({ onConfigSaved }: { onConfigSaved?: () => void }) {
       await ipc.saveIssueTrackerConfig({ baseUrl, email, apiToken: tokenToSave });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+      onConnectedChange?.(!!(baseUrl.trim() && tokenToSave));
       onConfigSaved?.();
       // Fire-and-forget: refresh the backlog immediately so the RUN Companion
       // populates without waiting for a re-mount.

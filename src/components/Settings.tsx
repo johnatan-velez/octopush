@@ -42,7 +42,18 @@ export function Settings({ open, initialTab = "general", onClose, onIssueTracker
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (isModalOpen()) return; // a dialog on top handles its own Escape
+      // Always consume the event so a maximized (macOS full-screen) window
+      // never exits full-screen on Escape.
       e.preventDefault();
+      // If focus is in a field, let that field's own Escape run (e.g. cancel an
+      // inline edit) and leave Settings open — don't hijack it.
+      const target = e.target;
+      if (
+        target instanceof Element &&
+        target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")
+      ) {
+        return;
+      }
       e.stopPropagation();
       onClose();
     };

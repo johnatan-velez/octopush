@@ -60,6 +60,20 @@ describe("Settings — Escape", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("does not close Settings when Escape is pressed inside a field (lets the field handle it)", async () => {
+    const onClose = vi.fn();
+    await act(async () => {
+      render(<Settings open initialTab="editor" onClose={onClose} />);
+    });
+    // The Editor pane has a text input (the editor command field).
+    const input = await screen.findByPlaceholderText(/code/i);
+    const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    act(() => { input.dispatchEvent(ev); });
+    // Event is still consumed (no full-screen exit) but Settings stays open.
+    expect(ev.defaultPrevented).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("does nothing on non-Escape keys", async () => {
     const onClose = vi.fn();
     await act(async () => {
