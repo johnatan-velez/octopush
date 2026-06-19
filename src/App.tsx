@@ -48,6 +48,8 @@ import { useThemeStore } from "./stores/themeStore";
 import { useTokenStore } from "./stores/tokenStore";
 import { useTerminalsStore } from "./stores/terminalsStore";
 import { useChatStore } from "./stores/chatStore";
+import { useRunsStore } from "./stores/runsStore";
+import { useShallow } from "zustand/react/shallow";
 import { useBudgetsStore } from "./stores/budgetsStore";
 import type { ProjectGroup } from "./components/WorkspaceRail";
 import { listen } from "@tauri-apps/api/event";
@@ -97,6 +99,33 @@ function App() {
   const loadGitSummaries = useWorkspaceStore((s) => s.loadGitSummaries);
   const prByWs = useWorkspaceStore((s) => s.prByWs);
   const loadProjectPrs = useWorkspaceStore((s) => s.loadProjectPrs);
+
+  // Per-workspace "actively processing" signal for the rail's marching bar.
+  // Each selector derives the SET of workspaces with live activity and is
+  // shallow-compared, so a DIRECT run's frequent cost ticks (which mutate
+  // runsByWs) don't re-render the shell unless the running set actually changes.
+  // A DIRECT run counts only while "running" — "paused" is a checkpoint waiting
+  // on the user (attention), not processing.
+  const chatRunningIds = useChatStore(
+    useShallow((s) => Object.keys(s.streamingByWs).filter((id) => s.streamingByWs[id])),
+  );
+  const directRunningIds = useRunsStore(
+    useShallow((s) =>
+      Object.keys(s.runsByWs).filter((id) => (s.runsByWs[id] ?? []).some((r) => r.status === "running")),
+    ),
+  );
+  const terminalRunningIds = useTerminalsStore(
+    useShallow((s) =>
+      Object.keys(s.terminalsByWs).filter((id) => (s.terminalsByWs[id] ?? []).some((t) => t.running)),
+    ),
+  );
+  const runningByWs = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    for (const id of chatRunningIds) out[id] = true;
+    for (const id of directRunningIds) out[id] = true;
+    for (const id of terminalRunningIds) out[id] = true;
+    return out;
+  }, [chatRunningIds, directRunningIds, terminalRunningIds]);
 
   const [appView, setAppView] = useState<AppView>("project");
 
@@ -1379,6 +1408,7 @@ function App() {
         onReopenProject={handleReopenProject}
         gitSummaryByWs={gitSummaryByWs}
         prByWs={prByWs}
+        runningByWs={runningByWs}
         isCollapsed={isRailCollapsed}
         onReorderProjects={(ids) => void setProjectOrderAction(ids)}
       />
