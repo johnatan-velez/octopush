@@ -725,7 +725,7 @@ fn resync_after_interrupt(
             Ok(TermEvent::Exit { .. }) | Ok(TermEvent::Error { .. }) => {
                 return Err(AppError::Other("shell exited during resync".into()));
             }
-            Ok(TermEvent::Attention) => {}
+            Ok(TermEvent::Attention) | Ok(TermEvent::Foreground { .. }) => {}
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
                 return Err(AppError::Other("shell channel closed during resync".into()));
