@@ -48,6 +48,9 @@ import { useThemeStore } from "./stores/themeStore";
 import { useTokenStore } from "./stores/tokenStore";
 import { useTerminalsStore } from "./stores/terminalsStore";
 import { useChatStore } from "./stores/chatStore";
+import { useRunsStore } from "./stores/runsStore";
+import { useShallow } from "zustand/react/shallow";
+import { hasActiveDirectRun } from "./lib/runningWorkspaces";
 import { useBudgetsStore } from "./stores/budgetsStore";
 import type { ProjectGroup } from "./components/WorkspaceRail";
 import { listen } from "@tauri-apps/api/event";
@@ -97,6 +100,29 @@ function App() {
   const loadGitSummaries = useWorkspaceStore((s) => s.loadGitSummaries);
   const prByWs = useWorkspaceStore((s) => s.prByWs);
   const loadProjectPrs = useWorkspaceStore((s) => s.loadProjectPrs);
+
+  // Per-workspace "actively processing" signal for the rail's marching bar.
+  // Each selector derives the SET of workspaces with live activity and is
+  // shallow-compared, so a DIRECT run's frequent cost ticks (which mutate
+  // runsByWs) don't re-render the shell unless the running set actually changes.
+  //
+  // RUN/terminal is intentionally NOT included: the only terminal signal today
+  // (`TerminalState.running`) means "a shell session is alive", not "a command
+  // is executing", so it would mark the bar forever for any open terminal. A
+  // real foreground-busy signal exists in the PTY daemon (it powers attention
+  // detection) but isn't surfaced to the frontend yet — that's a follow-up.
+  const chatRunningIds = useChatStore(
+    useShallow((s) => Object.keys(s.streamingByWs).filter((id) => s.streamingByWs[id])),
+  );
+  const directRunningIds = useRunsStore(
+    useShallow((s) => Object.keys(s.runsByWs).filter((id) => hasActiveDirectRun(s.runsByWs[id]))),
+  );
+  const runningByWs = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    for (const id of chatRunningIds) out[id] = true;
+    for (const id of directRunningIds) out[id] = true;
+    return out;
+  }, [chatRunningIds, directRunningIds]);
 
   const [appView, setAppView] = useState<AppView>("project");
 
@@ -1379,6 +1405,7 @@ function App() {
         onReopenProject={handleReopenProject}
         gitSummaryByWs={gitSummaryByWs}
         prByWs={prByWs}
+        runningByWs={runningByWs}
         isCollapsed={isRailCollapsed}
         onReorderProjects={(ids) => void setProjectOrderAction(ids)}
       />
