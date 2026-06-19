@@ -42,6 +42,11 @@ pub struct ShellResult {
     pub exit_code: i32,
     pub ok: bool,
     pub cwd: String,
+    /// The cwd relativized for display (computed by the chat engine; empty at the
+    /// workspace root). The single source of the cwd badge string — the frontend
+    /// renders it verbatim rather than re-deriving the rule.
+    #[serde(default)]
+    pub cwd_label: String,
     /// True when the command was promoted to a live process — output streams via
     /// `chat://shell-output` and the final card resolves on `chat://shell-exit`.
     #[serde(default)]
@@ -64,9 +69,11 @@ pub enum RunOutcome {
 /// the session is restored for the next `$` command.
 pub struct LiveRun {
     rx: Receiver<TermEvent>,
-    /// Raw output already seen during the promotion window (after the start
-    /// marker), to paint immediately.
+    /// Raw output already seen during the promotion window, to paint
+    /// immediately (post-start when `started`, else the whole pre-start buffer).
     pub initial: String,
+    /// Whether the start marker was already seen (filter pre-started).
+    started: bool,
     nonce: String,
     cwd: String,
     thread_id: String,
@@ -184,14 +191,23 @@ impl TalkShell {
                     ok: exit_code == 0,
                     cwd: final_cwd,
                     live: false,
+                    cwd_label: String::new(),
                 }))
             }
             Probe::Dead { output } => {
-                // Shell died — recycle in place at the saved cwd.
+                // Shell died — recycle in place at the saved cwd. If the respawn
+                // fails (daemon hiccup), evict the session so the NEXT `$`
+                // recreates it from scratch — never leave rx == None, which would
+                // wedge the thread as permanently Busy.
                 let _ = client.remove(&id);
-                let mut session = handle.lock();
-                if let Ok(fresh) = Self::ensure_session(&client, thread_id, &cwd) {
-                    *session = fresh;
+                match Self::ensure_session(&client, thread_id, &cwd) {
+                    Ok(fresh) => {
+                        *handle.lock() = fresh;
+                    }
+                    Err(e) => {
+                        self.sessions.lock().remove(thread_id);
+                        return Err(e);
+                    }
                 }
                 Ok(RunOutcome::Done(ShellResult {
                     output: cap_output(output),
@@ -199,13 +215,15 @@ impl TalkShell {
                     ok: false,
                     cwd,
                     live: false,
+                    cwd_label: String::new(),
                 }))
             }
-            Probe::NotYet { raw } => Ok(RunOutcome::Live(LiveRun {
+            Probe::NotYet { raw, started } => Ok(RunOutcome::Live(LiveRun {
                 rx,
                 // RAW (markers/ANSI intact): the stream filter both detects a
                 // marker split across the promotion boundary and emits it.
                 initial: raw,
+                started,
                 nonce,
                 cwd,
                 thread_id: thread_id.to_string(),
@@ -262,22 +280,18 @@ impl TalkShell {
                 cwd: ready_cwd.unwrap_or_else(|| cwd.to_string()),
                 nonce,
             }),
-            // The reattached shell never became ready — likely mid-run (a live
-            // process from before the restart). Recycle it: kill + fresh spawn.
-            Err(_) if reattaching => {
-                drop(rx);
-                let _ = client.remove(&id);
-                Self::spawn_bash(client, &id, cwd)?;
-                let nonce = gen_nonce();
-                let rx = client.attach(&id, 0)?;
-                let ready_cwd = init_and_wait_ready(client, &id, &rx, &nonce)?;
-                Ok(Session {
-                    id,
-                    rx: Some(rx),
-                    cwd: ready_cwd.unwrap_or_else(|| cwd.to_string()),
-                    nonce,
-                })
-            }
+            // Reattached but never became ready — the surviving shell is busy,
+            // almost certainly still running a process started before the restart
+            // (e.g. a dev server). We must NOT kill it (that would silently
+            // destroy the user's running process + state). Surface a clear error;
+            // the user can let it finish, or delete the conversation to stop it.
+            Err(_) if reattaching => Err(AppError::Other(
+                "This conversation's shell is busy with a process still running \
+                 from before the restart. Wait for it to finish, or delete the \
+                 conversation to stop it."
+                    .into(),
+            )),
+            // Fresh spawn that never readied — a genuine failure; clean up.
             Err(e) => {
                 let _ = client.remove(&id);
                 Err(e)
@@ -307,7 +321,7 @@ impl LiveRun {
         // filter (so an end marker that began arriving in the window is detected
         // — never leaving the panel stuck "running") and emit it as the FIRST
         // chunk, so the always-on store listener buffers it with no mount race.
-        filter.started = true;
+        filter.started = self.started;
         let mut full = String::new();
 
         let mut push = |emit: &str, full: &mut String, on_chunk: &mut F| {
@@ -393,9 +407,12 @@ enum Probe {
         exit_code: i32,
         cwd: String,
     },
-    /// Promotion window elapsed; `raw` is the post-start output seen so far.
+    /// Promotion window elapsed. `raw` is the output seen so far; `started` is
+    /// whether the start marker was already present (so the live StreamFilter
+    /// knows whether to still strip a late-arriving start marker).
     NotYet {
         raw: String,
+        started: bool,
     },
     Dead {
         output: String,
@@ -409,8 +426,13 @@ fn probe(rx: &Receiver<TermEvent>, timeout: Duration, nonce: &str) -> Probe {
     let mut buf = String::new();
     loop {
         if Instant::now() >= deadline {
-            return Probe::NotYet {
-                raw: after_start(&buf, nonce),
+            // If the start marker already arrived, hand off the post-start output
+            // (filter is pre-started). Otherwise hand off the whole buffer so the
+            // filter still strips the start marker when it arrives.
+            let sm = start_marker(nonce);
+            return match buf.find(&sm) {
+                Some(i) => Probe::NotYet { raw: buf[i + sm.len()..].to_string(), started: true },
+                None => Probe::NotYet { raw: buf, started: false },
             };
         }
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -548,6 +570,9 @@ fn init_and_wait_ready(
     nonce: &str,
 ) -> AppResult<Option<String>> {
     let mut init = String::new();
+    // Leading newline submits any partial line left in the shell's input buffer
+    // (e.g. on reattach) so our init isn't appended to it and swallowed.
+    init.push('\n');
     init.push_str("stty -echo 2>/dev/null; PS1=''; PS2=''; PROMPT_COMMAND=''\n");
     init.push_str("__OCTORS=$(printf '\\036')\n");
     init.push_str(&format!(

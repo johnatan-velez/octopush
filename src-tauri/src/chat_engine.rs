@@ -98,7 +98,9 @@ fn format_command_output(output: &str, exit_code: i32) -> String {
 }
 
 /// A command's cwd relative to the workspace root, for display on its card.
-/// Empty when at the root or unknown; a `…/tail` form when outside the worktree.
+/// Empty at the root/unknown; the path relative to root when inside the tree;
+/// and a consistent `…/tail` (up to the last two segments) when outside it —
+/// never the bare absolute path, so a deep filesystem location isn't leaked.
 fn relativize_cwd(abs: &str, root: &str) -> String {
     if abs.is_empty() || abs == root {
         return String::new();
@@ -107,11 +109,12 @@ fn relativize_cwd(abs: &str, root: &str) -> String {
         return rest.to_string();
     }
     let parts: Vec<&str> = abs.split('/').filter(|s| !s.is_empty()).collect();
-    if parts.len() > 2 {
-        format!("…/{}", parts[parts.len() - 2..].join("/"))
+    let tail = if parts.len() >= 2 {
+        parts[parts.len() - 2..].join("/")
     } else {
-        abs.to_string()
-    }
+        parts.join("/")
+    };
+    format!("…/{tail}")
 }
 
 /// Clone a `run_command` tool-input, adding a `cwd` field (relative to `root`)
@@ -199,6 +202,8 @@ pub struct ShellExitEvent {
     pub call_id: String,
     pub exit_code: i32,
     pub cwd: String,
+    /// Relativized cwd for the badge (single backend source; rendered verbatim).
+    pub cwd_label: String,
 }
 
 /// Emitted whenever a chat message is persisted to the DB.
@@ -636,11 +641,14 @@ impl ChatEngine {
 
         use crate::talk_shell::{RunOutcome, ShellResult};
         match outcome {
-            RunOutcome::Done(result) => {
+            RunOutcome::Done(mut result) => {
                 self.resolve_shell_card(
                     &app, &request, &call_id, &tool_input, result.ok, started,
                     &format_command_output(&result.output, result.exit_code), &result.cwd,
                 );
+                // Compute the badge label once here (the single source) so the
+                // frontend renders it verbatim instead of re-deriving the rule.
+                result.cwd_label = relativize_cwd(&result.cwd, &request.workspace_path);
                 Ok(result)
             }
             RunOutcome::Busy => {
@@ -655,6 +663,7 @@ impl ChatEngine {
                     ok: false,
                     cwd: String::new(),
                     live: false,
+                    cwd_label: String::new(),
                 })
             }
             RunOutcome::Live(live) => {
@@ -674,6 +683,7 @@ impl ChatEngine {
                     ok: true,
                     cwd: String::new(),
                     live: true,
+                    cwd_label: String::new(),
                 })
             }
         }
@@ -753,6 +763,7 @@ impl ChatEngine {
                     call_id: call_id.clone(),
                     exit_code: exit.exit_code,
                     cwd: exit.cwd.clone(),
+                    cwd_label: relativize_cwd(&exit.cwd, &request.workspace_path),
                 });
 
                 let record = serde_json::json!({
@@ -762,10 +773,18 @@ impl ChatEngine {
                     "result": format_command_output(&exit.full_output, exit.exit_code),
                 });
                 let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
-                let id = db.lock().insert_chat_message(
-                    &request.workspace_id, &request.thread_id, "tool",
-                    &record.to_string(), None, None, None, None,
-                );
+                // The conversation may have been deleted while the process ran;
+                // don't leave an orphaned row (no FK from messages → threads).
+                let id = {
+                    let db = db.lock();
+                    match db.chat_thread_exists(&request.thread_id) {
+                        Ok(true) => db.insert_chat_message(
+                            &request.workspace_id, &request.thread_id, "tool",
+                            &record.to_string(), None, None, None, None,
+                        ),
+                        _ => return,
+                    }
+                };
                 if let Ok(id) = id {
                     let _ = app.emit("chat://message-added", &MessageAddedEvent {
                         workspace_id: request.workspace_id.clone(),
@@ -1474,9 +1493,9 @@ mod tests {
         assert_eq!(relativize_cwd("", "/repo"), "");
         // Under the root → relative path.
         assert_eq!(relativize_cwd("/repo/packages/api", "/repo"), "packages/api");
-        // Outside the worktree → short tail.
+        // Outside the worktree → consistent `…/tail` (never a bare absolute path).
         assert_eq!(relativize_cwd("/var/tmp/build", "/repo"), "…/tmp/build");
-        assert_eq!(relativize_cwd("/tmp", "/repo"), "/tmp");
+        assert_eq!(relativize_cwd("/tmp", "/repo"), "…/tmp");
     }
 
     #[test]
