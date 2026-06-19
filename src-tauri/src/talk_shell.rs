@@ -32,6 +32,11 @@ use std::time::{Duration, Instant};
 /// so output can't bloat the DB row / chat render.
 const MAX_OUTPUT_BYTES: usize = 50_000;
 
+/// Upper bound on a complete prompt marker (incl. a long cwd). The live filter
+/// won't hold back a marker-prefix tail longer than this — beyond it the leading
+/// RS byte was stray, not a forming marker.
+const MAX_MARKER_LEN: usize = 4160;
+
 /// Outcome of running one command in a TALK shell.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -223,7 +228,7 @@ impl TalkShell {
                      running)",
                     timeout.as_secs()
                 );
-                let partial = strip_octo_markers(&clean_output(&raw));
+                let partial = strip_octo_markers(&clean_output(&raw), &nonce);
                 let body = if partial.is_empty() { note.clone() } else { format!("{partial}\n{note}") };
                 let _ = client.write(&id, b"\x03");
                 match probe(&rx, Duration::from_secs(3), &nonce) {
@@ -515,13 +520,24 @@ impl StreamFilter {
             self.carry.clear();
             return (emit, Some((code, cwd)));
         }
-        // The marker begins with a record-separator byte (0x1e), which never
-        // occurs in normal output — hold back only from the first such byte.
+        // Hold back the tail ONLY if it's genuinely a forming prompt marker:
+        // either a partial prefix of `␞␞OCTO_DONE_`, or that full prefix plus a
+        // bounded amount still being completed. A stray RS that isn't forming a
+        // marker (e.g. a tool emitting raw 0x1e) is emitted (stripped) so the
+        // live panel never freezes waiting for a marker that won't come.
+        const PREFIX: &str = "\u{1e}\u{1e}OCTO_DONE_";
         match self.carry.find('\u{1e}') {
             Some(i) => {
-                let emit = self.carry[..i].to_string();
-                self.carry = self.carry[i..].to_string();
-                (emit, None)
+                let tail = &self.carry[i..];
+                let forming = PREFIX.starts_with(tail)
+                    || (tail.starts_with(PREFIX) && tail.len() <= MAX_MARKER_LEN);
+                if forming {
+                    let emit = self.carry[..i].to_string();
+                    self.carry = self.carry[i..].to_string();
+                    (emit, None)
+                } else {
+                    (clean_inline(&std::mem::take(&mut self.carry)), None)
+                }
             }
             None => (std::mem::take(&mut self.carry), None),
         }
@@ -567,9 +583,10 @@ fn init_and_wait_ready(
     init.push('\n');
     init.push_str("stty -echo 2>/dev/null; PS2=''\n");
     init.push_str("__OCTORS=$(printf '\\036')\n");
-    init.push_str("__octo_oc=0; PROMPT_COMMAND='__octo_oc=$?'\n");
+    // Re-assert PS1 from PROMPT_COMMAND each prompt, so a command that overwrites
+    // PS1 (a venv/conda activate, a sourced script) can't break marker detection.
     init.push_str(&format!(
-        "PS1='${{__OCTORS}}${{__OCTORS}}OCTO_DONE_{nonce}:${{__octo_oc}}:${{PWD}}${{__OCTORS}}${{__OCTORS}}'\n"
+        "PROMPT_COMMAND='__octo_oc=$?; PS1=\"${{__OCTORS}}${{__OCTORS}}OCTO_DONE_{nonce}:${{__octo_oc}}:${{PWD}}${{__OCTORS}}${{__OCTORS}}\"'\n"
     ));
     client.write(id, init.as_bytes())?;
 
@@ -619,17 +636,16 @@ fn clean_inline(s: &str) -> String {
     s.replace('\u{1e}', "")
 }
 
-fn octo_marker_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(r"\x1e+|OCTO_DONE_[0-9a-f]*(?::-?\d*:?[^\n\x1e]*)?").unwrap()
-    })
-}
-
-/// Remove leftover prompt-marker noise (RS bytes / a partial marker word) — used
-/// on best-effort partial output where a marker may be unterminated.
-fn strip_octo_markers(s: &str) -> String {
-    octo_marker_re().replace_all(s, "").trim().to_string()
+/// Remove leftover prompt-marker noise (RS bytes / a partial marker for THIS
+/// session's nonce) — used on best-effort partial output where a marker may be
+/// unterminated. Nonce-scoped so a literal `OCTO_DONE_` in real output is kept.
+fn strip_octo_markers(s: &str, nonce: &str) -> String {
+    let re = regex::Regex::new(&format!(
+        r"\x1e+|OCTO_DONE_{}(?::-?\d*:?[^\n\x1e]*)?",
+        regex::escape(nonce)
+    ))
+    .expect("valid marker-strip regex");
+    re.replace_all(s, "").trim().to_string()
 }
 
 /// Cap output at `MAX_OUTPUT_BYTES` on a char boundary, with a truncation note.
@@ -718,9 +734,30 @@ mod tests {
     }
 
     #[test]
+    fn filter_does_not_freeze_on_stray_record_separator() {
+        let mut f = StreamFilter::new(N);
+        // A raw RS that isn't forming our marker must be emitted (stripped), not
+        // held until the process exits.
+        let (emit, done) = f.feed("data\u{1e}more output here");
+        assert!(done.is_none());
+        assert!(emit.contains("data") && emit.contains("more output here"), "{emit:?}");
+        assert!(!emit.contains('\u{1e}'), "RS stripped from emit");
+    }
+
+    #[test]
+    fn filter_holds_a_genuine_forming_marker() {
+        let mut f = StreamFilter::new(N);
+        // A trailing partial marker prefix is held until it completes.
+        let (e1, d1) = f.feed(&format!("out{RS}{RS}OCTO_DONE_"));
+        assert!(d1.is_none() && e1 == "out", "forming marker held: {e1:?}");
+        let (_e2, d2) = f.feed(&format!("{N}:0:/x{RS}{RS}"));
+        assert_eq!(d2.expect("completes").0, 0);
+    }
+
+    #[test]
     fn strip_octo_markers_removes_partial_marker() {
         let s = format!("partial output{RS}{RS}OCTO_DONE_{N}:0:");
-        let cleaned = strip_octo_markers(&s);
+        let cleaned = strip_octo_markers(&s, N);
         assert_eq!(cleaned, "partial output");
     }
 
