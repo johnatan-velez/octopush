@@ -147,15 +147,17 @@ export function Composer({ workspaceId, workspacePath }: Props) {
     setCmdHistIndex(0);
   }
 
-  /** In command mode (`$ …`), surface recent commands filtered by the partial
-   *  command typed so far. Empty `$`/`$ ` shows the full recent list. */
+  /** In command mode, surface recent commands filtered by the partial command
+   *  typed so far. Matches a bare `$` or `$ <partial>` only (a space after `$`),
+   *  mirroring parseShellCommand — so a normal chat message that merely starts
+   *  with `$` (e.g. `$HOME not set?`) doesn't hijack the composer. */
   function refreshCmdHist(value: string) {
-    const m = /^\$\s*(.*)$/s.exec(value);
-    if (!m || m[1].includes("\n")) {
+    const m = /^\$(?:\s+(.*))?$/s.exec(value);
+    if (!m || (m[1] ?? "").includes("\n")) {
       closeCmdHist();
       return;
     }
-    const q = m[1].trim().toLowerCase();
+    const q = (m[1] ?? "").trim().toLowerCase();
     const items = (q ? shellHistory.filter((c) => c.toLowerCase().includes(q)) : shellHistory)
       // Don't offer the exact thing already typed.
       .filter((c) => c.toLowerCase() !== q)
