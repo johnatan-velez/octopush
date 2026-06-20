@@ -860,6 +860,27 @@ function App() {
   const streamingThreadId = useChatStore((s) =>
     activeWorkspaceId ? (s.streamingThreadByWs[activeWorkspaceId] ?? null) : null,
   );
+  // Active skill for the conversation — surfaced in Context "Capabilities".
+  const activeSkill = useChatStore((s) =>
+    activeWorkspaceId ? (s.activeSkillByWs[activeWorkspaceId] ?? null) : null,
+  );
+  // Connected MCP servers for the workspace — also shown under Capabilities.
+  const [mcpServers, setMcpServers] = useState<string[]>([]);
+  useEffect(() => {
+    const path = activeWorkspace?.worktreePath;
+    if (!path) {
+      setMcpServers([]);
+      return;
+    }
+    let cancelled = false;
+    ipc
+      .listMcpServers(path)
+      .then((s) => !cancelled && setMcpServers(s))
+      .catch(() => !cancelled && setMcpServers([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspace?.worktreePath]);
 
   // Count tool calls live from the active chat's messages — chatStore is
   // updated on every `chat://message-added` event the backend emits, so the
@@ -932,8 +953,22 @@ function App() {
       toolCalls: liveToolCalls,
       budgets,
       spend,
+      activeSkill,
+      mcpServers,
+      onReviewClick: () => setMode("review"),
+      onSettingsClick: () => setSettingsTab("usage"),
     };
-  }, [gitStatus, lastTurnInputTokens, activeModelMaxContext, liveToolCalls, budgets, spend]);
+  }, [
+    gitStatus,
+    lastTurnInputTokens,
+    activeModelMaxContext,
+    liveToolCalls,
+    budgets,
+    spend,
+    activeSkill,
+    mcpServers,
+    setMode,
+  ]);
 
   // Re-derive titles whenever new messages arrive — title comes from the
   // first user message, meta comes from the relative time of the latest.
