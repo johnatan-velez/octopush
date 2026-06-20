@@ -641,13 +641,12 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
     getLiveOutput: (callId) => get().liveOutputByCallId[callId] ?? null,
     getShellHistory: (workspaceId) => get().shellHistoryByWs[workspaceId] ?? EMPTY_HISTORY,
-    getPendingApprovals: (workspaceId) => {
-      const all = get().pendingApprovalsByWs[workspaceId] ?? EMPTY_APPROVALS;
-      const active = get().activeThreadByWs[workspaceId];
-      // Only surface approvals for the thread currently on screen.
-      const scoped = active ? all.filter((a) => a.threadId === active) : all;
-      return scoped.length ? scoped : EMPTY_APPROVALS;
-    },
+    // Return the stored slice directly (stable ref → no spurious re-renders on
+    // unrelated store mutations). Approvals are surfaced workspace-wide rather
+    // than hidden behind a thread switch — a pending destructive command is a
+    // safety prompt the user must see even after navigating away.
+    getPendingApprovals: (workspaceId) =>
+      get().pendingApprovalsByWs[workspaceId] ?? EMPTY_APPROVALS,
 
     getTimeline: (workspaceId) => {
       const msgs = get().messagesByWs[workspaceId];
@@ -890,6 +889,14 @@ export const useChatStore = create<ChatState>((set, get) => {
       // workspace's active thread (the one being shown).
       const threadId = get().activeThreadByWs[workspaceId];
       if (threadId) void ipc.cancelChat(threadId).catch(() => {});
+      // Retire any pending approval card immediately — the backend also resolves
+      // it as Deny on cancel, but clear here so Stop feels instant and a stale
+      // card can't be clicked to run a command on the cancelled turn.
+      if (get().pendingApprovalsByWs[workspaceId]?.length) {
+        set((s) => ({
+          pendingApprovalsByWs: { ...s.pendingApprovalsByWs, [workspaceId]: EMPTY_APPROVALS },
+        }));
+      }
     },
 
     clear: (workspaceId) =>

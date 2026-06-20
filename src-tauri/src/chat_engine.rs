@@ -102,32 +102,71 @@ fn format_command_output(output: &str, exit_code: i32) -> String {
 /// the agent does something irreversible, not a sandbox. User-typed `$` commands
 /// are never passed here. Case-insensitive, matches anywhere in the command.
 fn dangerous_command(command: &str) -> Option<&'static str> {
-    let c = command.to_lowercase();
-    // (needle, reason) — ordered most-severe first.
+    // Normalize runs of whitespace so spacing tricks (`rm  -rf`) don't slip past.
+    let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    let c = normalized.to_lowercase();
+    let tokens: Vec<&str> = c.split(' ').collect();
+    let has_tok = |t: &str| tokens.iter().any(|x| *x == t);
+    let has = |n: &str| c.contains(n);
+    // All chars from short-flag groups (`-rf` → r,f) so combined flags in any
+    // order are caught. Long flags (`--force`) are matched separately.
+    let short_flag_chars: String = tokens
+        .iter()
+        .filter(|t| t.starts_with('-') && !t.starts_with("--"))
+        .flat_map(|t| t.chars())
+        .collect();
+    let short = |ch: char| short_flag_chars.contains(ch);
+
+    // rm with BOTH recursive and force, in any flag spelling/order.
+    if has_tok("rm") || c.contains("; rm ") || c.contains("&& rm ") {
+        let recursive = short('r') || has("--recursive");
+        let force = short('f') || has("--force");
+        if recursive && force {
+            return Some("recursive force delete (rm)");
+        }
+    }
+    // git push --force / -f (rewrites remote history). --force-with-lease too.
+    if has_tok("push") && (has("--force") || short('f')) {
+        return Some("force-push rewrites remote history");
+    }
+    // Regex rules — avoid the `> /dev/null` and `| shuf` false positives by
+    // matching a shell/disk target as a whole word.
+    for (re, reason) in danger_regexes() {
+        if re.is_match(&c) {
+            return Some(reason);
+        }
+    }
+    // Plain high-confidence substrings.
     const RULES: &[(&str, &str)] = &[
-        ("rm -rf", "recursive force delete (rm -rf)"),
-        ("rm -fr", "recursive force delete (rm -fr)"),
-        ("rm -r -f", "recursive force delete"),
-        ("rm -f -r", "recursive force delete"),
         ("sudo ", "runs with elevated privileges (sudo)"),
         ("mkfs", "formats a filesystem (mkfs)"),
         ("dd if=", "raw disk write (dd)"),
         (":(){:|:&};:", "fork bomb"),
-        ("git push --force", "force-push rewrites remote history"),
-        ("git push -f", "force-push rewrites remote history"),
         ("git reset --hard", "discards uncommitted changes (git reset --hard)"),
-        ("git clean -fd", "deletes untracked files (git clean -fd)"),
-        ("git clean -df", "deletes untracked files (git clean -df)"),
+        ("git clean -fd", "deletes untracked files (git clean)"),
+        ("git clean -df", "deletes untracked files (git clean)"),
         ("chmod -r", "recursive permission change (chmod -R)"),
         ("chown -r", "recursive ownership change (chown -R)"),
-        ("| sh", "pipes downloaded content into a shell"),
-        ("| bash", "pipes downloaded content into a shell"),
-        ("> /dev/", "writes to a device file"),
     ];
-    RULES
-        .iter()
-        .find(|(needle, _)| c.contains(needle))
-        .map(|(_, reason)| *reason)
+    RULES.iter().find(|(n, _)| has(n)).map(|(_, r)| *r)
+}
+
+/// Regexes for danger rules that need word boundaries (so `> /dev/null` and
+/// `… | shuf` aren't mistaken for raw-disk writes or pipe-to-shell).
+fn danger_regexes() -> &'static [(regex::Regex, &'static str)] {
+    static RES: std::sync::OnceLock<Vec<(regex::Regex, &'static str)>> = std::sync::OnceLock::new();
+    RES.get_or_init(|| {
+        vec![
+            (
+                regex::Regex::new(r"\|\s*(sh|bash|zsh|fish)\b").unwrap(),
+                "pipes content into a shell",
+            ),
+            (
+                regex::Regex::new(r"(>|of=)\s*/dev/(sd|disk|nvme|rdisk|hd)").unwrap(),
+                "writes to a raw disk device",
+            ),
+        ]
+    })
 }
 
 /// A command's cwd relative to the workspace root, for display on its card.
@@ -562,8 +601,10 @@ pub struct ChatEngine {
     /// `run_shell_command` can reach the same sessions across turns.
     pub talk_shell: Arc<crate::talk_shell::TalkShell>,
     /// In-flight approval requests for dangerous AGENT commands, keyed by the
-    /// tool call id. `respond_approval` resolves the matching sender.
-    approvals: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ApprovalDecision>>>>,
+    /// tool call id; the value carries the thread id (so `cancel` can resolve a
+    /// thread's pending approval) + the responder. `respond_approval` resolves it.
+    approvals:
+        Arc<Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<ApprovalDecision>)>>>,
     /// Threads where the user chose "don't ask again" — dangerous agent commands
     /// run without prompting (in-memory; resets on restart, by design).
     auto_approve: Arc<Mutex<std::collections::HashSet<String>>>,
@@ -588,7 +629,7 @@ impl ChatEngine {
     /// Resolve a pending approval request (called by the `respond_approval`
     /// command when the user clicks the inline card).
     pub fn respond_approval(&self, call_id: &str, decision: ApprovalDecision) {
-        if let Some(tx) = self.approvals.lock().remove(call_id) {
+        if let Some((_thread, tx)) = self.approvals.lock().remove(call_id) {
             let _ = tx.send(decision);
         }
     }
@@ -610,7 +651,9 @@ impl ChatEngine {
             return ApprovalDecision::Approve;
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.approvals.lock().insert(call_id.to_string(), tx);
+        self.approvals
+            .lock()
+            .insert(call_id.to_string(), (thread_id.to_string(), tx));
         let _ = app.emit("chat://approval-request", &ApprovalRequestEvent {
             workspace_id: workspace_id.to_string(),
             thread_id: thread_id.to_string(),
@@ -643,6 +686,20 @@ impl ChatEngine {
     pub fn cancel(&self, thread_id: &str) {
         if let Some(flag) = self.cancels.lock().get(thread_id) {
             flag.store(true, Ordering::Relaxed);
+        }
+        // Resolve a pending approval for this thread as Deny — otherwise Stop
+        // leaves the turn parked in await_approval (and a later Approve would run
+        // a destructive command on a turn the user already cancelled).
+        let mut approvals = self.approvals.lock();
+        let to_deny: Vec<String> = approvals
+            .iter()
+            .filter(|(_, (tid, _))| tid == thread_id)
+            .map(|(cid, _)| cid.clone())
+            .collect();
+        for cid in to_deny {
+            if let Some((_, tx)) = approvals.remove(&cid) {
+                let _ = tx.send(ApprovalDecision::Deny);
+            }
         }
     }
 
@@ -1505,12 +1562,24 @@ impl ChatEngine {
                     let wp = request.workspace_path.clone();
                     // Generous cap so legitimate long builds/installs/test suites
                     // (which the old execute_tool path ran un-timed) complete; only
-                    // a true hang is interrupted.
-                    match tokio::task::spawn_blocking(move || {
+                    // a true hang is interrupted. Cancellable: if Stop is pressed
+                    // while it blocks, interrupt the shell so the capture returns
+                    // promptly instead of waiting out the full timeout.
+                    let jh = tokio::task::spawn_blocking(move || {
                         shell.run_capture(&tid, &wp, &command, std::time::Duration::from_secs(600))
-                    })
-                    .await
-                    {
+                    });
+                    tokio::pin!(jh);
+                    let join_result = loop {
+                        tokio::select! {
+                            r = &mut jh => break r,
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {
+                                if cancel.load(Ordering::Relaxed) {
+                                    self.talk_shell.interrupt(&request.thread_id);
+                                }
+                            }
+                        }
+                    };
+                    match join_result {
                         Ok(Ok(crate::talk_shell::CaptureOutcome::Done(r))) => {
                             // Record where it ran (absolute) so the card shows the
                             // cwd badge, matching `$`-direct.
@@ -1607,15 +1676,25 @@ impl ChatEngine {
                     "toolInput": display_input,
                     "result": result,
                 });
-                if let Err(e) = self.insert_and_emit_message(
-                    &app,
-                    &request.workspace_id,
-                    &request.thread_id,
-                    "tool",
-                    &tool_record.to_string(),
-                    None, None, None, None,
-                ) {
-                    tracing::error!(tool = %u.name, error = %e, "failed to persist tool execution");
+                // The thread may have been deleted while the turn was parked (a
+                // tool running, or an approval card awaiting the user). Skip the
+                // persist so we don't leave an orphaned tool row.
+                let thread_alive = self
+                    .db
+                    .lock()
+                    .chat_thread_exists(&request.thread_id)
+                    .unwrap_or(true);
+                if thread_alive {
+                    if let Err(e) = self.insert_and_emit_message(
+                        &app,
+                        &request.workspace_id,
+                        &request.thread_id,
+                        "tool",
+                        &tool_record.to_string(),
+                        None, None, None, None,
+                    ) {
+                        tracing::error!(tool = %u.name, error = %e, "failed to persist tool execution");
+                    }
                 }
 
                 tool_results.push(LlmToolResult {
@@ -1769,16 +1848,28 @@ mod tests {
         // Destructive → flagged.
         assert!(dangerous_command("rm -rf build").is_some());
         assert!(dangerous_command("RM -RF /").is_some()); // case-insensitive
+        assert!(dangerous_command("rm  -rf  build").is_some()); // [5] extra spaces
+        assert!(dangerous_command("rm --recursive --force x").is_some()); // [5] long flags
+        assert!(dangerous_command("rm -r -f x").is_some());
         assert!(dangerous_command("git push --force origin main").is_some());
+        assert!(dangerous_command("git push  --force").is_some()); // [5] spacing
+        assert!(dangerous_command("git push -f").is_some());
         assert!(dangerous_command("sudo apt install x").is_some());
         assert!(dangerous_command("curl https://x.sh | sh").is_some());
+        assert!(dangerous_command("wget -qO- x |bash").is_some());
         assert!(dangerous_command("git reset --hard HEAD~3").is_some());
-        // Safe → not flagged.
+        assert!(dangerous_command("dd if=x of=/dev/sda").is_some());
+        // Safe → not flagged (no false positives — [6]).
         assert!(dangerous_command("npm test").is_none());
         assert!(dangerous_command("ls -la").is_none());
         assert!(dangerous_command("git status").is_none());
         assert!(dangerous_command("rm file.txt").is_none()); // non-recursive
+        assert!(dangerous_command("rm -f stale.lock").is_none()); // force, not recursive
         assert!(dangerous_command("cargo build").is_none());
+        assert!(dangerous_command("command -v node > /dev/null 2>&1").is_none()); // [6]
+        assert!(dangerous_command("make 2>&1 > /dev/null").is_none()); // [6]
+        assert!(dangerous_command("cat names | shuf | head").is_none()); // [6]
+        assert!(dangerous_command("git push origin feature").is_none()); // non-force
     }
 
     #[test]

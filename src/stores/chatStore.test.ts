@@ -129,7 +129,9 @@ describe("chatStore — live `$`-direct process lifecycle", () => {
     expect(useChatStore.getState().getPendingApprovals("ws-1")).toHaveLength(0);
   });
 
-  it("scopes approvals to the active thread", () => {
+  it("surfaces approvals workspace-wide (not hidden by a thread switch)", () => {
+    // A destructive-command prompt is a safety signal — it must stay visible
+    // even if the user navigates to another thread while it's pending.
     useChatStore.setState({ activeThreadByWs: { "ws-1": "t-other" } });
     emit("chat://approval-request", {
       workspaceId: "ws-1",
@@ -138,6 +140,18 @@ describe("chatStore — live `$`-direct process lifecycle", () => {
       command: "rm -rf x",
       reason: "rm -rf",
     });
+    expect(useChatStore.getState().getPendingApprovals("ws-1")).toHaveLength(1);
+  });
+
+  it("stop() retires pending approvals immediately", () => {
+    emit("chat://approval-request", {
+      workspaceId: "ws-1",
+      threadId: "t1",
+      callId: "call-1",
+      command: "rm -rf x",
+      reason: "rm -rf",
+    });
+    useChatStore.getState().stop("ws-1");
     expect(useChatStore.getState().getPendingApprovals("ws-1")).toHaveLength(0);
   });
 
