@@ -110,6 +110,37 @@ describe("chatStore — live `$`-direct process lifecycle", () => {
     expect(useChatStore.getState().getShellCwd("ws-1")).toBe("packages/api");
   });
 
+  it("surfaces a dangerous-command approval and retires it on resolve", () => {
+    useChatStore.setState({ activeThreadByWs: { "ws-1": "t1" } });
+
+    emit("chat://approval-request", {
+      workspaceId: "ws-1",
+      threadId: "t1",
+      callId: "call-1",
+      command: "rm -rf build",
+      reason: "recursive force delete (rm -rf)",
+    });
+    let pending = useChatStore.getState().getPendingApprovals("ws-1");
+    expect(pending).toHaveLength(1);
+    expect(pending[0].command).toBe("rm -rf build");
+    expect(pending[0].reason).toContain("rm -rf");
+
+    emit("chat://approval-resolved", { workspaceId: "ws-1", callId: "call-1" });
+    expect(useChatStore.getState().getPendingApprovals("ws-1")).toHaveLength(0);
+  });
+
+  it("scopes approvals to the active thread", () => {
+    useChatStore.setState({ activeThreadByWs: { "ws-1": "t-other" } });
+    emit("chat://approval-request", {
+      workspaceId: "ws-1",
+      threadId: "t1",
+      callId: "call-1",
+      command: "rm -rf x",
+      reason: "rm -rf",
+    });
+    expect(useChatStore.getState().getPendingApprovals("ws-1")).toHaveLength(0);
+  });
+
   it("scopes the live process to its thread", () => {
     useChatStore.setState({ activeThreadByWs: { "ws-1": "t-other" } });
     emit("chat://shell-live-start", {

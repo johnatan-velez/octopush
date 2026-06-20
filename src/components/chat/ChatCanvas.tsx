@@ -7,6 +7,7 @@ import { BrassRule } from "../BrassRule";
 import { ChatMessage } from "../ChatMessage";
 import { ToolCallCard } from "../ToolCallCard";
 import { LiveToolCard } from "./LiveToolCard";
+import { ApprovalCard } from "./ApprovalCard";
 
 interface Props {
   workspaceId: string;
@@ -37,6 +38,8 @@ export function ChatCanvas({
   const streamBuffer = useChatStore((s) => s.getStreamBuffer(workspaceId));
   const error = useChatStore((s) => s.getError(workspaceId));
   const liveTools = useChatStore((s) => s.getLiveTools(workspaceId));
+  const pendingApprovals = useChatStore((s) => s.getPendingApprovals(workspaceId));
+  const respondApproval = useChatStore((s) => s.respondApproval);
   const model = useChatStore((s) => s.model);
   const loadHistory = useChatStore((s) => s.loadHistory);
   const clearError = useChatStore((s) => s.clearError);
@@ -110,6 +113,15 @@ export function ChatCanvas({
               retire as their resolved rows arrive (see chatStore). */}
           {liveTools.map((t) => (
             <LiveToolCard key={`live-${t.callId}`} tool={t} />
+          ))}
+
+          {/* Inline approval cards — the turn is paused on these. */}
+          {pendingApprovals.map((a) => (
+            <ApprovalCard
+              key={`approval-${a.callId}`}
+              approval={a}
+              onRespond={(d) => respondApproval(workspaceId, a.callId, d)}
+            />
           ))}
 
           {streaming && streamBuffer && (

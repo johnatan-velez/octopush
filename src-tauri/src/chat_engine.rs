@@ -97,6 +97,39 @@ fn format_command_output(output: &str, exit_code: i32) -> String {
     s
 }
 
+/// Flag a command the agent wants to run as destructive (returns a short reason
+/// for the approval card). Conservative + high-confidence: a safety net before
+/// the agent does something irreversible, not a sandbox. User-typed `$` commands
+/// are never passed here. Case-insensitive, matches anywhere in the command.
+fn dangerous_command(command: &str) -> Option<&'static str> {
+    let c = command.to_lowercase();
+    // (needle, reason) — ordered most-severe first.
+    const RULES: &[(&str, &str)] = &[
+        ("rm -rf", "recursive force delete (rm -rf)"),
+        ("rm -fr", "recursive force delete (rm -fr)"),
+        ("rm -r -f", "recursive force delete"),
+        ("rm -f -r", "recursive force delete"),
+        ("sudo ", "runs with elevated privileges (sudo)"),
+        ("mkfs", "formats a filesystem (mkfs)"),
+        ("dd if=", "raw disk write (dd)"),
+        (":(){:|:&};:", "fork bomb"),
+        ("git push --force", "force-push rewrites remote history"),
+        ("git push -f", "force-push rewrites remote history"),
+        ("git reset --hard", "discards uncommitted changes (git reset --hard)"),
+        ("git clean -fd", "deletes untracked files (git clean -fd)"),
+        ("git clean -df", "deletes untracked files (git clean -df)"),
+        ("chmod -r", "recursive permission change (chmod -R)"),
+        ("chown -r", "recursive ownership change (chown -R)"),
+        ("| sh", "pipes downloaded content into a shell"),
+        ("| bash", "pipes downloaded content into a shell"),
+        ("> /dev/", "writes to a device file"),
+    ];
+    RULES
+        .iter()
+        .find(|(needle, _)| c.contains(needle))
+        .map(|(_, reason)| *reason)
+}
+
 /// A command's cwd relative to the workspace root, for display on its card.
 /// Empty at the root/unknown; the path relative to root when inside the tree;
 /// and a consistent `…/tail` (up to the last two segments) when outside it —
@@ -215,6 +248,48 @@ pub struct ShellExitEvent {
     pub cwd: String,
     /// Relativized cwd for the badge (single backend source; rendered verbatim).
     pub cwd_label: String,
+}
+
+/// The user's decision on a dangerous-command approval request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    Deny,
+    Approve,
+    /// Approve and stop asking for this conversation (auto-approve the thread).
+    ApproveAlways,
+}
+
+impl ApprovalDecision {
+    /// Parse the frontend's string ("deny" | "approve" | "always").
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "approve" => ApprovalDecision::Approve,
+            "always" => ApprovalDecision::ApproveAlways,
+            _ => ApprovalDecision::Deny,
+        }
+    }
+}
+
+/// Emitted when the agent wants to run a command flagged as destructive — the
+/// frontend shows an inline Approve/Deny card; the turn waits for the decision.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalRequestEvent {
+    pub workspace_id: String,
+    pub thread_id: String,
+    pub call_id: String,
+    pub command: String,
+    pub reason: String,
+}
+
+/// Emitted when an approval request is resolved (any decision) so the frontend
+/// can retire the inline card.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalResolvedEvent {
+    pub workspace_id: String,
+    pub thread_id: String,
+    pub call_id: String,
 }
 
 /// Emitted whenever a chat message is persisted to the DB.
@@ -486,6 +561,12 @@ pub struct ChatEngine {
     /// Per-thread persistent bash PTYs backing `$`-direct execution. Shared so
     /// `run_shell_command` can reach the same sessions across turns.
     pub talk_shell: Arc<crate::talk_shell::TalkShell>,
+    /// In-flight approval requests for dangerous AGENT commands, keyed by the
+    /// tool call id. `respond_approval` resolves the matching sender.
+    approvals: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ApprovalDecision>>>>,
+    /// Threads where the user chose "don't ask again" — dangerous agent commands
+    /// run without prompting (in-memory; resets on restart, by design).
+    auto_approve: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl ChatEngine {
@@ -499,7 +580,60 @@ impl ChatEngine {
             cancels: Arc::new(Mutex::new(HashMap::new())),
             mcp: Arc::new(crate::mcp::McpRegistry::new()),
             talk_shell,
+            approvals: Arc::new(Mutex::new(HashMap::new())),
+            auto_approve: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
+    }
+
+    /// Resolve a pending approval request (called by the `respond_approval`
+    /// command when the user clicks the inline card).
+    pub fn respond_approval(&self, call_id: &str, decision: ApprovalDecision) {
+        if let Some(tx) = self.approvals.lock().remove(call_id) {
+            let _ = tx.send(decision);
+        }
+    }
+
+    /// Ask the user to approve a dangerous agent command and wait for the answer.
+    /// Auto-approved conversations skip the prompt. A forgotten card times out as
+    /// a denial (so a turn can't wedge forever).
+    #[allow(clippy::too_many_arguments)]
+    async fn await_approval(
+        &self,
+        app: &AppHandle,
+        workspace_id: &str,
+        thread_id: &str,
+        call_id: &str,
+        command: &str,
+        reason: &str,
+    ) -> ApprovalDecision {
+        if self.auto_approve.lock().contains(thread_id) {
+            return ApprovalDecision::Approve;
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.approvals.lock().insert(call_id.to_string(), tx);
+        let _ = app.emit("chat://approval-request", &ApprovalRequestEvent {
+            workspace_id: workspace_id.to_string(),
+            thread_id: thread_id.to_string(),
+            call_id: call_id.to_string(),
+            command: command.to_string(),
+            reason: reason.to_string(),
+        });
+        let decision = match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
+            Ok(Ok(d)) => d,
+            _ => {
+                self.approvals.lock().remove(call_id);
+                ApprovalDecision::Deny
+            }
+        };
+        if decision == ApprovalDecision::ApproveAlways {
+            self.auto_approve.lock().insert(thread_id.to_string());
+        }
+        let _ = app.emit("chat://approval-resolved", &ApprovalResolvedEvent {
+            workspace_id: workspace_id.to_string(),
+            thread_id: thread_id.to_string(),
+            call_id: call_id.to_string(),
+        });
+        decision
     }
 
     /// Request cancellation of the in-flight turn for `thread_id`, if any.
@@ -1289,6 +1423,37 @@ impl ChatEngine {
                     u.input.clone()
                 };
 
+                // ── Approval gate (agent run_command only) ────────────
+                // A command flagged destructive pauses for the user's OK before
+                // it runs. User-typed `$` commands are never gated. A denial
+                // skips execution and tells the model the user declined.
+                let mut denied: Option<String> = None;
+                if u.name == "run_command" {
+                    let command = u.input.get("command").and_then(|c| c.as_str()).unwrap_or("");
+                    if let Some(reason) = dangerous_command(command) {
+                        match self
+                            .await_approval(
+                                &app,
+                                &request.workspace_id,
+                                &request.thread_id,
+                                &u.id,
+                                command,
+                                reason,
+                            )
+                            .await
+                        {
+                            ApprovalDecision::Approve | ApprovalDecision::ApproveAlways => {}
+                            ApprovalDecision::Deny => {
+                                denied = Some(format!(
+                                    "Command not run — the user declined to approve it \
+                                     (flagged: {reason}). Ask the user how to proceed or try \
+                                     a safer alternative."
+                                ));
+                            }
+                        }
+                    }
+                }
+
                 // ── Live card: announce the tool is starting ──────────
                 let call_started = std::time::Instant::now();
                 let _ = app.emit("chat://tool-start", &ToolStartEvent {
@@ -1308,7 +1473,9 @@ impl ChatEngine {
                 // other names are built-in workspace tools. MCP calls run off
                 // the runtime thread with a timeout so a slow/hung server
                 // surfaces as a tool error instead of freezing the turn.
-                let (result, ok) = if crate::mcp::is_mcp_tool(&u.name) {
+                let (result, ok) = if let Some(msg) = denied {
+                    (msg, false)
+                } else if crate::mcp::is_mcp_tool(&u.name) {
                     let mcp = Arc::clone(&self.mcp);
                     let wp = workspace_path.clone();
                     let name = u.name.clone();
@@ -1595,6 +1762,31 @@ mod tests {
         // Unknown tool → failure.
         let (_, ok) = execute_tool(wp, "frobnicate", &serde_json::json!({}));
         assert!(!ok);
+    }
+
+    #[test]
+    fn dangerous_command_flags_destructive_and_passes_safe() {
+        // Destructive → flagged.
+        assert!(dangerous_command("rm -rf build").is_some());
+        assert!(dangerous_command("RM -RF /").is_some()); // case-insensitive
+        assert!(dangerous_command("git push --force origin main").is_some());
+        assert!(dangerous_command("sudo apt install x").is_some());
+        assert!(dangerous_command("curl https://x.sh | sh").is_some());
+        assert!(dangerous_command("git reset --hard HEAD~3").is_some());
+        // Safe → not flagged.
+        assert!(dangerous_command("npm test").is_none());
+        assert!(dangerous_command("ls -la").is_none());
+        assert!(dangerous_command("git status").is_none());
+        assert!(dangerous_command("rm file.txt").is_none()); // non-recursive
+        assert!(dangerous_command("cargo build").is_none());
+    }
+
+    #[test]
+    fn approval_decision_parse() {
+        assert_eq!(ApprovalDecision::parse("approve"), ApprovalDecision::Approve);
+        assert_eq!(ApprovalDecision::parse("always"), ApprovalDecision::ApproveAlways);
+        assert_eq!(ApprovalDecision::parse("deny"), ApprovalDecision::Deny);
+        assert_eq!(ApprovalDecision::parse("garbage"), ApprovalDecision::Deny);
     }
 
     #[test]

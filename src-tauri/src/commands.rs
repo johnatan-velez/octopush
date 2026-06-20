@@ -917,6 +917,20 @@ pub async fn cancel_chat(state: State<'_, AppState>, thread_id: String) -> AppRe
     Ok(())
 }
 
+/// Resolve an inline approval request for a dangerous agent command.
+/// `decision` is "approve" | "always" | "deny".
+#[tauri::command]
+pub async fn respond_approval(
+    state: State<'_, AppState>,
+    call_id: String,
+    decision: String,
+) -> AppResult<()> {
+    state
+        .chat
+        .respond_approval(&call_id, crate::chat_engine::ApprovalDecision::parse(&decision));
+    Ok(())
+}
+
 // ─── Chat threads (conversations) ─────────────────────────────────
 
 #[tauri::command]

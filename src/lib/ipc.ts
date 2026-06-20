@@ -414,6 +414,9 @@ export const ipc = {
   listChatMessages: (threadId: string) => invoke<ChatMessage[]>("list_chat_messages", { threadId }),
   /** Stop the in-flight agentic turn for this thread. */
   cancelChat: (threadId: string) => invoke<void>("cancel_chat", { threadId }),
+  /** Resolve an inline approval for a dangerous agent command. */
+  respondApproval: (callId: string, decision: "approve" | "always" | "deny") =>
+    invoke<void>("respond_approval", { callId, decision }),
   /** Run a `$`-direct command in the thread's TALK shell (no LLM). Persists the
    *  command + output into the conversation; returns cwd/exit for the badge. */
   runShellCommand: (request: {
