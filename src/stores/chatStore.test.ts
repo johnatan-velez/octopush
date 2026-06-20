@@ -28,6 +28,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("../lib/ipc", () => ({
   ipc: {
     sendChatMessage: vi.fn().mockResolvedValue(undefined),
+    truncateChatAfter: vi.fn().mockResolvedValue(undefined),
     listChatMessages: vi.fn().mockResolvedValue([]),
     cancelChat: vi.fn().mockResolvedValue(undefined),
     listChatThreads: vi.fn().mockResolvedValue([]),
@@ -586,5 +587,53 @@ describe("chatStore — workspace isolation", () => {
     expect(useChatStore.getState().getStreaming("never-seen")).toBe(false);
     expect(useChatStore.getState().getStreamBuffer("never-seen")).toBe("");
     expect(useChatStore.getState().getError("never-seen")).toBeNull();
+  });
+});
+
+describe("chatStore — message actions (regenerate / edit-and-resend)", () => {
+  beforeEach(() => {
+    resetStore();
+    vi.clearAllMocks();
+    useChatStore.setState({
+      activeThreadByWs: { "ws-1": "t1" },
+      messagesByWs: {
+        "ws-1": [
+          { id: 1, workspaceId: "ws-1", role: "user", content: "first",
+            model: null, inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-06-20T10:00:00Z" },
+          { id: 2, workspaceId: "ws-1", role: "assistant", content: "answer",
+            model: "claude-sonnet-4-6", inputTokens: null, outputTokens: null, costUsd: null,
+            createdAt: "2026-06-20T10:00:01Z" },
+        ],
+      },
+    });
+  });
+
+  it("regenerate truncates from the assistant turn and re-runs without a new user row", async () => {
+    await useChatStore.getState().regenerate("ws-1", "/tmp", 2);
+
+    expect(ipc.truncateChatAfter).toHaveBeenCalledWith("t1", 2);
+    // The assistant turn is dropped locally, the prompting user message stays.
+    const msgs = useChatStore.getState().getMessages("ws-1");
+    expect(msgs.map((m) => m.id)).toEqual([1]);
+    // Re-dispatched with regenerate:true (no new user message inserted).
+    expect(ipc.sendChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ regenerate: true, userMessage: "" }),
+    );
+  });
+
+  it("editAndResend truncates from the user message and resends the new text", async () => {
+    await useChatStore.getState().editAndResend("ws-1", "/tmp", 1, "edited prompt");
+
+    expect(ipc.truncateChatAfter).toHaveBeenCalledWith("t1", 1);
+    expect(ipc.sendChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ userMessage: "edited prompt" }),
+    );
+  });
+
+  it("editAndResend is a no-op for blank content", async () => {
+    await useChatStore.getState().editAndResend("ws-1", "/tmp", 1, "   ");
+    expect(ipc.truncateChatAfter).not.toHaveBeenCalled();
+    expect(ipc.sendChatMessage).not.toHaveBeenCalled();
   });
 });

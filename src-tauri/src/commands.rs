@@ -844,6 +844,17 @@ pub async fn send_chat_message(
     state.chat.send_agentic(app, request).await
 }
 
+/// Delete a message and everything after it in a thread — backs Regenerate and
+/// Edit-and-resend (the frontend then re-dispatches the turn).
+#[tauri::command]
+pub async fn truncate_chat_after(
+    state: State<'_, AppState>,
+    thread_id: String,
+    message_id: i64,
+) -> AppResult<()> {
+    state.db.lock().truncate_chat_after(&thread_id, message_id)
+}
+
 /// Run a `$`-direct command in the thread's TALK shell (no LLM). Persists the
 /// command + output into the conversation and returns the resulting cwd/exit
 /// for the composer's cwd badge.

@@ -410,8 +410,13 @@ export const ipc = {
     maxTokens: number;
     skill?: string;
     attachments?: { mediaType: string; data: string }[];
+    /** Re-run without inserting a new user row (history already ends with it). */
+    regenerate?: boolean;
   }) => invoke<void>("send_chat_message", { request }),
   listChatMessages: (threadId: string) => invoke<ChatMessage[]>("list_chat_messages", { threadId }),
+  /** Delete a message and everything after it (Regenerate / Edit-and-resend). */
+  truncateChatAfter: (threadId: string, messageId: number) =>
+    invoke<void>("truncate_chat_after", { threadId, messageId }),
   /** Stop the in-flight agentic turn for this thread. */
   cancelChat: (threadId: string) => invoke<void>("cancel_chat", { threadId }),
   /** Resolve an inline approval for a dangerous agent command. */

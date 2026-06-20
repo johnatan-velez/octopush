@@ -250,6 +250,35 @@ interface ChatState {
     content: string,
     systemPrompt?: string,
   ) => Promise<void>;
+  /** Internal: dispatch one agentic turn (shared by send / regenerate). */
+  runTurn: (
+    workspaceId: string,
+    workspacePath: string,
+    threadId: string,
+    opts: {
+      userMessage: string;
+      systemPrompt?: string;
+      attachments?: Attachment[];
+      regenerate?: boolean;
+    },
+  ) => Promise<void>;
+  /** Regenerate an assistant turn: drop it (and any trailing tool rows) back to
+   *  the prompting user message, then re-run the loop on the unchanged history. */
+  regenerate: (
+    workspaceId: string,
+    workspacePath: string,
+    assistantMessageId: number,
+    systemPrompt?: string,
+  ) => Promise<void>;
+  /** Edit a user message and resend: truncate from it, then dispatch the new
+   *  text as a fresh turn. */
+  editAndResend: (
+    workspaceId: string,
+    workspacePath: string,
+    userMessageId: number,
+    newContent: string,
+    systemPrompt?: string,
+  ) => Promise<void>;
   /** Run a `$`-direct command in the thread's TALK shell, bypassing the LLM.
    *  The command + output are persisted into the conversation as context. */
   runShell: (
@@ -719,6 +748,22 @@ export const useChatStore = create<ChatState>((set, get) => {
         void get().renameThread(workspaceId, threadId, title).catch(() => {});
       }
 
+      // Snapshot + clear pending attachments — they ride along on this turn only.
+      const attachments = get().attachmentsByWs[workspaceId] ?? EMPTY_ATTACHMENTS;
+      if (attachments.length > 0) {
+        set((s) => ({ attachmentsByWs: { ...s.attachmentsByWs, [workspaceId]: EMPTY_ATTACHMENTS } }));
+      }
+
+      await get().runTurn(workspaceId, workspacePath, threadId, {
+        userMessage: content,
+        systemPrompt,
+        attachments,
+      });
+    },
+
+    // Core turn dispatch shared by send / regenerate. Sets the streaming flags,
+    // fires the IPC, and on failure restores the flags + any staged attachments.
+    runTurn: async (workspaceId, workspacePath, threadId, opts) => {
       set((s) => ({
         streamingByWs: { ...s.streamingByWs, [workspaceId]: true },
         streamingThreadByWs: { ...s.streamingThreadByWs, [workspaceId]: threadId },
@@ -726,26 +771,21 @@ export const useChatStore = create<ChatState>((set, get) => {
         errorByWs: { ...s.errorByWs, [workspaceId]: null },
         liveToolsByWs: { ...s.liveToolsByWs, [workspaceId]: EMPTY_LIVE_TOOLS },
       }));
-
-      // Snapshot + clear pending attachments — they ride along on this turn only.
-      const attachments = get().attachmentsByWs[workspaceId] ?? EMPTY_ATTACHMENTS;
-      if (attachments.length > 0) {
-        set((s) => ({ attachmentsByWs: { ...s.attachmentsByWs, [workspaceId]: EMPTY_ATTACHMENTS } }));
-      }
-
+      const attachments = opts.attachments ?? EMPTY_ATTACHMENTS;
       try {
         await ipc.sendChatMessage({
           workspaceId,
           threadId,
           workspacePath,
           model: get().model,
-          userMessage: content,
-          system: systemPrompt,
+          userMessage: opts.userMessage,
+          system: opts.systemPrompt,
           maxTokens: EFFORT_MAX_TOKENS[get().effort],
           skill: get().activeSkillByWs[workspaceId] ?? undefined,
           attachments: attachments.length
             ? attachments.map((a) => ({ mediaType: a.mediaType, data: a.data }))
             : undefined,
+          regenerate: opts.regenerate || undefined,
         });
       } catch (e) {
         set((s) => ({
@@ -759,6 +799,54 @@ export const useChatStore = create<ChatState>((set, get) => {
             : s.attachmentsByWs,
         }));
       }
+    },
+
+    regenerate: async (workspaceId, workspacePath, assistantMessageId, systemPrompt) => {
+      const threadId = get().activeThreadByWs[workspaceId];
+      if (!threadId) return;
+      // Drop the assistant turn (and any trailing tool rows) locally + server-side,
+      // leaving the prompting user message as the tail of the history.
+      set((s) => ({
+        messagesByWs: {
+          ...s.messagesByWs,
+          [workspaceId]: (s.messagesByWs[workspaceId] ?? EMPTY_MESSAGES).filter(
+            (m) => m.id < assistantMessageId,
+          ),
+        },
+      }));
+      try {
+        await ipc.truncateChatAfter(threadId, assistantMessageId);
+      } catch (e) {
+        set((s) => ({ errorByWs: { ...s.errorByWs, [workspaceId]: String(e) } }));
+        return;
+      }
+      await get().runTurn(workspaceId, workspacePath, threadId, {
+        userMessage: "",
+        systemPrompt,
+        regenerate: true,
+      });
+    },
+
+    editAndResend: async (workspaceId, workspacePath, userMessageId, newContent, systemPrompt) => {
+      const threadId = get().activeThreadByWs[workspaceId];
+      if (!threadId || !newContent.trim()) return;
+      // Truncate from the edited message (it + everything after), then dispatch
+      // the new text as a fresh user turn.
+      set((s) => ({
+        messagesByWs: {
+          ...s.messagesByWs,
+          [workspaceId]: (s.messagesByWs[workspaceId] ?? EMPTY_MESSAGES).filter(
+            (m) => m.id < userMessageId,
+          ),
+        },
+      }));
+      try {
+        await ipc.truncateChatAfter(threadId, userMessageId);
+      } catch (e) {
+        set((s) => ({ errorByWs: { ...s.errorByWs, [workspaceId]: String(e) } }));
+        return;
+      }
+      await get().send(workspaceId, workspacePath, newContent, systemPrompt);
     },
 
     runShell: async (workspaceId, workspacePath, command) => {

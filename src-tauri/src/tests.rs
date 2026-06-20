@@ -451,6 +451,34 @@ mod workspace_tests {
     }
 
     #[test]
+    fn truncate_chat_after_removes_message_and_everything_following() {
+        let db = test_db();
+        db.insert_project("p", "P", "/tmp/p").unwrap();
+        db.insert_workspace("ws", "p", "ws", "", "main", None, "", None).unwrap();
+        let t = db.create_chat_thread("ws", "T").unwrap();
+        db.insert_chat_message("ws", &t.id, "user", "one", None, None, None, None).unwrap();
+        db.insert_chat_message("ws", &t.id, "assistant", "two", None, None, None, None).unwrap();
+        db.insert_chat_message("ws", &t.id, "user", "three", None, None, None, None).unwrap();
+        let rows = db.list_chat_messages(&t.id).unwrap();
+        assert_eq!(rows.len(), 3);
+
+        // Truncate from the assistant message → keeps only the first row.
+        let assistant_id = rows[1].id;
+        db.truncate_chat_after(&t.id, assistant_id).unwrap();
+        let after = db.list_chat_messages(&t.id).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].content, "one");
+
+        // Scoped per thread: another thread's rows are untouched by a truncate
+        // that targets only this one.
+        let t2 = db.create_chat_thread("ws", "T2").unwrap();
+        db.insert_chat_message("ws", &t2.id, "user", "other", None, None, None, None).unwrap();
+        db.truncate_chat_after(&t2.id, 0).unwrap(); // id >= 0 clears t2 only
+        assert_eq!(db.list_chat_messages(&t2.id).unwrap().len(), 0);
+        assert_eq!(db.list_chat_messages(&t.id).unwrap().len(), 1);
+    }
+
+    #[test]
     fn shell_history_recall_dedups_and_orders_by_recency() {
         let db = test_db();
         db.insert_project("p", "P", "/tmp/p").unwrap();

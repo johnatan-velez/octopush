@@ -55,6 +55,10 @@ pub struct ChatRequest {
     /// content blocks alongside the user text. Not persisted in history.
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// Regenerate: the prior turn was already truncated and history ends with the
+    /// user message, so DON'T insert a new user row — just re-run the loop.
+    #[serde(default)]
+    pub regenerate: bool,
 }
 
 /// A base64 image attachment sent with a user turn.
@@ -1051,15 +1055,19 @@ impl ChatEngine {
             key: request.thread_id.clone(),
         };
 
-        // Persist user message and emit message-added so the frontend learns the DB id.
-        self.insert_and_emit_message(
-            &app,
-            &request.workspace_id,
-            &request.thread_id,
-            "user",
-            &request.user_message,
-            None, None, None, None,
-        )?;
+        // Persist user message and emit message-added so the frontend learns the
+        // DB id. Skipped on regenerate: history already ends with the user turn
+        // (the old assistant turn was truncated), so we just re-run the loop.
+        if !request.regenerate {
+            self.insert_and_emit_message(
+                &app,
+                &request.workspace_id,
+                &request.thread_id,
+                "user",
+                &request.user_message,
+                None, None, None, None,
+            )?;
+        }
 
         // Build conversation history (this thread only) as normalized
         // LlmMessage[]. Tool summaries are injected into assistant messages so

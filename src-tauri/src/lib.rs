@@ -175,6 +175,7 @@ pub fn run() {
             commands::get_git_diff,
             // Chat
             commands::send_chat_message,
+            commands::truncate_chat_after,
             commands::run_shell_command,
             commands::stop_shell_command,
             commands::respond_approval,
