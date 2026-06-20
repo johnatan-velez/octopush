@@ -72,6 +72,14 @@ export interface LiveOutput {
 /** Cap on the in-memory live-output buffer (xterm holds its own scrollback). */
 const LIVE_OUTPUT_CAP = 262_144;
 
+/** A pending approval request for a destructive agent command (inline card). */
+export interface PendingApproval {
+  callId: string;
+  threadId: string;
+  command: string;
+  reason: string;
+}
+
 export type Effort = "swift" | "standard" | "deep";
 
 export const EFFORT_MAX_TOKENS: Record<Effort, number> = {
@@ -144,6 +152,7 @@ const EMPTY_LIVE_TOOLS: LiveTool[] = [];
 const EMPTY_THREADS: ChatThread[] = [];
 const EMPTY_ATTACHMENTS: Attachment[] = [];
 const EMPTY_HISTORY: string[] = [];
+const EMPTY_APPROVALS: PendingApproval[] = [];
 
 /** Whether an event for `threadId` should apply to the workspace's currently
  *  shown thread. Lenient: when no active thread is recorded yet (e.g. tests) or
@@ -200,6 +209,9 @@ interface ChatState {
   /** Recent `$`-direct commands per workspace (newest first) — the recall
    *  palette + `$ `↑ history. Persisted backend-side; cached here. */
   shellHistoryByWs: Record<string, string[]>;
+  /** Pending dangerous-command approval requests per workspace (inline cards).
+   *  Present between chat://approval-request and approval-resolved. */
+  pendingApprovalsByWs: Record<string, PendingApproval[]>;
 
   /** Global model preference. Applies to whichever workspace the user types in. */
   model: string;
@@ -227,6 +239,8 @@ interface ChatState {
   getLiveOutput: (callId: string) => LiveOutput | null;
   /** Recent `$`-direct commands for a workspace (newest first). */
   getShellHistory: (workspaceId: string) => string[];
+  /** Pending dangerous-command approvals for the active thread. */
+  getPendingApprovals: (workspaceId: string) => PendingApproval[];
 
   // Actions
   loadHistory: (workspaceId: string) => Promise<void>;
@@ -247,6 +261,12 @@ interface ChatState {
   stopShellProcess: (workspaceId: string) => void;
   /** Load the workspace's recent `$`-command history into the cache. */
   loadShellHistory: (workspaceId: string) => Promise<void>;
+  /** Resolve a dangerous-command approval card (removes it + tells the backend). */
+  respondApproval: (
+    workspaceId: string,
+    callId: string,
+    decision: "approve" | "always" | "deny",
+  ) => void;
   setModel: (model: string) => void;
   setEffort: (effort: Effort) => void;
   setActiveSkill: (workspaceId: string, skill: string | null) => void;
@@ -493,6 +513,50 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
   );
 
+  // ── chat://approval-request ───────────────────────────────────
+  // The agent wants to run a destructive command — show an inline Approve/Deny
+  // card; the backend turn is paused until respondApproval resolves it.
+  listen<{
+    workspaceId: string;
+    threadId: string;
+    callId: string;
+    command: string;
+    reason: string;
+  }>("chat://approval-request", (ev) => {
+    const p = ev.payload;
+    if (!p.workspaceId) return;
+    set((s) => {
+      const cur = s.pendingApprovalsByWs[p.workspaceId] ?? EMPTY_APPROVALS;
+      if (cur.some((a) => a.callId === p.callId)) return {};
+      return {
+        pendingApprovalsByWs: {
+          ...s.pendingApprovalsByWs,
+          [p.workspaceId]: [
+            ...cur,
+            { callId: p.callId, threadId: p.threadId, command: p.command, reason: p.reason },
+          ],
+        },
+      };
+    });
+  });
+
+  // ── chat://approval-resolved ──────────────────────────────────
+  // The request was answered (or timed out) — retire the card.
+  listen<{ workspaceId: string; callId: string }>("chat://approval-resolved", (ev) => {
+    const p = ev.payload;
+    if (!p.workspaceId) return;
+    set((s) => {
+      const cur = s.pendingApprovalsByWs[p.workspaceId];
+      if (!cur) return {};
+      return {
+        pendingApprovalsByWs: {
+          ...s.pendingApprovalsByWs,
+          [p.workspaceId]: cur.filter((a) => a.callId !== p.callId),
+        },
+      };
+    });
+  });
+
   // ── chat://shell-cwd ──────────────────────────────────────────
   // The agent's run_command moved the shared shell's cwd — update the badge so
   // it stays accurate (the `$`-direct path updates from its result instead).
@@ -550,6 +614,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     liveProcessByThread: {},
     liveOutputByCallId: {},
     shellHistoryByWs: {},
+    pendingApprovalsByWs: {},
     model: "claude-sonnet-4-6",
     effort: "standard",
 
@@ -576,6 +641,12 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
     getLiveOutput: (callId) => get().liveOutputByCallId[callId] ?? null,
     getShellHistory: (workspaceId) => get().shellHistoryByWs[workspaceId] ?? EMPTY_HISTORY,
+    // Return the stored slice directly (stable ref → no spurious re-renders on
+    // unrelated store mutations). Approvals are surfaced workspace-wide rather
+    // than hidden behind a thread switch — a pending destructive command is a
+    // safety prompt the user must see even after navigating away.
+    getPendingApprovals: (workspaceId) =>
+      get().pendingApprovalsByWs[workspaceId] ?? EMPTY_APPROVALS,
 
     getTimeline: (workspaceId) => {
       const msgs = get().messagesByWs[workspaceId];
@@ -765,6 +836,21 @@ export const useChatStore = create<ChatState>((set, get) => {
       if (threadId) void ipc.stopShellCommand(threadId).catch(() => {});
     },
 
+    respondApproval: (workspaceId, callId, decision) => {
+      // Optimistically retire the card; the backend also emits approval-resolved.
+      set((s) => {
+        const cur = s.pendingApprovalsByWs[workspaceId];
+        if (!cur) return {};
+        return {
+          pendingApprovalsByWs: {
+            ...s.pendingApprovalsByWs,
+            [workspaceId]: cur.filter((a) => a.callId !== callId),
+          },
+        };
+      });
+      void ipc.respondApproval(callId, decision).catch(() => {});
+    },
+
     loadShellHistory: async (workspaceId) => {
       try {
         const items = await ipc.listShellHistory(workspaceId, 50);
@@ -803,6 +889,14 @@ export const useChatStore = create<ChatState>((set, get) => {
       // workspace's active thread (the one being shown).
       const threadId = get().activeThreadByWs[workspaceId];
       if (threadId) void ipc.cancelChat(threadId).catch(() => {});
+      // Retire any pending approval card immediately — the backend also resolves
+      // it as Deny on cancel, but clear here so Stop feels instant and a stale
+      // card can't be clicked to run a command on the cancelled turn.
+      if (get().pendingApprovalsByWs[workspaceId]?.length) {
+        set((s) => ({
+          pendingApprovalsByWs: { ...s.pendingApprovalsByWs, [workspaceId]: EMPTY_APPROVALS },
+        }));
+      }
     },
 
     clear: (workspaceId) =>
