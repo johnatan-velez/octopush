@@ -1,6 +1,7 @@
 import { useEffect, useRef, useMemo, useState, useCallback } from "react";
-import { AlertTriangle, Settings, Copy, Check, ArrowDown } from "lucide-react";
+import { AlertTriangle, Settings, Copy, Check, ArrowDown, RefreshCw, Pencil } from "lucide-react";
 import { useChatStore, buildTimeline, type ConversationItem } from "../../stores/chatStore";
+import type { ChatMessage as StoredMessage } from "../../lib/types";
 import { useBudgetsStore, BUDGET_CAP_MSG } from "../../stores/budgetsStore";
 import { useCopyFeedback } from "../../hooks/useCopyFeedback";
 import { BrassRule } from "../BrassRule";
@@ -40,7 +41,10 @@ export function ChatCanvas({
   const error = useChatStore((s) => s.getError(workspaceId));
   const liveTools = useChatStore((s) => s.getLiveTools(workspaceId));
   const pendingApprovals = useChatStore((s) => s.getPendingApprovals(workspaceId));
+  const activeThreadId = useChatStore((s) => s.activeThreadByWs[workspaceId]);
   const respondApproval = useChatStore((s) => s.respondApproval);
+  const regenerate = useChatStore((s) => s.regenerate);
+  const editAndResend = useChatStore((s) => s.editAndResend);
   const model = useChatStore((s) => s.model);
   const loadHistory = useChatStore((s) => s.loadHistory);
   const clearError = useChatStore((s) => s.clearError);
@@ -97,6 +101,17 @@ export function ChatCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeline.length]);
 
+  // Only surface approval cards for the conversation on screen — approving a
+  // destructive command you can't see (another thread) would be unsafe. The
+  // store keeps them workspace-wide (stable ref); we scope at render.
+  const approvalsForThread = useMemo(
+    () =>
+      activeThreadId
+        ? pendingApprovals.filter((a) => a.threadId === activeThreadId)
+        : pendingApprovals,
+    [pendingApprovals, activeThreadId],
+  );
+
   const isEmpty = messages.length === 0 && !streaming && !error;
   const showJump = !atBottom && !isEmpty;
 
@@ -133,9 +148,22 @@ export function ChatCanvas({
               );
             }
             return (
-              <MessageRow key={item.message.id}>
-                <ChatMessage message={item.message} onOpenInEditor={onOpenInEditor} />
-              </MessageRow>
+              <MessageRow
+                key={item.message.id}
+                message={item.message}
+                onOpenInEditor={onOpenInEditor}
+                onRegenerate={
+                  item.message.role === "assistant"
+                    ? (id) => regenerate(workspaceId, workspacePath, id)
+                    : undefined
+                }
+                onEdit={
+                  item.message.role === "user"
+                    ? (id, content) => editAndResend(workspaceId, workspacePath, id, content)
+                    : undefined
+                }
+                disabled={streaming}
+              />
             );
           })}
 
@@ -146,7 +174,7 @@ export function ChatCanvas({
           ))}
 
           {/* Inline approval cards — the turn is paused on these. */}
-          {pendingApprovals.map((a) => (
+          {approvalsForThread.map((a) => (
             <ApprovalCard
               key={`approval-${a.callId}`}
               approval={a}
@@ -223,32 +251,139 @@ export function ChatCanvas({
   );
 }
 
-/** Wraps a message so a quiet Copy affordance reveals on hover (group). */
-function MessageRow({ children }: { children: React.ReactNode }) {
+/**
+ * Wraps a message with hover/focus actions: Copy always, Regenerate on assistant
+ * turns, Edit on user turns. Editing swaps the bubble for an inline composer that
+ * truncates from this message and resends. Actions hide while a turn streams.
+ */
+function MessageRow({
+  message,
+  onOpenInEditor,
+  onRegenerate,
+  onEdit,
+  disabled,
+}: {
+  message: StoredMessage;
+  onOpenInEditor?: (path: string) => void;
+  onRegenerate?: (id: number) => void;
+  onEdit?: (id: number, newContent: string) => void;
+  disabled?: boolean;
+}) {
   const { copied, copy } = useCopyFeedback();
   const ref = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
 
   function handleCopy() {
-    copy(ref.current?.innerText ?? "");
+    copy(ref.current?.innerText ?? message.content);
+  }
+
+  function startEdit() {
+    setDraft(message.content);
+    setEditing(true);
+  }
+
+  function saveEdit() {
+    const next = draft.trim();
+    setEditing(false);
+    if (next && next !== message.content) onEdit?.(message.id, next);
+  }
+
+  if (editing) {
+    return (
+      <div className="octo-fade-in rounded-md border border-[var(--brass-dim)] bg-[var(--brass-ghost)] p-2">
+        <textarea
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setEditing(false);
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveEdit();
+          }}
+          rows={Math.min(10, Math.max(2, draft.split("\n").length))}
+          className="w-full resize-none bg-transparent font-sans text-[13px] leading-[1.6] text-octo-ivory outline-none"
+        />
+        <div className="mt-1.5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setEditing(false)}
+            className="font-mono text-[10px] uppercase tracking-[0.2em] text-octo-mute transition-colors hover:text-octo-sage"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={saveEdit}
+            title="Resend from this message (⌘↵)"
+            className="rounded-md border border-[var(--brass-dim)] bg-[var(--brass-ghost)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-octo-brass"
+          >
+            Resend
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="group/msg relative">
-      <div ref={ref}>{children}</div>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label="Copy message"
-        title={copied ? "Copied" : "Copy message"}
-        className="absolute -top-1 right-0 flex h-6 w-6 items-center justify-center rounded p-1 text-octo-mute opacity-0 transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-octo-brass group-hover/msg:opacity-100"
-      >
-        {copied ? (
-          <Check size={12} className="text-octo-verdigris" />
-        ) : (
-          <Copy size={12} />
+      <div ref={ref}>
+        <ChatMessage message={message} onOpenInEditor={onOpenInEditor} />
+      </div>
+      <div className="absolute -top-1 right-0 flex items-center gap-0.5 opacity-0 transition group-hover/msg:opacity-100 focus-within:opacity-100">
+        {onEdit && (
+          <RowAction
+            label="Edit & resend"
+            onClick={startEdit}
+            disabled={disabled}
+            icon={<Pencil size={12} />}
+          />
         )}
-      </button>
+        {onRegenerate && (
+          <RowAction
+            label="Regenerate"
+            onClick={() => onRegenerate(message.id)}
+            disabled={disabled}
+            icon={<RefreshCw size={12} />}
+          />
+        )}
+        <RowAction
+          label={copied ? "Copied" : "Copy message"}
+          onClick={handleCopy}
+          icon={
+            copied ? (
+              <Check size={12} className="text-octo-verdigris" />
+            ) : (
+              <Copy size={12} />
+            )
+          }
+        />
+      </div>
     </div>
+  );
+}
+
+function RowAction({
+  label,
+  onClick,
+  icon,
+  disabled,
+}: {
+  label: string;
+  onClick: () => void;
+  icon: React.ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className="flex h-6 w-6 items-center justify-center rounded p-1 text-octo-mute transition hover:bg-[var(--brass-ghost)] hover:text-octo-brass focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-octo-brass disabled:cursor-not-allowed disabled:opacity-30"
+    >
+      {icon}
+    </button>
   );
 }
 

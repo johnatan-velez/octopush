@@ -1340,6 +1340,18 @@ impl Db {
         Ok(())
     }
 
+    /// Delete a message and everything after it in a thread (ids are monotonic
+    /// per thread). Backs Regenerate (truncate from the assistant turn) and
+    /// Edit-and-resend (truncate from the edited user message). Scoped by
+    /// thread_id so it never touches another conversation's rows.
+    pub fn truncate_chat_after(&self, thread_id: &str, message_id: i64) -> AppResult<()> {
+        self.conn.execute(
+            "DELETE FROM chat_messages WHERE thread_id = ?1 AND id >= ?2",
+            params![thread_id, message_id],
+        )?;
+        Ok(())
+    }
+
     /// Record a `$`-direct command in the workspace's recall history (upsert:
     /// bumps recency + use-count for a repeated command). Best-effort.
     pub fn record_shell_history(&self, workspace_id: &str, command: &str) -> AppResult<()> {
