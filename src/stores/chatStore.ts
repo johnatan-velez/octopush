@@ -340,6 +340,8 @@ interface ChatState {
   selectThread: (workspaceId: string, threadId: string) => Promise<void>;
   newThread: (workspaceId: string) => Promise<void>;
   renameThread: (workspaceId: string, threadId: string, title: string) => Promise<void>;
+  /** Pin/unpin a conversation (pinned sort to the top). */
+  pinThread: (workspaceId: string, threadId: string, pinned: boolean) => Promise<void>;
   deleteThread: (workspaceId: string, threadId: string) => Promise<void>;
 }
 
@@ -858,6 +860,11 @@ export const useChatStore = create<ChatState>((set, get) => {
           ),
         },
       }));
+      // Clear staged attachments only now that we're committed to dispatching —
+      // if the budget gate above bailed, they stay staged for the next turn.
+      if (opts.attachments?.length) {
+        set((s) => ({ attachmentsByWs: { ...s.attachmentsByWs, [workspaceId]: EMPTY_ATTACHMENTS } }));
+      }
       await get().runTurn(workspaceId, workspacePath, threadId, opts);
     },
 
@@ -886,12 +893,10 @@ export const useChatStore = create<ChatState>((set, get) => {
     editAndResend: async (workspaceId, workspacePath, userMessageId, newContent, systemPrompt) => {
       const threadId = get().activeThreadByWs[workspaceId];
       if (!threadId || !newContent.trim()) return;
-      // Carry any staged attachments onto the resent turn (like send does), then
-      // clear them so they're not double-sent.
+      // Carry any staged attachments onto the resent turn (like send does).
+      // truncateAndRun clears them only after its budget gate passes, so a
+      // budget-blocked resend doesn't silently discard them.
       const attachments = get().attachmentsByWs[workspaceId] ?? EMPTY_ATTACHMENTS;
-      if (attachments.length > 0) {
-        set((s) => ({ attachmentsByWs: { ...s.attachmentsByWs, [workspaceId]: EMPTY_ATTACHMENTS } }));
-      }
       await get().truncateAndRun(workspaceId, workspacePath, threadId, userMessageId, {
         userMessage: newContent,
         systemPrompt,
@@ -1136,16 +1141,39 @@ export const useChatStore = create<ChatState>((set, get) => {
       }));
     },
 
+    pinThread: async (workspaceId, threadId, pinned) => {
+      await ipc.setThreadPinned(threadId, pinned);
+      // Update the flag + re-sort pinned-first (then most-recent), matching the
+      // backend's list ordering so the row jumps to its new position immediately.
+      set((s) => {
+        const list = (s.threadsByWs[workspaceId] ?? EMPTY_THREADS).map((t) =>
+          t.id === threadId ? { ...t, pinned } : t,
+        );
+        const sorted = [...list].sort((a, b) => {
+          if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+          return (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "");
+        });
+        return { threadsByWs: { ...s.threadsByWs, [workspaceId]: sorted } };
+      });
+    },
+
     deleteThread: async (workspaceId, threadId) => {
       const wasActive = get().activeThreadByWs[workspaceId] === threadId;
       await ipc.deleteChatThread(threadId);
       // Remove inside a functional update so interleaved deletes don't resurrect
-      // a row from a stale snapshot.
+      // a row from a stale snapshot. Also drop any pending approval card for the
+      // deleted thread (the backend cancels its parked turn).
       set((s) => ({
         threadsByWs: {
           ...s.threadsByWs,
           [workspaceId]: (s.threadsByWs[workspaceId] ?? EMPTY_THREADS).filter(
             (t) => t.id !== threadId,
+          ),
+        },
+        pendingApprovalsByWs: {
+          ...s.pendingApprovalsByWs,
+          [workspaceId]: (s.pendingApprovalsByWs[workspaceId] ?? EMPTY_APPROVALS).filter(
+            (a) => a.threadId !== threadId,
           ),
         },
       }));

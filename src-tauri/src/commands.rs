@@ -973,8 +973,22 @@ pub async fn rename_chat_thread(
     state.db.lock().rename_chat_thread(&thread_id, &title)
 }
 
+/// Pin/unpin a conversation — pinned threads sort to the top of the chat list.
+#[tauri::command]
+pub async fn set_thread_pinned(
+    state: State<'_, AppState>,
+    thread_id: String,
+    pinned: bool,
+) -> AppResult<()> {
+    state.db.lock().set_thread_pinned(&thread_id, pinned)
+}
+
 #[tauri::command]
 pub async fn delete_chat_thread(state: State<'_, AppState>, thread_id: String) -> AppResult<()> {
+    // Stop any in-flight turn first — this also resolves a parked dangerous-
+    // command approval (as Deny) so the agent loop doesn't stay blocked for the
+    // full 300s timeout after the conversation is gone.
+    state.chat.cancel(&thread_id);
     // Tear down the thread's TALK shell (kills the daemon PTY + releases the
     // session entry) so deleting conversations doesn't leak bash processes.
     state.chat.talk_shell.close(&thread_id);

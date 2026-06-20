@@ -112,9 +112,21 @@ export function ChatCanvas({
     if (streaming && atBottom) scrollToBottom(false);
   }, [streaming, streamBuffer, atBottom, scrollToBottom]);
 
-  // Glide to the bottom when a new turn lands, if the user is following along.
+  // Jump to the latest message instantly when a conversation first loads or the
+  // user switches threads — a smooth glide here would visibly scroll PAST the
+  // history on open. After that initial settle, new turns glide smoothly.
+  const settledRef = useRef(false);
   useEffect(() => {
-    if (atBottom) scrollToBottom(true);
+    settledRef.current = false; // re-arm on workspace/thread switch
+  }, [workspaceId]);
+  useEffect(() => {
+    if (timeline.length === 0) return;
+    if (!settledRef.current) {
+      settledRef.current = true;
+      scrollToBottom(false); // instant on first paint of this thread
+    } else if (atBottom) {
+      scrollToBottom(true); // glide for subsequent turns while following
+    }
     // Only re-run when the conversation grows, not when atBottom toggles.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeline.length]);
