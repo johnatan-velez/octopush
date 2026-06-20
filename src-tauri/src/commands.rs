@@ -985,6 +985,10 @@ pub async fn set_thread_pinned(
 
 #[tauri::command]
 pub async fn delete_chat_thread(state: State<'_, AppState>, thread_id: String) -> AppResult<()> {
+    // Stop any in-flight turn first — this also resolves a parked dangerous-
+    // command approval (as Deny) so the agent loop doesn't stay blocked for the
+    // full 300s timeout after the conversation is gone.
+    state.chat.cancel(&thread_id);
     // Tear down the thread's TALK shell (kills the daemon PTY + releases the
     // session entry) so deleting conversations doesn't leak bash processes.
     state.chat.talk_shell.close(&thread_id);
