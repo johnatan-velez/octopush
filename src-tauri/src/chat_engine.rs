@@ -147,16 +147,22 @@ fn dangerous_command(command: &str) -> Option<&'static str> {
         }
     }
 
-    // Regex rules — avoid the `> /dev/null` and `| shuf` false positives by
-    // matching a shell/disk target as a whole word. A destructive `dd` writes to
-    // a device (`of=/dev/sd…`), which the device-write regex catches — so the old
-    // bare `dd if=` substring (which mis-fired on `git add if=…`) is gone.
+    // Regex rules run on the full line — several (pipe-to-shell `… | sh`, the
+    // fork bomb) intentionally span shell separators, and the device-write /
+    // pipe-to-shell regexes already use word boundaries to avoid the `> /dev/null`
+    // and `… | shuf` false positives. A destructive `dd` writes to a device
+    // (`of=/dev/sd…`), caught by the device-write regex — so the old bare
+    // `dd if=` substring (which mis-fired on `git add if=…`) is gone.
     for (re, reason) in danger_regexes() {
         if re.is_match(&c) {
             return Some(reason);
         }
     }
-    // Plain high-confidence substrings (matched on `c`, separators intact).
+    // Plain high-confidence substrings. NOTE: this is a heuristic net, not a
+    // sandbox — a benign command that merely *contains* a flagged string (e.g.
+    // `echo 'git reset --hard'`) may prompt for approval; the user can deny. A
+    // quote-aware parser would be needed to eliminate that, which isn't worth the
+    // complexity for a confirm-prompt safety net.
     const RULES: &[(&str, &str)] = &[
         ("sudo ", "runs with elevated privileges (sudo)"),
         ("mkfs", "formats a filesystem (mkfs)"),

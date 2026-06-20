@@ -197,7 +197,7 @@ export function ToolCallCard({ tool, workspacePath, onOpenInEditor, onRunInTermi
               style={{
                 fontSize: 10,
                 color: MUTE,
-                fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+                fontFamily: MONO,
                 flexShrink: 0,
                 marginLeft: 6,
                 maxWidth: 160,

@@ -274,6 +274,20 @@ interface ChatState {
       regenerate?: boolean;
     },
   ) => Promise<void>;
+  /** Internal: budget-gate, truncate from a cutoff message id, then dispatch.
+   *  Shared by regenerate / editAndResend. */
+  truncateAndRun: (
+    workspaceId: string,
+    workspacePath: string,
+    threadId: string,
+    cutoffId: number,
+    opts: {
+      userMessage: string;
+      systemPrompt?: string;
+      attachments?: Attachment[];
+      regenerate?: boolean;
+    },
+  ) => Promise<void>;
   /** Regenerate an assistant turn: drop it (and any trailing tool rows) back to
    *  the prompting user message, then re-run the loop on the unchanged history. */
   regenerate: (
@@ -813,33 +827,18 @@ export const useChatStore = create<ChatState>((set, get) => {
       }
     },
 
-    regenerate: async (workspaceId, workspacePath, assistantMessageId, systemPrompt) => {
-      const threadId = get().activeThreadByWs[workspaceId];
-      if (!threadId) return;
-      const msgs = get().messagesByWs[workspaceId] ?? EMPTY_MESSAGES;
-      const aIdx = msgs.findIndex((m) => m.id === assistantMessageId);
-      if (aIdx < 0) return;
-      // Find the user message that prompted this assistant turn. Without one we
-      // can't regenerate (re-running with an empty history 400s), and truncating
-      // would wipe the whole thread — so bail instead.
-      let pu = aIdx - 1;
-      while (pu >= 0 && msgs[pu].role !== "user") pu--;
-      if (pu < 0) return;
-      // Budget gate BEFORE truncating, so a blocked regenerate never deletes the
-      // turn it can't re-run.
+    // Shared core for regenerate / editAndResend: budget-gate, truncate from the
+    // cutoff (DB first, then local — no drift on failure), then dispatch. Both
+    // entry points must stay in sync, so the order lives in one place.
+    truncateAndRun: async (workspaceId, workspacePath, threadId, cutoffId, opts) => {
+      // Budget gate BEFORE truncating — a blocked action must never delete the
+      // rows it can't re-run.
       if (overBudgetBlocked(workspaceId)) {
         set((s) => ({ errorByWs: { ...s.errorByWs, [workspaceId]: BUDGET_CAP_MSG } }));
         return;
       }
-      // Truncate from the START of this assistant turn — the row right after the
-      // prompting user message — so the turn's TOOL rows go too. Cutting only at
-      // the assistant text id would leave orphaned tool rows that the backend
-      // re-injects, corrupting the regenerated turn's context.
-      const truncateFromId = msgs[pu + 1]?.id ?? assistantMessageId;
-      // Await the DB delete BEFORE mutating local state, so a failed truncate
-      // never leaves the store inconsistent with what's persisted.
       try {
-        await ipc.truncateChatAfter(threadId, truncateFromId);
+        await ipc.truncateChatAfter(threadId, cutoffId);
       } catch (e) {
         set((s) => ({ errorByWs: { ...s.errorByWs, [workspaceId]: String(e) } }));
         return;
@@ -848,11 +847,29 @@ export const useChatStore = create<ChatState>((set, get) => {
         messagesByWs: {
           ...s.messagesByWs,
           [workspaceId]: (s.messagesByWs[workspaceId] ?? EMPTY_MESSAGES).filter(
-            (m) => m.id < truncateFromId,
+            (m) => m.id < cutoffId,
           ),
         },
       }));
-      await get().runTurn(workspaceId, workspacePath, threadId, {
+      await get().runTurn(workspaceId, workspacePath, threadId, opts);
+    },
+
+    regenerate: async (workspaceId, workspacePath, assistantMessageId, systemPrompt) => {
+      const threadId = get().activeThreadByWs[workspaceId];
+      if (!threadId) return;
+      const msgs = get().messagesByWs[workspaceId] ?? EMPTY_MESSAGES;
+      const aIdx = msgs.findIndex((m) => m.id === assistantMessageId);
+      if (aIdx < 0) return;
+      // Find the user message that prompted this assistant turn. Without one we
+      // can't regenerate (re-running with empty history 400s) and truncating would
+      // wipe the whole thread — so bail. Otherwise truncate from the START of the
+      // turn (the row after that user message) so its TOOL rows go too; cutting at
+      // the assistant text id alone would leave orphaned tool rows.
+      let pu = aIdx - 1;
+      while (pu >= 0 && msgs[pu].role !== "user") pu--;
+      if (pu < 0) return;
+      const truncateFromId = msgs[pu + 1]?.id ?? assistantMessageId;
+      await get().truncateAndRun(workspaceId, workspacePath, threadId, truncateFromId, {
         userMessage: "",
         systemPrompt,
         regenerate: true,
@@ -862,34 +879,16 @@ export const useChatStore = create<ChatState>((set, get) => {
     editAndResend: async (workspaceId, workspacePath, userMessageId, newContent, systemPrompt) => {
       const threadId = get().activeThreadByWs[workspaceId];
       if (!threadId || !newContent.trim()) return;
-      // Budget gate BEFORE truncating — otherwise the budget hard-stop inside the
-      // dispatch would fire AFTER the rows were already deleted, losing the
-      // conversation tail with no turn sent.
-      if (overBudgetBlocked(workspaceId)) {
-        set((s) => ({ errorByWs: { ...s.errorByWs, [workspaceId]: BUDGET_CAP_MSG } }));
-        return;
+      // Carry any staged attachments onto the resent turn (like send does), then
+      // clear them so they're not double-sent.
+      const attachments = get().attachmentsByWs[workspaceId] ?? EMPTY_ATTACHMENTS;
+      if (attachments.length > 0) {
+        set((s) => ({ attachmentsByWs: { ...s.attachmentsByWs, [workspaceId]: EMPTY_ATTACHMENTS } }));
       }
-      // Truncate from the edited message (it + everything after) FIRST; only drop
-      // the rows locally once the DB delete succeeds (no optimistic-removal drift
-      // if the IPC fails). Then dispatch the new text as a fresh user turn via
-      // runTurn (the budget was already gated above, so don't re-gate in send).
-      try {
-        await ipc.truncateChatAfter(threadId, userMessageId);
-      } catch (e) {
-        set((s) => ({ errorByWs: { ...s.errorByWs, [workspaceId]: String(e) } }));
-        return;
-      }
-      set((s) => ({
-        messagesByWs: {
-          ...s.messagesByWs,
-          [workspaceId]: (s.messagesByWs[workspaceId] ?? EMPTY_MESSAGES).filter(
-            (m) => m.id < userMessageId,
-          ),
-        },
-      }));
-      await get().runTurn(workspaceId, workspacePath, threadId, {
+      await get().truncateAndRun(workspaceId, workspacePath, threadId, userMessageId, {
         userMessage: newContent,
         systemPrompt,
+        attachments,
       });
     },
 
