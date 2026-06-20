@@ -493,6 +493,21 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
   );
 
+  // ── chat://shell-cwd ──────────────────────────────────────────
+  // The agent's run_command moved the shared shell's cwd — update the badge so
+  // it stays accurate (the `$`-direct path updates from its result instead).
+  listen<{ threadId: string; cwd: string; cwdLabel: string }>(
+    "chat://shell-cwd",
+    (ev) => {
+      const p = ev.payload;
+      if (!p.threadId) return;
+      set((s) => ({
+        shellCwdByThread: { ...s.shellCwdByThread, [p.threadId]: p.cwdLabel ?? "" },
+        shellCwdAbsByThread: { ...s.shellCwdAbsByThread, [p.threadId]: p.cwd ?? "" },
+      }));
+    },
+  );
+
   // ── chat://shell-exit ─────────────────────────────────────────
   // The live process exited — close the pinned terminal and update the cwd.
   listen<{
