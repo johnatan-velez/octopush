@@ -33,4 +33,13 @@ describe("MarkdownPreview", () => {
     // The literal characters survive as visible text.
     expect(screen.getByText(/nothonored<\/b>|<b>nothonored<\/b>/)).toBeInTheDocument();
   });
+
+  it("renders an UNLABELED fenced code block as a block, not an inline pill", () => {
+    const { container } = render(<MarkdownPreview source={"```\nline one\nline two\n```"} />);
+    const code = container.querySelector("pre code");
+    expect(code).not.toBeNull();
+    // Block branch styling (bordered, padded box) — not the inline pill.
+    expect(code!.className).toContain("border-octo-hairline");
+    expect(code!.className).not.toContain("px-1.5");
+  });
 });

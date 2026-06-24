@@ -55,8 +55,13 @@ export function markdownComponents(): Components {
     ),
     hr: () => <hr className="my-5 h-px border-0 bg-octo-hairline" />,
     code: ({ className, children, ...rest }) => {
-      const isInline = !className;
-      if (isInline) {
+      // react-markdown v10 no longer passes an `inline` prop. A fenced/indented
+      // block is wrapped in <pre> and carries a `language-*` class only when a
+      // language is named — so `!className` alone mis-styles an UNLABELED ```
+      // fence (common in docs) as an inline pill. Treat anything with a language
+      // class OR a newline (i.e. multi-line block content) as a block.
+      const isBlock = className != null || String(children ?? "").includes("\n");
+      if (!isBlock) {
         return (
           <code className="rounded-[3px] px-1.5 py-0.5 font-mono text-[12px] text-octo-brass"
                 style={{ background: "var(--brass-ghost)" }} {...rest}>

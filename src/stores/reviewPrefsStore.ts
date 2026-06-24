@@ -3,6 +3,13 @@ import { persist } from "zustand/middleware";
 
 export type ReadingMode = "inline" | "sbs";
 
+/** Clamp a split percent to the allowed [25,75] range and round to an integer,
+ *  so persisted ratios and inline column widths stay tidy (no
+ *  `width: 33.41666…%`). Shared by the write path and the rehydrate merge. */
+export function clampSplit(pct: number): number {
+  return Math.round(Math.max(25, Math.min(75, pct)));
+}
+
 interface ReviewPrefsState {
   readingMode: ReadingMode;
   ignoreWhitespace: boolean;
@@ -40,9 +47,25 @@ export const useReviewPrefs = create<ReviewPrefsState>()(
           return { showIgnoredFiles: next };
         }),
       toggleMdPreview: () => set((s) => ({ mdPreview: !s.mdPreview })),
-      setMdPreviewSplit: (pct) =>
-        set({ mdPreviewSplit: Math.max(25, Math.min(75, pct)) }),
+      setMdPreviewSplit: (pct) => set({ mdPreviewSplit: clampSplit(pct) }),
     }),
-    { name: "octo-review-prefs" },
+    {
+      name: "octo-review-prefs",
+      // Re-clamp the persisted split on load. The clamp on the write path can't
+      // guard a stale or hand-edited storage value (or one written by a future
+      // build with a different range); without this, a bad value would render
+      // an editor or preview column at an extreme (near-0% or >100%) width.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<ReviewPrefsState>;
+        return {
+          ...current,
+          ...p,
+          mdPreviewSplit:
+            typeof p.mdPreviewSplit === "number"
+              ? clampSplit(p.mdPreviewSplit)
+              : current.mdPreviewSplit,
+        };
+      },
+    },
   ),
 );

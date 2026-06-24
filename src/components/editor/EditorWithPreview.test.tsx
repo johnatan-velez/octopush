@@ -77,6 +77,38 @@ describe("EditorWithPreview", () => {
     expect(useReviewPrefs.getState().mdPreviewSplit).toBe(25);
   });
 
+  // Layout-regression guard: jsdom can't compute flexbox, so assert the class
+  // contract that keeps the editor from collapsing to zero height — the root
+  // must grow into the slot below the tabs (flex-1, not h-full) and the editor
+  // column must be a flex-col so EditorPane's own flex-1 can fill it.
+  it("uses fill-height layout classes (root flex-1, editor column flex-col)", () => {
+    seedFile({ path: "/r/README.md", lang: "markdown", kind: "text" });
+    const { container } = renderIt();
+    const root = container.querySelector('[data-testid="editor-with-preview"]') as HTMLElement;
+    expect(root.className).toContain("flex-1");
+    expect(root.className).not.toContain("h-full");
+    const editorColumn = root.firstElementChild as HTMLElement;
+    expect(editorColumn.className).toContain("flex");
+    expect(editorColumn.className).toContain("flex-col");
+  });
+
+  it("does not write the split to the store until the drag is released", () => {
+    seedFile({ path: "/r/README.md", lang: "markdown", kind: "text" });
+    renderIt();
+    const container = screen.getByTestId("editor-with-preview");
+    container.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 1000, bottom: 100, width: 1000, height: 100, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    const divider = screen.getByRole("separator");
+
+    fireEvent.mouseDown(divider);
+    fireEvent.mouseMove(document, { clientX: 300 });
+    // Mid-drag: the persisted store is untouched (no per-pixel localStorage writes).
+    expect(useReviewPrefs.getState().mdPreviewSplit).toBe(50);
+    fireEvent.mouseUp(document);
+    // Committed once, on release.
+    expect(useReviewPrefs.getState().mdPreviewSplit).toBe(30);
+  });
+
   it("double-click on the divider resets the split to 50", () => {
     seedFile({ path: "/r/README.md", lang: "markdown", kind: "text" });
     useReviewPrefs.setState({ mdPreviewSplit: 30 });
