@@ -21,9 +21,9 @@ use crate::error::{AppError, AppResult};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::time::Duration;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::time::{Duration, Instant};
 
 /// Loopback port the OAuth redirect lands on. Must match a Redirect URL
 /// registered on the Clerk OAuth application.
@@ -99,7 +99,8 @@ fn b64url(bytes: &[u8]) -> String {
 }
 
 /// A high-entropy code verifier: 32 random bytes → 43-char base64url string
-/// (within the RFC 7636 43–128 range, all unreserved chars).
+/// (within the RFC 7636 43–128 range, all unreserved chars). Two v4 UUIDs supply
+/// ~244 bits of CSPRNG entropy — well above what PKCE needs.
 fn gen_verifier() -> String {
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
@@ -113,6 +114,7 @@ fn challenge_s256(verifier: &str) -> String {
     b64url(&Sha256::digest(verifier.as_bytes()))
 }
 
+/// 122-bit CSPRNG state (CSRF token) tying the redirect back to this request.
 fn random_state() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
@@ -156,53 +158,112 @@ fn parse_callback_query(target: &str) -> (Option<String>, Option<String>, Option
     (code, state, error)
 }
 
-/// Block on the loopback listener until the OAuth redirect arrives, validate the
-/// `state`, send the browser a friendly "you can close this tab" page, and
-/// return the authorization `code`. Ignores stray requests (e.g. favicon).
-fn wait_for_callback(listener: TcpListener, expected_state: &str) -> Result<String, String> {
+/// The security-critical gate over the callback params: an OAuth `error` aborts,
+/// a `state` that doesn't match what we issued is rejected (CSRF), and the
+/// `code` must be present. Pure so the gate is unit-tested without a socket.
+fn decide_callback(
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    expected_state: &str,
+) -> Result<String, String> {
+    if let Some(err) = error {
+        return Err(format!("Clerk reported: {err}"));
+    }
+    // Constant-ish comparison is unnecessary here (the attacker can't probe
+    // adaptively — one redirect, one chance), but the match must be exact.
+    if state.as_deref() != Some(expected_state) {
+        return Err("State mismatch — please try again.".into());
+    }
+    match code {
+        Some(c) if !c.is_empty() => Ok(c),
+        _ => Err("No authorization code returned.".into()),
+    }
+}
+
+/// Handle a single inbound connection. `None` = a stray request (e.g. favicon) —
+/// the caller keeps waiting; `Some(Ok(code))` = a valid callback; `Some(Err)` =
+/// an OAuth error or state mismatch.
+fn handle_callback_conn(mut stream: TcpStream, expected_state: &str) -> Option<Result<String, String>> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    // Read until the end of the request line (we only need the GET target), with
+    // a cap, since a single read() is not guaranteed to return the whole line.
+    let mut data = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
     loop {
-        let (mut stream, _) = listener.accept().map_err(|e| e.to_string())?;
-        let mut buf = [0u8; 4096];
-        let n = stream.read(&mut buf).unwrap_or(0);
-        let req = String::from_utf8_lossy(&buf[..n]);
-        // First line: `GET /callback?code=... HTTP/1.1`
-        let target = req
-            .lines()
-            .next()
-            .and_then(|l| l.split_whitespace().nth(1))
-            .unwrap_or("");
-        if !target.starts_with("/callback") {
-            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
-            continue;
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                data.extend_from_slice(&chunk[..n]);
+                // The request line we need ends at the first newline.
+                if data.contains(&b'\n') || data.len() > 8192 {
+                    break;
+                }
+            }
+            Err(_) => break,
         }
-        let (code, state, error) = parse_callback_query(target);
-        let (status, title, body) = if let Some(err) = error {
-            ("400 Bad Request", "Sign-in cancelled", format!("Clerk reported: {err}"))
-        } else if state.as_deref() != Some(expected_state) {
-            ("400 Bad Request", "Sign-in failed", "State mismatch — please try again.".into())
-        } else if code.is_some() {
-            ("200 OK", "Signed in", "You can close this tab and return to Octopush.".into())
-        } else {
-            ("400 Bad Request", "Sign-in failed", "No authorization code returned.".into())
-        };
-        let html = format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title>\
-             <style>body{{font-family:-apple-system,system-ui,sans-serif;background:#0c0a08;color:#f4ecdb;\
-             display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}\
-             .c{{text-align:center}}h1{{color:#d4a574;font-weight:500}}</style></head>\
-             <body><div class=\"c\"><h1>{title}</h1><p>{body}</p></div></body></html>"
-        );
-        let _ = stream.write_all(
-            format!(
-                "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
-                html.len()
-            )
-            .as_bytes(),
-        );
-        if status.starts_with("200") {
-            return Ok(code.unwrap());
+    }
+    let req = String::from_utf8_lossy(&data);
+    let target = req
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .unwrap_or("");
+    if !target.starts_with("/callback") {
+        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return None;
+    }
+    let (code, state, error) = parse_callback_query(target);
+    let decision = decide_callback(code, state, error, expected_state);
+    let (status, title, body) = match &decision {
+        Ok(_) => ("200 OK", "Signed in", "You can close this tab and return to Octopush.".to_string()),
+        Err(msg) => ("400 Bad Request", "Sign-in failed", msg.clone()),
+    };
+    let html = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title>\
+         <style>body{{font-family:-apple-system,system-ui,sans-serif;background:#0c0a08;color:#f4ecdb;\
+         display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}\
+         .c{{text-align:center}}h1{{color:#d4a574;font-weight:500}}</style></head>\
+         <body><div class=\"c\"><h1>{title}</h1><p>{body}</p></div></body></html>"
+    );
+    let _ = stream.write_all(
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
+            html.len()
+        )
+        .as_bytes(),
+    );
+    Some(decision)
+}
+
+/// Poll the loopback listener (non-blocking, so the thread is never parked
+/// forever) until the OAuth redirect arrives or `deadline` passes. Returning —
+/// on success, error, or timeout — drops the `listener`, releasing the port so a
+/// retry can bind again.
+fn wait_for_callback(
+    listener: TcpListener,
+    expected_state: &str,
+    deadline: Instant,
+) -> Result<String, String> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("could not arm the sign-in listener: {e}"))?;
+    loop {
+        if Instant::now() >= deadline {
+            return Err("sign-in timed out — the browser never returned.".into());
         }
-        return Err(body);
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if let Some(result) = handle_callback_conn(stream, expected_state) {
+                    return result;
+                }
+                // stray request — keep waiting
+            }
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("sign-in listener error: {e}")),
+        }
     }
 }
 
@@ -238,12 +299,28 @@ struct UserInfo {
     name: Option<String>,
 }
 
+/// Reduce a non-2xx token response to just the standard OAuth `error` /
+/// `error_description` fields — never echo an arbitrary upstream body.
+fn oauth_error_message(status: reqwest::StatusCode, body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            let e = v.get("error").and_then(|x| x.as_str())?.to_string();
+            let d = v.get("error_description").and_then(|x| x.as_str());
+            Some(match d {
+                Some(d) => format!("{e}: {d}"),
+                None => e,
+            })
+        })
+        .unwrap_or_else(|| format!("HTTP {}", status.as_u16()))
+}
+
 async fn exchange_code(
+    client: &reqwest::Client,
     cfg: &ClerkConfig,
     code: &str,
     verifier: &str,
 ) -> AppResult<TokenResponse> {
-    let client = reqwest::Client::new();
     let resp = client
         .post(cfg.token_url())
         .form(&[
@@ -259,15 +336,21 @@ async fn exchange_code(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(AppError::Other(format!("token exchange failed ({status}): {body}")));
+        return Err(AppError::Other(format!(
+            "token exchange failed — {}",
+            oauth_error_message(status, &body)
+        )));
     }
     resp.json::<TokenResponse>()
         .await
         .map_err(|e| AppError::Other(format!("could not parse token response: {e}")))
 }
 
-async fn fetch_userinfo(cfg: &ClerkConfig, access_token: &str) -> AppResult<UserInfo> {
-    let client = reqwest::Client::new();
+async fn fetch_userinfo(
+    client: &reqwest::Client,
+    cfg: &ClerkConfig,
+    access_token: &str,
+) -> AppResult<UserInfo> {
     let resp = client
         .get(cfg.userinfo_url())
         .bearer_auth(access_token)
@@ -330,20 +413,23 @@ pub async fn begin_sign_in() -> AppResult<AuthStatus> {
         ))
     })?;
 
+    // One shared client (avoids a per-request connection pool and the panic path
+    // of `Client::new()` on a TLS-init failure).
+    let http = reqwest::Client::builder()
+        .build()
+        .map_err(|e| AppError::Other(format!("http client init failed: {e}")))?;
+
     open_in_browser(&build_authorize_url(&cfg, &challenge, &state))?;
 
+    let deadline = Instant::now() + Duration::from_secs(SIGN_IN_TIMEOUT_SECS);
     let expected = state.clone();
-    let code = tokio::time::timeout(
-        Duration::from_secs(SIGN_IN_TIMEOUT_SECS),
-        tokio::task::spawn_blocking(move || wait_for_callback(listener, &expected)),
-    )
-    .await
-    .map_err(|_| AppError::Other("sign-in timed out — the browser never returned.".into()))?
-    .map_err(|e| AppError::Other(format!("sign-in listener crashed: {e}")))?
-    .map_err(AppError::Other)?;
+    let code = tokio::task::spawn_blocking(move || wait_for_callback(listener, &expected, deadline))
+        .await
+        .map_err(|e| AppError::Other(format!("sign-in listener crashed: {e}")))?
+        .map_err(AppError::Other)?;
 
-    let tokens = exchange_code(&cfg, &code, &verifier).await?;
-    let user = fetch_userinfo(&cfg, &tokens.access_token).await?;
+    let tokens = exchange_code(&http, &cfg, &code, &verifier).await?;
+    let user = fetch_userinfo(&http, &cfg, &tokens.access_token).await?;
 
     store_session(&StoredSession {
         sub: user.sub,
@@ -419,5 +505,23 @@ mod tests {
 
         let (_, _, error) = parse_callback_query("/callback?error=access_denied");
         assert_eq!(error.as_deref(), Some("access_denied"));
+    }
+
+    #[test]
+    fn decide_callback_enforces_state_and_code() {
+        // Happy path.
+        assert_eq!(
+            decide_callback(Some("c".into()), Some("S".into()), None, "S"),
+            Ok("c".into())
+        );
+        // CSRF: state mismatch is rejected.
+        assert!(decide_callback(Some("c".into()), Some("WRONG".into()), None, "S").is_err());
+        // Missing state is rejected.
+        assert!(decide_callback(Some("c".into()), None, None, "S").is_err());
+        // Missing/empty code is rejected even with a good state.
+        assert!(decide_callback(None, Some("S".into()), None, "S").is_err());
+        assert!(decide_callback(Some(String::new()), Some("S".into()), None, "S").is_err());
+        // An OAuth error aborts.
+        assert!(decide_callback(Some("c".into()), Some("S".into()), Some("access_denied".into()), "S").is_err());
     }
 }

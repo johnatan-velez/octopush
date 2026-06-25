@@ -3,6 +3,7 @@
 // stores the session in the OS keychain); this pane only reflects + triggers it.
 import { useAuth } from "../../hooks/useAuth";
 import { ipc } from "../../lib/ipc";
+import { pushToast } from "../Toasts";
 import { PaneHeader, SectionLabel } from "./shared";
 
 export function AccountPane() {
@@ -12,8 +13,9 @@ export function AccountPane() {
     try {
       const url = await ipc.authAccountPortalUrl();
       await ipc.openFileInSystem(url);
-    } catch {
-      /* opening the portal is non-critical */
+    } catch (e) {
+      console.error("Failed to open the account portal:", e);
+      pushToast({ level: "error", title: "Couldn't open the account portal" });
     }
   };
 

@@ -59,6 +59,16 @@ describe("authStore", () => {
     expect(s.error).toBeNull();
   });
 
+  it("signIn() sets signingIn=true while the flow is in flight", async () => {
+    let resolve!: (s: AuthStatus) => void;
+    authBeginSignInMock.mockReturnValue(new Promise<AuthStatus>((r) => { resolve = r; }));
+    const p = useAuthStore.getState().signIn();
+    expect(useAuthStore.getState().signingIn).toBe(true);
+    resolve({ signedIn: true, email: "a@b.co", name: null });
+    await p;
+    expect(useAuthStore.getState().signingIn).toBe(false);
+  });
+
   it("signIn() surfaces an error and clears signingIn", async () => {
     authBeginSignInMock.mockRejectedValue(new Error("sign-in timed out"));
     await useAuthStore.getState().signIn();
