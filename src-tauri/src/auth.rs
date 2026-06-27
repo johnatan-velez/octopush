@@ -52,9 +52,8 @@ const KEYRING_SERVICE: &str = "octopush";
 const KEYRING_ACCOUNT: &str = "clerk-oauth-session";
 
 /// Resolved Clerk OAuth configuration. The `client_id` and instance are PUBLIC
-/// values (safe to ship); the secret is never used (public-client PKCE). For now
-/// these are built-in defaults for the project's Clerk instance; a later phase
-/// makes them configurable for a production instance.
+/// values (safe to ship); the secret is never used (public-client PKCE). These
+/// point at the **production** Clerk instance (custom domain `clerk.octopush.sh`).
 #[derive(Debug, Clone)]
 pub struct ClerkConfig {
     pub instance: String,
@@ -66,8 +65,8 @@ pub struct ClerkConfig {
 impl ClerkConfig {
     pub fn current() -> Self {
         ClerkConfig {
-            instance: "smooth-ringtail-82.clerk.accounts.dev".into(),
-            client_id: "M3OMbpMlh1vzUnO4".into(),
+            instance: "clerk.octopush.sh".into(),
+            client_id: "9tgSaeph9LvuLGnG".into(),
             redirect_uri: format!("http://127.0.0.1:{LOOPBACK_PORT}/callback"),
             // `offline_access` → refresh token; `public_metadata` → the user's
             // plan claim (set by the billing webhook) rides on the OAuth session.
@@ -86,7 +85,9 @@ impl ClerkConfig {
     /// Clerk's hosted account portal — opened in the browser for sign-up and
     /// profile/MFA management (a clean native pattern; we don't rebuild it).
     pub fn account_portal_url(&self) -> String {
-        format!("https://{}/user", self.instance)
+        // The Account Portal lives on the `accounts.` subdomain (the Frontend API
+        // is `clerk.`); for the prod instance that's `accounts.octopush.sh`.
+        format!("https://{}/user", self.instance.replacen("clerk.", "accounts.", 1))
     }
 }
 
@@ -903,6 +904,18 @@ mod tests {
     #[test]
     fn html_escape_covers_the_dangerous_chars() {
         assert_eq!(html_escape("<a href=\"x\">& '"), "&lt;a href=&quot;x&quot;&gt;&amp; &#39;");
+    }
+
+    #[test]
+    fn prod_clerk_config_and_account_portal_subdomain() {
+        let cfg = ClerkConfig::current();
+        assert_eq!(cfg.instance, "clerk.octopush.sh");
+        assert_eq!(cfg.client_id, "9tgSaeph9LvuLGnG");
+        // OAuth endpoints stay on the Frontend API (`clerk.`) domain…
+        assert_eq!(cfg.authorize_url(), "https://clerk.octopush.sh/oauth/authorize");
+        assert_eq!(cfg.userinfo_url(), "https://clerk.octopush.sh/oauth/userinfo");
+        // …but the Account Portal lives on the `accounts.` subdomain.
+        assert_eq!(cfg.account_portal_url(), "https://accounts.octopush.sh/user");
     }
 
     #[test]
