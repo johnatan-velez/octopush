@@ -10,10 +10,10 @@
 
 use crate::error::{AppError, AppResult};
 
-/// Dodo product + checkout config. Built-in for now (the Test-Mode product).
-/// Flip `CHECKOUT_BASE` to `https://checkout.dodopayments.com` for live.
-const DODO_PRODUCT_ID: &str = "pdt_0Nhqpssz0QnxuP6LwaScq";
-const CHECKOUT_BASE: &str = "https://test.checkout.dodopayments.com";
+/// Dodo product + checkout config — **LIVE**: the $20/mo Octopush Pro subscription.
+/// (Test-Mode was `pdt_0Nhqpssz0QnxuP6LwaScq` on `test.checkout.dodopayments.com`.)
+const DODO_PRODUCT_ID: &str = "pdt_0NhqqP493ViKlSfrw8syk";
+const CHECKOUT_BASE: &str = "https://checkout.dodopayments.com";
 /// Where Dodo returns the buyer after checkout (a Vercel page for now; a desktop
 /// deep-link can replace this once a custom scheme is registered).
 const RETURN_URL: &str = "https://octopush.sh/?upgraded=1";
