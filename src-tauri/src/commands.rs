@@ -1212,10 +1212,13 @@ pub async fn start_run(
             "another run in this workspace is already executing".into(),
         ));
     }
-    // Entitlement gate (live). Pro is uncapped; Free / signed-out is capped at
-    // FREE_DIRECT_RUNS_PER_MONTH — over the cap this returns UpgradeRequired.
+    // Entitlement gates (live). Pro is uncapped and may run many workspaces
+    // concurrently; Free / signed-out is capped at FREE_DIRECT_RUNS_PER_MONTH and
+    // may run only one at a time. (Same-workspace concurrency is blocked for
+    // everyone above — git-worktree safety.) Both surface as UpgradeRequired.
     {
         let ent = crate::entitlement::Entitlement::current();
+        // Monthly Direct-run cap.
         let used = state.db.lock().count_started_runs_this_month()?;
         if let Err(denied) = ent.check_direct_run_quota(used) {
             return Err(AppError::UpgradeRequired {
@@ -1223,6 +1226,17 @@ pub async fn start_run(
                 used: denied.used,
                 limit: denied.limit,
             });
+        }
+        // Concurrency: Free runs one at a time; Pro (RUNS_PARALLEL) runs many.
+        if !ent.has_feature(crate::entitlement::feature::RUNS_PARALLEL) {
+            let active = state.db.lock().count_active_runs_excluding(&run_id)?;
+            if active >= 1 {
+                return Err(AppError::UpgradeRequired {
+                    feature: crate::entitlement::feature::RUNS_PARALLEL.to_string(),
+                    used: active,
+                    limit: 1,
+                });
+            }
         }
     }
     // Persist the optional spend cap before the drive starts. Only a finite
