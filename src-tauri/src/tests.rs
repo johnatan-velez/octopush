@@ -190,6 +190,37 @@ mod workspace_tests {
     }
 
     #[test]
+    fn count_active_runs_counts_running_and_paused_excluding_self() {
+        // Drives the concurrency gate: Free may have only ONE run executing at a
+        // time across all workspaces; Pro may run many.
+        let db = test_db();
+        setup_workspace(&db, "p1", "ws1");
+        setup_workspace(&db, "p2", "ws2");
+        db.seed_builtin_pipelines().unwrap();
+        let pipeline_id = db.list_pipelines().unwrap()[0].id.clone();
+
+        let a = db.create_run("ws1", &pipeline_id, "task", None, None, &[]).unwrap();
+        let b = db.create_run("ws2", &pipeline_id, "task", None, None, &[]).unwrap();
+
+        // Both draft → nothing active.
+        assert_eq!(db.count_active_runs_excluding(&b).unwrap(), 0);
+
+        // `a` running (a different workspace) → counts against starting `b`...
+        db.set_run_status(&a, "running", false).unwrap();
+        assert_eq!(db.count_active_runs_excluding(&b).unwrap(), 1);
+        // ...but a run is never counted against itself.
+        assert_eq!(db.count_active_runs_excluding(&a).unwrap(), 0);
+
+        // `paused` (suspended mid-run at a checkpoint) also holds the slot.
+        db.set_run_status(&a, "paused", false).unwrap();
+        assert_eq!(db.count_active_runs_excluding(&b).unwrap(), 1);
+
+        // A terminal state frees the slot.
+        db.set_run_status(&a, "completed", true).unwrap();
+        assert_eq!(db.count_active_runs_excluding(&b).unwrap(), 0);
+    }
+
+    #[test]
     fn update_workspace_customization_persists_glyph_and_tint() {
         let db = test_db();
         setup_workspace(&db, "proj-1", "ws-1");

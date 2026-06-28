@@ -2158,6 +2158,19 @@ impl Db {
         Ok(n.max(0) as u32)
     }
 
+    /// Count runs currently `running` or `paused` across **all** workspaces,
+    /// excluding `run_id` (a run is never counted against itself). Drives the
+    /// concurrency gate: Free may run only one at a time, Pro may run many.
+    pub fn count_active_runs_excluding(&self, run_id: &str) -> AppResult<u32> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM runs
+             WHERE status IN ('running', 'paused') AND id != ?1",
+            [run_id],
+            |r| r.get(0),
+        )?;
+        Ok(n.max(0) as u32)
+    }
+
     pub fn list_run_stages(&self, run_id: &str) -> AppResult<Vec<RunStageRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, run_id, position, role, agent_model, substrate, checkpoint, status,

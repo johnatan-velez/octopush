@@ -23,19 +23,34 @@ export function UpgradeSheet() {
     }
   };
 
+  const isParallel = info.feature === "runs.parallel";
+
   return (
     <ModalShell onClose={hide} ariaLabel="Upgrade to Pro" panelClassName="w-full max-w-[440px]">
       <div className="rounded-xl border border-octo-hairline bg-octo-panel p-6 shadow-2xl">
         <span className="font-mono text-[11px] uppercase tracking-wide text-octo-brass">
-          Direct · monthly limit
+          {isParallel ? "Direct · concurrency" : "Direct · monthly limit"}
         </span>
         <h2 className="mt-2 font-serif text-[18px] leading-tight text-octo-ivory">
-          You've hit your monthly Direct-run limit.
+          {isParallel
+            ? "Run your crew in parallel with Pro."
+            : "You've hit your monthly Direct-run limit."}
         </h2>
         <p className="mt-3 text-[13px] leading-relaxed text-octo-sage">
-          The Free plan includes {info.limit} Direct pipeline runs per month — you've used{" "}
-          {info.used}. Upgrade to Pro for <span className="text-octo-ivory">unlimited Direct runs</span>,
-          parallel and background runs, and full run history.
+          {isParallel ? (
+            <>
+              Free runs one Direct pipeline at a time. Upgrade to Pro to run{" "}
+              <span className="text-octo-ivory">multiple workspaces concurrently</span> — and keep them
+              going in the background.
+            </>
+          ) : (
+            <>
+              The Free plan includes {info.limit} Direct pipeline runs per month — you've used{" "}
+              {info.used}. Upgrade to Pro for{" "}
+              <span className="text-octo-ivory">unlimited Direct runs</span>, parallel and background
+              runs, and full run history.
+            </>
+          )}
         </p>
         <div className="mt-6 flex items-center justify-end gap-3">
           <button
