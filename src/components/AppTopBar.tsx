@@ -1,4 +1,5 @@
 import { Settings, NotebookPen } from "lucide-react";
+import { RunsTray } from "./RunsTray";
 
 /** A thin chrome bar at the very top of the app. Mirrors the bottom
  *  `PerfMonitorBar` in structure (full width, hairline border, panel bg)
@@ -16,14 +17,17 @@ import { Settings, NotebookPen } from "lucide-react";
 interface Props {
   onOpenSettings: () => void;
   onToggleScratchpad: () => void;
+  /** Switch to a run's workspace + its Direct surface (from the runs tray). */
+  onJumpToRun: (workspaceId: string) => void;
 }
 
-export function AppTopBar({ onOpenSettings, onToggleScratchpad }: Props) {
+export function AppTopBar({ onOpenSettings, onToggleScratchpad, onJumpToRun }: Props) {
   return (
     <div
       data-tauri-drag-region
       className="flex h-[28px] w-full flex-shrink-0 items-center border-b border-octo-hairline bg-octo-panel pl-[78px] pr-3"
     >
+      <RunsTray onJumpToRun={onJumpToRun} />
       <div className="ml-auto flex items-center gap-1">
         <button
           type="button"

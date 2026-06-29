@@ -61,6 +61,9 @@ interface RunsState {
   hydrateLog: (stageId: string, entries: LiveEntry[]) => void;
 
   loadRuns: (workspaceId: string) => Promise<void>;
+  /** Hydrate the `running`/`paused` runs across ALL workspaces (incl. ones not
+   *  opened this session) — drives the global "Runs in progress" tray. */
+  loadActiveRuns: () => Promise<void>;
   refreshDetail: (runId: string) => Promise<void>;
   begin: (
     workspaceId: string,
@@ -162,6 +165,25 @@ export const useRunsStore = create<RunsState>((set, get) => ({
       activeRunIdByWs: { ...s.activeRunIdByWs, [workspaceId]: active?.id ?? null },
     }));
     if (active) await get().refreshDetail(active.id);
+  },
+
+  loadActiveRuns: async () => {
+    let active: Run[];
+    try {
+      active = await ipc.listActiveRuns();
+    } catch (e) {
+      console.error("Failed to load active runs:", e);
+      return;
+    }
+    set((s) => {
+      const runsByWs = { ...s.runsByWs };
+      const activeRunIdByWs = { ...s.activeRunIdByWs };
+      for (const run of active) {
+        runsByWs[run.workspaceId] = replaceRunInList(runsByWs[run.workspaceId] ?? [], run);
+        activeRunIdByWs[run.workspaceId] = run.id;
+      }
+      return { runsByWs, activeRunIdByWs };
+    });
   },
 
   refreshDetail: async (runId) => {
