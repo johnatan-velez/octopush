@@ -2144,6 +2144,19 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// All runs currently `running` or `paused`, across **all** workspaces
+    /// (newest first). Drives the global "Runs in progress" tray — including
+    /// background runs in workspaces the user hasn't opened this session.
+    pub fn list_active_runs(&self) -> AppResult<Vec<RunRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, pipeline_id, task, status, cost_usd, baseline_usd,
+                    reference_model, linked_issue_key, created_at, finished_at, budget_usd
+             FROM runs WHERE status IN ('running', 'paused') ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], row_to_run)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Count Direct runs that were *started* (i.e. left `draft`) since the start
     /// of the current month — the unit the free-tier Direct-runs meter shows and
     /// the quota gate counts. Mirrors the month-window convention in

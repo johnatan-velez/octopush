@@ -118,6 +118,12 @@ function App() {
   const directRunningIds = useRunsStore(
     useShallow((s) => Object.keys(s.runsByWs).filter((id) => hasActiveDirectRun(s.runsByWs[id]))),
   );
+  const loadActiveRuns = useRunsStore((s) => s.loadActiveRuns);
+  // Hydrate the global runs tray on launch — surfaces background (running/paused)
+  // runs in workspaces not opened this session. Live events keep it fresh after.
+  useEffect(() => {
+    void loadActiveRuns();
+  }, [loadActiveRuns]);
   const terminalBusyIds = useTerminalsStore(
     useShallow((s) =>
       Object.keys(s.terminalsByWs).filter((id) => (s.terminalsByWs[id] ?? []).some((t) => t.busy)),
@@ -1252,6 +1258,16 @@ function App() {
     [workspacesByProjectId, project, selectWorkspace, recentProjects, rememberActiveForProject, openProject],
   );
 
+  // Jump from the global runs tray to a run's workspace + its Direct surface.
+  // (Mode is App-local state, so the tray can't navigate on its own.)
+  const handleJumpToRun = useCallback(
+    (workspaceId: string) => {
+      handleSelectWorkspace(workspaceId);
+      setModePerWorkspace((p) => ({ ...p, [workspaceId]: "direct" }));
+    },
+    [handleSelectWorkspace],
+  );
+
   // ── Project context menu handler ──
   const handleProjectContextMenu = (projectId: string, x: number, y: number) => {
     setProjectContextMenu({ projectId, x, y });
@@ -1494,6 +1510,7 @@ function App() {
       <AppTopBar
         onOpenSettings={() => setSettingsTab("general")}
         onToggleScratchpad={toggleScratchpad}
+        onJumpToRun={handleJumpToRun}
       />
       <div className="flex min-h-0 flex-1">
       <WorkspaceRail

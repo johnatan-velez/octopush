@@ -208,6 +208,7 @@ pub fn run() {
             commands::start_run,
             commands::get_run,
             commands::list_runs,
+            commands::list_active_runs,
             commands::resolve_checkpoint,
             commands::abort_run,
             commands::stop_stage,

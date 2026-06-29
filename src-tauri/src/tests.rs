@@ -221,6 +221,34 @@ mod workspace_tests {
     }
 
     #[test]
+    fn list_active_runs_returns_running_and_paused_across_workspaces() {
+        // Feeds the global "Runs in progress" tray — running/paused runs from
+        // every workspace, terminal/draft excluded.
+        let db = test_db();
+        setup_workspace(&db, "p1", "ws1");
+        setup_workspace(&db, "p2", "ws2");
+        db.seed_builtin_pipelines().unwrap();
+        let pipeline_id = db.list_pipelines().unwrap()[0].id.clone();
+
+        let a = db.create_run("ws1", &pipeline_id, "task a", None, None, &[]).unwrap();
+        let b = db.create_run("ws2", &pipeline_id, "task b", None, None, &[]).unwrap();
+        let c = db.create_run("ws1", &pipeline_id, "task c", None, None, &[]).unwrap();
+
+        // Drafts aren't active.
+        assert!(db.list_active_runs().unwrap().is_empty());
+
+        db.set_run_status(&a, "running", false).unwrap();
+        db.set_run_status(&b, "paused", false).unwrap();
+        db.set_run_status(&c, "completed", true).unwrap();
+
+        let active = db.list_active_runs().unwrap();
+        let ids: Vec<&str> = active.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(active.len(), 2, "running + paused only");
+        assert!(ids.contains(&a.as_str()) && ids.contains(&b.as_str()));
+        assert!(!ids.contains(&c.as_str()), "completed is excluded");
+    }
+
+    #[test]
     fn update_workspace_customization_persists_glyph_and_tint() {
         let db = test_db();
         setup_workspace(&db, "proj-1", "ws-1");

@@ -826,6 +826,8 @@ export const ipc = {
   listRuns: (workspaceId: string) =>
     invoke<Run[]>("list_runs", { workspaceId }),
 
+  listActiveRuns: () => invoke<Run[]>("list_active_runs"),
+
   resolveCheckpoint: (
     runId: string,
     action: CheckpointActionName,

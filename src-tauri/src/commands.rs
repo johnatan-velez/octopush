@@ -1269,6 +1269,15 @@ pub async fn list_runs(
     state.db.lock().list_runs(&workspace_id)
 }
 
+/// All active (`running`/`paused`) runs across every workspace — drives the
+/// global "Runs in progress" tray (incl. background runs in unopened workspaces).
+#[tauri::command]
+pub async fn list_active_runs(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::db::RunRow>> {
+    state.db.lock().list_active_runs()
+}
+
 /// The current entitlement (derived from the signed-in user's Clerk plan). The
 /// frontend mirrors this for UX; the meaningful gates live in the Rust core.
 #[tauri::command]
