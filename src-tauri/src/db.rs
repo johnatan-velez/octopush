@@ -1301,8 +1301,13 @@ impl Db {
         Ok(())
     }
 
-    /// Does Octopush own (manage) this workspace's worktree? Missing rows and the
-    /// legacy default are `true` (every pre-existing worktree was Octopush-made).
+    /// Does Octopush own (manage) this workspace's worktree? An existing row's
+    /// legacy default is `true` (every pre-existing worktree was Octopush-made),
+    /// but a MISSING ROW is `false`: these flags gate destruction, and "no such
+    /// row" is uncertainty — we never `rm -rf` on uncertainty (e.g. a double-fire
+    /// delete that finds the row already gone must not rm the path a second time).
+    /// The `managed` column is `NOT NULL DEFAULT 1`, so an existing row always
+    /// yields a value; `None` here means the row is absent, not legacy.
     pub fn is_workspace_managed(&self, id: &str) -> AppResult<bool> {
         let managed: Option<i64> = self
             .conn
@@ -1312,12 +1317,15 @@ impl Db {
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(managed.map(|m| m != 0).unwrap_or(true))
+        Ok(managed.map(|m| m != 0).unwrap_or(false))
     }
 
     /// Did Octopush create this workspace's git branch (vs reuse/adopt an existing
-    /// one)? Only then may delete remove the branch. Missing rows and the legacy
-    /// default are `true` (historically delete always removed the branch).
+    /// one)? Only then may delete remove the branch. An existing row's legacy
+    /// default is `true` (historically delete always removed the branch), but a
+    /// MISSING ROW is `false` — same reasoning as `is_workspace_managed`: a
+    /// double-fire delete on an already-removed row must never `git branch -D` a
+    /// branch we may not have created.
     pub fn is_branch_created_by_octopush(&self, id: &str) -> AppResult<bool> {
         let created: Option<i64> = self
             .conn
@@ -1327,7 +1335,7 @@ impl Db {
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(created.map(|c| c != 0).unwrap_or(true))
+        Ok(created.map(|c| c != 0).unwrap_or(false))
     }
 
     pub fn delete_workspace(&self, id: &str) -> AppResult<()> {

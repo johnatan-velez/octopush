@@ -548,6 +548,20 @@ pub fn create_worktree(repo_path: &Path, branch: &str, worktree_path: &Path) -> 
     let slot = repo.path().join("worktrees").join(&slot_name);
     if slot.exists() {
         if let Ok(wt) = repo.find_worktree(&slot_name) {
+            // Mirror the path guard above: never prune a slot that still backs a
+            // LIVE worktree at a *different* path. Our path (and thus slot name) is
+            // unique to this workspace, so this can only happen under an
+            // astronomically unlikely id8 collision — but if it ever does, that's
+            // another workspace's tree; refuse rather than delete its work.
+            if wt.validate().is_ok()
+                && wt.path().exists()
+                && canonical(wt.path()) != canonical(worktree_path)
+            {
+                return Err(AppError::Other(format!(
+                    "worktree slot '{slot_name}' already backs a live worktree at {} — refusing to overwrite it",
+                    wt.path().display()
+                )));
+            }
             let mut prune_opts = git2::WorktreePruneOptions::new();
             prune_opts.valid(true);
             prune_opts.locked(true);
