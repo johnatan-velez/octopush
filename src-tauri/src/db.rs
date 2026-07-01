@@ -325,6 +325,22 @@ impl Db {
             // read or written, but we keep it in place rather than dropping it.
             "ALTER TABLE workspaces ADD COLUMN issue_link_dismissed INTEGER NOT NULL DEFAULT 0",
         )?;
+        // `managed` = Octopush created this worktree (default true, matching every
+        // existing row). Adopted checkouts (a branch already checked out that we
+        // register a workspace over) set it false so delete/archive never
+        // `rm -rf` a directory Octopush didn't create.
+        add_column_if_missing(
+            &self.conn,
+            "ALTER TABLE workspaces ADD COLUMN managed INTEGER NOT NULL DEFAULT 1",
+        )?;
+        // `created_branch` = Octopush created this workspace's git branch (vs
+        // reusing/adopting one that already existed). Default true preserves the
+        // historical behaviour (delete removes the branch); reused/adopted rows
+        // set it false so delete never deletes a branch Octopush didn't create.
+        add_column_if_missing(
+            &self.conn,
+            "ALTER TABLE workspaces ADD COLUMN created_branch INTEGER NOT NULL DEFAULT 1",
+        )?;
 
         // Phase 9 — drop the FK from token_events.session_id. The original
         // schema only ever expected CLI session ids, so chat-driven token
@@ -1122,11 +1138,36 @@ impl Db {
         setup_script: &str,
         from_branch: Option<&str>,
     ) -> AppResult<()> {
+        // Octopush-created worktrees are managed and own their branch by default.
+        self.insert_workspace_managed(
+            id, project_id, name, task, branch, worktree_path, setup_script, from_branch, true, true,
+        )
+    }
+
+    /// Insert a workspace row with explicit `managed` / `created_branch` flags,
+    /// atomically. The adopt path uses `managed=false`, and a reused branch uses
+    /// `created_branch=false`, so the row is *born* with the right ownership —
+    /// there's no insert-then-flip window in which a crash could strand a row that
+    /// delete/archive would then wrongly `rm -rf` or `git branch -D`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_workspace_managed(
+        &self,
+        id: &str,
+        project_id: &str,
+        name: &str,
+        task: &str,
+        branch: &str,
+        worktree_path: Option<&str>,
+        setup_script: &str,
+        from_branch: Option<&str>,
+        managed: bool,
+        created_branch: bool,
+    ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO workspaces (id, project_id, name, task, branch, worktree_path, setup_script, created_at, last_active, from_branch)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-            params![id, project_id, name, task, branch, worktree_path, setup_script, now, now, from_branch],
+            "INSERT INTO workspaces (id, project_id, name, task, branch, worktree_path, setup_script, created_at, last_active, from_branch, managed, created_branch)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![id, project_id, name, task, branch, worktree_path, setup_script, now, now, from_branch, managed as i64, created_branch as i64],
         )?;
         Ok(())
     }
@@ -1247,6 +1288,54 @@ impl Db {
             params![worktree_path, id],
         )?;
         Ok(())
+    }
+
+    /// Set whether Octopush owns (manages) this workspace's worktree. Used by the
+    /// heal paths: adopting a branch's checkout at a different location marks it
+    /// not-ours (never rm on delete); rebuilding a gone worktree marks it ours.
+    pub fn set_workspace_managed(&self, id: &str, managed: bool) -> AppResult<()> {
+        self.conn.execute(
+            "UPDATE workspaces SET managed = ?1 WHERE id = ?2",
+            params![managed as i64, id],
+        )?;
+        Ok(())
+    }
+
+    /// Does Octopush own (manage) this workspace's worktree? An existing row's
+    /// legacy default is `true` (every pre-existing worktree was Octopush-made),
+    /// but a MISSING ROW is `false`: these flags gate destruction, and "no such
+    /// row" is uncertainty — we never `rm -rf` on uncertainty (e.g. a double-fire
+    /// delete that finds the row already gone must not rm the path a second time).
+    /// The `managed` column is `NOT NULL DEFAULT 1`, so an existing row always
+    /// yields a value; `None` here means the row is absent, not legacy.
+    pub fn is_workspace_managed(&self, id: &str) -> AppResult<bool> {
+        let managed: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT managed FROM workspaces WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(managed.map(|m| m != 0).unwrap_or(false))
+    }
+
+    /// Did Octopush create this workspace's git branch (vs reuse/adopt an existing
+    /// one)? Only then may delete remove the branch. An existing row's legacy
+    /// default is `true` (historically delete always removed the branch), but a
+    /// MISSING ROW is `false` — same reasoning as `is_workspace_managed`: a
+    /// double-fire delete on an already-removed row must never `git branch -D` a
+    /// branch we may not have created.
+    pub fn is_branch_created_by_octopush(&self, id: &str) -> AppResult<bool> {
+        let created: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT created_branch FROM workspaces WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(created.map(|c| c != 0).unwrap_or(false))
     }
 
     pub fn delete_workspace(&self, id: &str) -> AppResult<()> {

@@ -49,7 +49,7 @@ SQLite store the desktop app uses.
 | `list_projects` | read | Open projects (git repos). |
 | `list_workspaces` | read | Workspaces (worktrees) of a project. |
 | `get_workspace` | read | One workspace: branch, path, status, linked issue. |
-| `create_workspace` | author | Create (or reuse) a worktree-backed workspace for a branch. Idempotent on `(project, branch)`; reuses/un-archives an existing one rather than duplicating. The one tool that touches git (materialises a worktree). Shows up in the app's rail on next focus/refresh. |
+| `create_workspace` | author | Ensure a workspace for a branch (explicit branch used **verbatim**; task-derived ones slugified). Returns `status`: created \| adopted \| existed \| restored. Reuses a tracked workspace, **adopts** an already-checked-out branch rather than failing, else creates a worktree. Never duplicates. The one tool that touches git. Shows in the rail on next focus/refresh. |
 | `link_workspace_issue` | author | Link/unlink a workspace to an issue key (metadata only). |
 | `create_run` | author | Stage a run in `draft` from a pipeline + task (does **not** start it). |
 | `list_runs` | read | Runs of a workspace, newest first. |

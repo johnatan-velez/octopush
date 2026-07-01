@@ -548,8 +548,10 @@ pub async fn create_workspace(
 
     // Single shared code path with octopush-mcp. We pass the Mutex (not a held
     // guard) so workspace::create locks only for its brief DB reads/writes and
-    // never across the worktree checkout.
-    crate::workspace::create(
+    // never across the worktree checkout. The UI doesn't need the outcome — the
+    // creator's inline "branch exists" hint already tells the user about reuse,
+    // and the store upserts by id so a reused row never duplicates in the rail.
+    let (ws, _outcome) = crate::workspace::create(
         &state.db,
         &project_id,
         project_path,
@@ -558,7 +560,8 @@ pub async fn create_workspace(
         &branch,
         &from_branch,
         &setup_script,
-    )
+    )?;
+    Ok(ws)
 }
 
 /// Local + remote-tracking branches for the workspace creator's base picker.
@@ -670,6 +673,31 @@ pub async fn get_git_diff(path: String, ignore_whitespace: Option<bool>) -> AppR
 
 // ─── Delete workspace ────────────────────────────────────────────
 
+/// Does `worktree_path` resolve to the project root (i.e. the "main" workspace)?
+/// Uses a raw-string fallback when canonicalize fails so a missing/odd path is
+/// never mistaken for a non-root worktree and destructively removed.
+fn is_project_root(project_path: &str, worktree_path: &str) -> bool {
+    let canon = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+    canon(project_path) == canon(worktree_path)
+}
+
+/// Should delete/archive touch the worktree on disk (and, for delete, the
+/// branch)? Only when Octopush *created* it (`managed`) AND it isn't the project
+/// root. Adopted checkouts and the main workspace are left on disk untouched.
+fn owns_worktree_on_disk(
+    db: &parking_lot::Mutex<crate::db::Db>,
+    workspace_id: &str,
+    project_path: &str,
+    worktree_path: Option<&str>,
+) -> bool {
+    // Default to NOT-owned on a read error: a leaked worktree dir is a minor
+    // annoyance, but rm -rf'ing an adopted (external) checkout is irreversible
+    // data loss — so when uncertain, don't touch the disk.
+    let managed = db.lock().is_workspace_managed(workspace_id).unwrap_or(false);
+    let is_main = worktree_path.is_some_and(|wt| is_project_root(project_path, wt));
+    managed && !is_main
+}
+
 #[tauri::command]
 pub async fn delete_workspace(
     state: State<'_, AppState>,
@@ -679,26 +707,17 @@ pub async fn delete_workspace(
     worktree_path: Option<String>,
 ) -> AppResult<()> {
     let project_path = expand_tilde(&project_path);
-    let project_path_abs = std::fs::canonicalize(&project_path)
-        .unwrap_or_else(|_| std::path::PathBuf::from(&project_path));
-
-    // The "main" workspace points at the project root itself. Deleting that
-    // would `rm -rf` the user's project — refuse to touch the disk or the
-    // branch, just remove the DB row. (The user can still recreate the main
-    // workspace via ensure_main_workspace on next open_project.)
-    let is_main_workspace = worktree_path
+    let is_main = worktree_path
         .as_deref()
-        .map(|wt| {
-            let wt_abs = std::fs::canonicalize(wt)
-                .unwrap_or_else(|_| std::path::PathBuf::from(wt));
-            wt_abs == project_path_abs
-        })
-        .unwrap_or(false);
+        .is_some_and(|wt| is_project_root(&project_path, wt));
 
-    if !is_main_workspace {
-        // Prune the worktree's registry slot (by path — slot names aren't tied to
-        // the branch), remove its working-tree directory, then delete the branch.
+    // Remove the worktree directory only when Octopush created it (`managed`) and
+    // it isn't the project root. An adopted checkout (made by the user/another
+    // tool) and the main workspace are left on disk — we just drop the DB row.
+    if owns_worktree_on_disk(&state.db, &workspace_id, &project_path, worktree_path.as_deref()) {
         if let Some(wt) = &worktree_path {
+            // Prune the worktree's registry slot (by path — slot names aren't
+            // tied to the branch), then remove its working-tree directory.
             let _ = crate::git_ops::delete_worktree(
                 std::path::Path::new(&project_path),
                 std::path::Path::new(wt),
@@ -708,8 +727,22 @@ pub async fn delete_workspace(
                 let _ = std::fs::remove_dir_all(wt_path);
             }
         }
+    }
+
+    // Delete the branch only when Octopush itself created it — a reused or adopted
+    // branch (someone else's work) is never destroyed. Gated separately from the
+    // worktree: a workspace can create a worktree over a *pre-existing* branch, and
+    // deleting that branch would throw away commits Octopush didn't make. Default
+    // to NOT deleting on a read error (data-loss is worse than a leftover branch).
+    let created_branch = state
+        .db
+        .lock()
+        .is_branch_created_by_octopush(&workspace_id)
+        .unwrap_or(false);
+    if created_branch && !is_main {
         let _ = crate::git_ops::delete_branch(std::path::Path::new(&project_path), &branch);
     }
+
     // Remove from DB
     state.db.lock().delete_workspace(&workspace_id)?;
     Ok(())
@@ -725,31 +758,17 @@ pub async fn archive_workspace(
     branch: String,
     worktree_path: Option<String>,
 ) -> AppResult<()> {
-    // Archive keeps the branch and prunes the slot by path, so `branch` is no
-    // longer needed here; retained in the signature for IPC/API symmetry.
+    // Archive keeps the branch; `branch` is retained in the signature for
+    // IPC/API symmetry but isn't needed here.
     let _ = &branch;
     let project_path = expand_tilde(&project_path);
-    let project_path_abs = std::fs::canonicalize(&project_path)
-        .unwrap_or_else(|_| std::path::PathBuf::from(&project_path));
 
-    // The "main" workspace points at the project root itself. Never touch the
-    // disk for it — just flip the DB row to archived. (Unlike delete, archive
-    // always keeps the branch.)
-    let is_main_workspace = worktree_path
-        .as_deref()
-        .map(|wt| {
-            let wt_abs = std::fs::canonicalize(wt)
-                .unwrap_or_else(|_| std::path::PathBuf::from(wt));
-            wt_abs == project_path_abs
-        })
-        .unwrap_or(false);
-
-    if !is_main_workspace {
-        // Prune the worktree's registry slot (by path — slot names aren't tied
-        // to the branch) BUT KEEP the branch — that's the point of archive vs
-        // delete. Prune first (while the slot still resolves), then remove the
-        // working-tree directory.
+    // Only remove on disk what Octopush created. An adopted checkout and the
+    // main workspace (project root) keep their directory — archiving just flips
+    // the DB row. (Archive always keeps the branch.)
+    if owns_worktree_on_disk(&state.db, &workspace_id, &project_path, worktree_path.as_deref()) {
         if let Some(wt) = &worktree_path {
+            // Prune the worktree's registry slot (by path), then remove its dir.
             let _ = crate::git_ops::delete_worktree(
                 std::path::Path::new(&project_path),
                 std::path::Path::new(wt),
@@ -782,33 +801,20 @@ pub async fn restore_workspace(
     worktree_path: Option<String>,
 ) -> AppResult<()> {
     let project_path = expand_tilde(&project_path);
-    let project_path_abs = std::fs::canonicalize(&project_path)
-        .unwrap_or_else(|_| std::path::PathBuf::from(&project_path));
-    // Recreate the worktree from the kept branch (create_worktree attaches to
-    // the existing refs/heads/<branch>; it does NOT create a new branch), then
-    // flip status back to active.
-    if let Some(wt) = worktree_path {
-        let wt = expand_tilde(&wt);
-        // The "main" workspace points at the project root itself. Never recreate
-        // a worktree there — that would wipe the repo root. (Mirrors the
-        // is_main_workspace guard in archive_workspace/delete_workspace.)
-        let wt_abs = std::fs::canonicalize(&wt)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&wt));
-        if wt_abs != project_path_abs {
-            // create_worktree returns where it actually landed (it steps aside if
-            // the original path/slot is occupied); persist that so the row points
-            // at the real worktree.
-            let actual = crate::git_ops::create_worktree(
-                std::path::Path::new(&project_path),
-                &branch,
-                std::path::Path::new(&wt),
-            )?;
-            let actual_str = actual.to_string_lossy().to_string();
-            if actual_str != wt {
-                state.db.lock().set_workspace_worktree_path(&workspace_id, &actual_str)?;
-            }
-        }
-    }
+    // `branch`/`worktree_path` are kept in the signature for IPC symmetry, but the
+    // heal re-derives everything from the authoritative DB row.
+    let _ = (&branch, &worktree_path);
+
+    // Make the worktree usable via the shared healer, which handles all three
+    // cases without ever destroying work: adopt the branch's live checkout if it
+    // moved, rebuild a managed worktree if the directory is entirely gone, or
+    // leave a present directory untouched. Then flip status back to active.
+    let mut ws = state
+        .db
+        .lock()
+        .get_workspace(&workspace_id)?
+        .ok_or_else(|| AppError::Other("workspace not found".into()))?;
+    crate::workspace::heal_worktree(&state.db, std::path::Path::new(&project_path), &mut ws)?;
     state.db.lock().restore_workspace(&workspace_id)
 }
 
