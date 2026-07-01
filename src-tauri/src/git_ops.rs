@@ -111,6 +111,50 @@ pub fn init_repo(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Is `name` a legal local git branch name (e.g. `feat/Foo`, `JIRA-123`)? Used
+/// to validate an explicit branch from the MCP before we use it verbatim, so we
+/// reject nonsense without silently mangling valid mixed-case / slashed names.
+pub fn is_valid_branch_name(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() {
+        return false;
+    }
+    // Reject control bytes (incl. NUL) up front: git2's `is_valid_name` builds a
+    // CString and PANICS on an interior NUL, which would take down the whole
+    // (single-threaded) octopush-mcp process.
+    if name.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return false;
+    }
+    git2::Reference::is_valid_name(&format!("refs/heads/{name}"))
+}
+
+/// A filesystem-safe, single-component name derived from a branch, used for BOTH
+/// the libgit2 metadata slot (`.git/worktrees/<name>`) and the working-tree
+/// directory basename (`.octopus-worktrees/<name>`). Neither may contain path
+/// separators — otherwise a slashed branch like `feat/Foo` would nest dirs
+/// (`.git/worktrees/feat/Foo`, `.octopus-worktrees/feat/foo`), which both fails
+/// to `mkdir` and lets a later `feat` workspace `rm -rf` the nested checkout. The
+/// name is purely an internal id (the real branch is attached via the ref), so
+/// we flatten it: keep ASCII alphanumerics, `-`, `_`, `.`; turn anything else
+/// (slashes, spaces, …) into `-`; collapse and trim.
+pub fn slot_name_for(branch: &str) -> String {
+    let mut out = String::with_capacity(branch.len());
+    let mut prev_dash = false;
+    for ch in branch.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+            out.push(ch);
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    // A leading '.' is illegal for a git worktree name; fall back if we emptied it.
+    let trimmed = trimmed.trim_start_matches('.');
+    if trimmed.is_empty() { "workspace".to_string() } else { trimmed.to_string() }
+}
+
 pub fn open_repo(path: &Path) -> AppResult<Repository> {
     Repository::open(path).map_err(|e| AppError::Other(format!("git open: {e}")))
 }
@@ -434,7 +478,7 @@ fn is_live_worktree_at(repo: &Repository, path: &Path) -> bool {
 /// how we detect "already in use" before trying — and failing — to make a second
 /// checkout. Reuse of an *existing workspace* is handled one layer up (by branch
 /// in the DB); this is purely the git-level guard.
-fn live_worktree_on_branch(repo: &Repository, branch: &str) -> Option<PathBuf> {
+pub fn live_worktree_on_branch(repo: &Repository, branch: &str) -> Option<PathBuf> {
     let on_branch = |dir: &Path| -> bool {
         let Ok(sub) = Repository::open(dir) else { return false };
         let Ok(head) = sub.head() else { return false };
@@ -517,13 +561,17 @@ pub fn create_worktree(repo_path: &Path, branch: &str, worktree_path: &Path) -> 
         }
     }
 
-    // Pick a free SLOT name. Reclaim a stale slot of the natural name (the common
-    // self-heal: a previous worktree for this branch whose checkout is gone, or a
-    // locked slot libgit2's own prune won't clear); otherwise suffix past a slot
-    // that still backs a live worktree (which we must not touch). Callers always
-    // open the main repo, so `repo.path()` is the common dir where slots live.
+    // Pick a free SLOT name. The name is a filesystem-safe, single-component id
+    // derived from the branch (slashes etc. flattened) — libgit2 makes
+    // `.git/worktrees/<name>`, which must not contain path separators. We reclaim
+    // a stale slot of the natural name (the common self-heal: a previous worktree
+    // for this branch whose checkout is gone, or a locked slot libgit2's own
+    // prune won't clear); otherwise suffix past a slot that still backs a live
+    // worktree (which we must not touch). Callers always open the main repo, so
+    // `repo.path()` is the common dir where slots live.
     let worktrees_dir = repo.path().join("worktrees");
-    let mut name = branch.to_string();
+    let base_name = slot_name_for(branch);
+    let mut name = base_name.clone();
     let mut n = 2;
     loop {
         let slot = worktrees_dir.join(&name);
@@ -548,7 +596,7 @@ pub fn create_worktree(repo_path: &Path, branch: &str, worktree_path: &Path) -> 
                 break;
             }
         }
-        name = format!("{branch}-{n}");
+        name = format!("{base_name}-{n}");
         n += 1;
         if n > MAX_SUFFIX {
             return Err(AppError::Other(
@@ -1765,6 +1813,47 @@ mod tests {
         let err = create_worktree(dir.path(), "reuse-me", &wt_path).unwrap_err();
         assert!(err.to_string().contains("another workspace"), "friendly: {err}");
         assert!(wt_path.join("wip.txt").exists(), "live checkout's WIP preserved");
+    }
+
+    #[test]
+    fn slot_name_for_flattens_unsafe_chars() {
+        assert_eq!(slot_name_for("feat/Foo"), "feat-Foo");
+        assert_eq!(slot_name_for("release/2.0"), "release-2.0");
+        assert_eq!(slot_name_for("JIRA-123"), "JIRA-123");
+        assert_eq!(slot_name_for("a//b  c"), "a-b-c");
+        assert_eq!(slot_name_for("///"), "workspace");
+        assert_eq!(slot_name_for(".hidden"), "hidden");
+    }
+
+    #[test]
+    fn is_valid_branch_name_accepts_slashes_rejects_control_bytes() {
+        assert!(is_valid_branch_name("feat/Foo"));
+        assert!(is_valid_branch_name("release/2.0"));
+        assert!(is_valid_branch_name("JIRA-123"));
+        assert!(!is_valid_branch_name("")); // empty
+        assert!(!is_valid_branch_name("has space")); // git rejects spaces
+        // A NUL byte must be rejected, NOT panic (git2 would CString::new().unwrap()).
+        assert!(!is_valid_branch_name("feat\0x"));
+    }
+
+    #[test]
+    fn create_worktree_supports_slash_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path()).unwrap();
+        commit_file(dir.path(), "a.txt", "one\n", "first");
+        let base = default_branch(dir.path()).unwrap().unwrap();
+        create_branch(dir.path(), "feat/foo", &base).unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt = wt_dir.path().join("feat-foo");
+        create_worktree(dir.path(), "feat/foo", &wt).unwrap();
+        assert!(wt.join("a.txt").exists(), "slash branch checked out");
+        // The metadata slot is a single flattened dir — no nested `feat/`.
+        assert!(dir.path().join(".git/worktrees/feat-foo").exists());
+        assert!(!dir.path().join(".git/worktrees/feat/foo").exists());
+        // And the worktree is really on the slashed branch.
+        let sub = Repository::open(&wt).unwrap();
+        assert_eq!(sub.head().unwrap().shorthand(), Some("feat/foo"));
     }
 
     #[test]

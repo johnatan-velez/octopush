@@ -255,7 +255,7 @@ describe("WorkspaceCreator", () => {
   });
 
   describe("editable branch name", () => {
-    const BRANCH_TITLE = "Branch name — edit to override the suggested slug";
+    const BRANCH_TITLE = "Branch name — edit to set an exact name (e.g. feat/Foo)";
 
     function renderCreator(onCreated = vi.fn()) {
       render(
@@ -293,12 +293,13 @@ describe("WorkspaceCreator", () => {
       expect(branchInput.value).toBe("my-branch");
     });
 
-    it("slugify-validates the override on blur (lowercase, spaces to dashes)", () => {
+    it("keeps an explicit override VERBATIM on blur (case + slashes preserved, only trimmed)", () => {
       renderCreator();
       const branchInput = screen.getByTitle(BRANCH_TITLE) as HTMLInputElement;
-      fireEvent.change(branchInput, { target: { value: "My Fancy Branch" } });
+      // Mixed case and a slash are valid git branch names — don't mangle them.
+      fireEvent.change(branchInput, { target: { value: "  feat/Foo-Bar  " } });
       fireEvent.blur(branchInput);
-      expect(branchInput.value).toBe("my-fancy-branch");
+      expect(branchInput.value).toBe("feat/Foo-Bar");
     });
 
     it("clearing the override on blur falls back to the task slug", () => {

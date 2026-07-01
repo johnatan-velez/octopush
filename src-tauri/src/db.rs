@@ -325,6 +325,14 @@ impl Db {
             // read or written, but we keep it in place rather than dropping it.
             "ALTER TABLE workspaces ADD COLUMN issue_link_dismissed INTEGER NOT NULL DEFAULT 0",
         )?;
+        // `managed` = Octopush created this worktree (default true, matching every
+        // existing row). Adopted checkouts (a branch already checked out that we
+        // register a workspace over) set it false so delete/archive never
+        // `rm -rf` a directory or branch Octopush didn't create.
+        add_column_if_missing(
+            &self.conn,
+            "ALTER TABLE workspaces ADD COLUMN managed INTEGER NOT NULL DEFAULT 1",
+        )?;
 
         // Phase 9 — drop the FK from token_events.session_id. The original
         // schema only ever expected CLI session ids, so chat-driven token
@@ -1122,11 +1130,34 @@ impl Db {
         setup_script: &str,
         from_branch: Option<&str>,
     ) -> AppResult<()> {
+        // Octopush-created worktrees are managed (owned) by default.
+        self.insert_workspace_managed(
+            id, project_id, name, task, branch, worktree_path, setup_script, from_branch, true,
+        )
+    }
+
+    /// Insert a workspace row with an explicit `managed` flag, atomically. The
+    /// adopt path uses `managed = false` so the row is *born* not-owned — there's
+    /// no insert-then-flip window in which a crash could strand a managed=1 row
+    /// over an external checkout (which delete/archive would later rm -rf).
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_workspace_managed(
+        &self,
+        id: &str,
+        project_id: &str,
+        name: &str,
+        task: &str,
+        branch: &str,
+        worktree_path: Option<&str>,
+        setup_script: &str,
+        from_branch: Option<&str>,
+        managed: bool,
+    ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO workspaces (id, project_id, name, task, branch, worktree_path, setup_script, created_at, last_active, from_branch)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-            params![id, project_id, name, task, branch, worktree_path, setup_script, now, now, from_branch],
+            "INSERT INTO workspaces (id, project_id, name, task, branch, worktree_path, setup_script, created_at, last_active, from_branch, managed)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![id, project_id, name, task, branch, worktree_path, setup_script, now, now, from_branch, managed as i64],
         )?;
         Ok(())
     }
@@ -1247,6 +1278,20 @@ impl Db {
             params![worktree_path, id],
         )?;
         Ok(())
+    }
+
+    /// Does Octopush own (manage) this workspace's worktree? Missing rows and the
+    /// legacy default are `true` (every pre-existing worktree was Octopush-made).
+    pub fn is_workspace_managed(&self, id: &str) -> AppResult<bool> {
+        let managed: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT managed FROM workspaces WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(managed.map(|m| m != 0).unwrap_or(true))
     }
 
     pub fn delete_workspace(&self, id: &str) -> AppResult<()> {

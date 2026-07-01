@@ -27,9 +27,29 @@ type Step = 1 | 2;
  *  siblings of the project root, inside a shared `.octopus-worktrees/`
  *  directory. Showing this honestly here means the path the user sees
  *  in the wizard matches what they'd see in Finder. */
+/** Flatten a branch to the single-component directory name the backend uses for
+ *  the worktree (mirrors `git_ops::slot_name_for`): keep ASCII word chars, `.`;
+ *  turn everything else (slashes, spaces, …) into `-`; collapse; trim. So
+ *  `feat/Foo` lives at `.octopus-worktrees/feat-Foo`, not a nested `feat/Foo`. */
+function worktreeDirName(branch: string): string {
+  let out = "";
+  let prevDash = false;
+  for (const ch of branch) {
+    if (/[A-Za-z0-9_.]/.test(ch)) {
+      out += ch;
+      prevDash = false;
+    } else if (!prevDash) {
+      out += "-";
+      prevDash = true;
+    }
+  }
+  out = out.replace(/^-+|-+$/g, "").replace(/^\.+/, "");
+  return out || "workspace";
+}
+
 function worktreeDisplayPath(projectPath: string, branch: string): string {
   const parent = projectPath.replace(/\/[^/]+\/?$/, "");
-  return `${parent}/.octopus-worktrees/${branch}`;
+  return `${parent}/.octopus-worktrees/${worktreeDirName(branch)}`;
 }
 
 function slugify(text: string): string {
@@ -234,10 +254,13 @@ export function WorkspaceCreator({ projectId, projectPath, onCreated, onCancel, 
                   onChange={(e) => setBranchOverride(e.target.value)}
                   onBlur={() => {
                     if (branchOverride === null) return;
-                    const cleaned = slugify(branchOverride);
-                    setBranchOverride(cleaned || null);
+                    // An explicit branch is used verbatim (just trimmed) — mixed
+                    // case and slashes like JIRA-123 or feat/Foo are valid git
+                    // branches. Only the auto-suggested name (from the task) is
+                    // slugified. Matches octopush-mcp's verbatim behaviour.
+                    setBranchOverride(branchOverride.trim() || null);
                   }}
-                  title="Branch name — edit to override the suggested slug"
+                  title="Branch name — edit to set an exact name (e.g. feat/Foo)"
                   aria-label="Branch name"
                   className="rounded-none border-b border-transparent bg-transparent font-mono text-[10px] normal-case tracking-[0.2em] text-octo-brass outline-none transition-colors duration-[220ms] focus:border-octo-brass"
                   style={{
@@ -317,7 +340,13 @@ export function WorkspaceCreator({ projectId, projectPath, onCreated, onCancel, 
               </Field>
 
               <div className="mt-2 font-mono text-[10px] tracking-[0.05em] text-octo-mute">
-                Runs inside the new worktree at <span className="text-octo-sage">{worktreeDisplayPath(projectPath, branch)}</span>.
+                {branchCollides ? (
+                  // The branch already exists — creation reuses (or adopts) its
+                  // existing checkout, so we can't promise a fresh path here.
+                  <>Reuses the existing <span className="text-octo-sage">{branch}</span> branch — the setup script runs in its worktree.</>
+                ) : (
+                  <>Runs inside the new worktree at <span className="text-octo-sage">{worktreeDisplayPath(projectPath, branch)}</span>.</>
+                )}
               </div>
             </div>
 

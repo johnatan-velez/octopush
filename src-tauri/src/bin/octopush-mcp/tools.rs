@@ -118,25 +118,26 @@ pub fn tool_definitions() -> Value {
         ),
         def(
             "create_workspace",
-            "Create a new workspace (a git worktree) in a project, or reuse the \
-             existing one for the branch. The branch is created if it doesn't \
-             exist and REUSED if it does — so you can start work on a branch a \
-             teammate or another Octopush session already pushed. Idempotent: \
-             one workspace per (project, branch); if a workspace for the branch \
-             already exists it's returned (and un-archived if it was archived) \
-             rather than duplicated. If the branch is currently checked out in \
-             another worktree that Octopush doesn't track, creation fails with a \
-             clear error (git can't check a branch out twice). Unlike the other \
-             tools this one DOES touch git — it materialises a worktree on disk. \
-             The new workspace shows up in Octopush's left rail (refresh the \
-             project, or it appears when the window regains focus). Returns the \
-             workspace.",
+            "Ensure there's an Octopush workspace for a branch, and return it — \
+             so you can always start working on the branch from Octopush. The \
+             branch is created if it doesn't exist and REUSED verbatim if it does \
+             (mixed case, slashes, and dots are preserved — e.g. JIRA-123, \
+             feat/Foo). Always succeeds: if a workspace already tracks the branch \
+             it's returned (un-archived if needed); if the branch is already \
+             checked out somewhere (the main worktree, or one made outside \
+             Octopush) that checkout is ADOPTED as a workspace instead of failing \
+             (git allows a branch in only one worktree); otherwise a fresh \
+             worktree is created. Never duplicates a workspace. The response's \
+             `status` is one of created | adopted | existed | restored. This is \
+             the one tool that touches git (it may materialise a worktree). The \
+             workspace shows up in Octopush's left rail (refresh the project, or \
+             it appears when the window regains focus).",
             json!({
                 "type": "object",
                 "properties": {
                     "projectId": { "type": "string", "description": "Project to create the workspace in (see list_projects)." },
-                    "task": { "type": "string", "description": "What this workspace is for. Becomes the default branch slug and name." },
-                    "branch": { "type": ["string", "null"], "description": "Optional explicit branch name; slugified to match the app. Defaults to a slug of `task`. An existing branch is reused." },
+                    "task": { "type": "string", "description": "What this workspace is for. When `branch` is omitted, a branch name is slugified from this; it's also the default display name." },
+                    "branch": { "type": ["string", "null"], "description": "Optional explicit branch name, used VERBATIM (validated as a git ref; case/slashes/dots preserved). An existing branch is reused. Omit to derive a slug from `task`." },
                     "name": { "type": ["string", "null"], "description": "Optional display name for the rail. Defaults to the branch." },
                     "fromBranch": { "type": ["string", "null"], "description": "Optional base to branch from (local like 'dev' or remote-tracking like 'origin/dev'). Defaults to the repo's default branch. Ignored when the branch already exists." },
                     "setupScript": { "type": ["string", "null"], "description": "Optional shell script to seed the workspace's setup. Default empty." }
@@ -422,20 +423,32 @@ fn create_workspace(db: &Mutex<Db>, args: &Value) -> Result<Value, String> {
         .map(|(_, _, path)| path)
         .ok_or_else(|| format!("no project with id '{project_id}'"))?;
 
-    // Branch defaults to a slug of the task; an explicit branch is slugified
-    // too so it matches what the app's creator would have produced.
-    let branch = match opt_str(args, "branch").filter(|s| !s.trim().is_empty()) {
-        Some(b) => octopush_lib::workspace::slugify(&b),
-        None => octopush_lib::workspace::slugify(&task),
+    // An EXPLICIT branch is used verbatim (validated as a real git ref) — never
+    // lowercased or slugified, so `JIRA-123`, `feat/Foo`, `release/2.0` work and
+    // an existing branch is matched exactly. Only a branch DERIVED from free-text
+    // task is slugified.
+    let branch = match opt_str(args, "branch").map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    {
+        Some(b) => {
+            if !octopush_lib::git_ops::is_valid_branch_name(&b) {
+                return Err(format!(
+                    "'{b}' is not a valid git branch name (it must be a legal git ref)"
+                ));
+            }
+            b
+        }
+        None => {
+            let s = octopush_lib::workspace::slugify(&task);
+            if s.is_empty() { "new-workspace".to_string() } else { s }
+        }
     };
-    let branch = if branch.is_empty() { "new-workspace".to_string() } else { branch };
     let name = opt_str(args, "name")
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| branch.clone());
     let from_branch = opt_str(args, "fromBranch").unwrap_or_default();
     let setup_script = opt_str(args, "setupScript").unwrap_or_default();
 
-    let ws = octopush_lib::workspace::create(
+    let (ws, outcome) = octopush_lib::workspace::create(
         db,
         &project_id,
         std::path::Path::new(&project_path),
@@ -447,11 +460,27 @@ fn create_workspace(db: &Mutex<Db>, args: &Value) -> Result<Value, String> {
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(json!({
-        "workspace": ws,
-        "note": "Workspace ready. It appears in Octopush's left rail when you \
-                 refresh the project or the window regains focus."
-    }))
+    use octopush_lib::workspace::CreateOutcome;
+    let (status, note) = match outcome {
+        CreateOutcome::Created => (
+            "created",
+            "Workspace created. It appears in Octopush's left rail when you refresh the project or the window regains focus.",
+        ),
+        CreateOutcome::Adopted => (
+            "adopted",
+            "The branch was already checked out in an existing worktree, so that checkout was adopted as a workspace (no second checkout was made). It appears in the rail on refresh/focus.",
+        ),
+        CreateOutcome::Existed => (
+            "existed",
+            "A workspace for this branch already exists in Octopush — returning it rather than creating a duplicate.",
+        ),
+        CreateOutcome::Restored => (
+            "restored",
+            "An archived workspace for this branch was restored (its worktree rebuilt). It appears in the rail on refresh/focus.",
+        ),
+    };
+
+    Ok(json!({ "workspace": ws, "status": status, "note": note }))
 }
 
 fn link_workspace_issue(db: &Db, args: &Value) -> Result<Value, String> {
